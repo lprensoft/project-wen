@@ -157,6 +157,37 @@ func TestReasoningContentSentBack(t *testing.T) {
 	}
 }
 
+func TestUsageParsedAndStreamOptionsSent(t *testing.T) {
+	var got map[string]any
+	srv := sseServer(t, []string{
+		`{"choices":[{"delta":{"content":"ok"}}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168}}`,
+	}, &got)
+	defer srv.Close()
+
+	p := NewOpenAICompat(srv.URL, "sk-test")
+	ch, err := p.ChatStream(context.Background(), ChatRequest{Model: "m", Messages: testMessages("hi")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage *Usage
+	for ev := range ch {
+		if ev.Type == EventUsage {
+			usage = ev.Usage
+		}
+		if ev.Type == EventError {
+			t.Fatalf("stream error: %v", ev.Err)
+		}
+	}
+	if usage == nil || usage.PromptTokens != 123 || usage.CompletionTokens != 45 {
+		t.Errorf("usage = %+v", usage)
+	}
+	so, _ := got["stream_options"].(map[string]any)
+	if so["include_usage"] != true {
+		t.Errorf("stream_options = %v", got["stream_options"])
+	}
+}
+
 func TestAPIErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(401)

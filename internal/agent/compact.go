@@ -76,11 +76,16 @@ func (a *Agent) compact(ctx context.Context, sessionID string, emit func(Event))
 		return fmt.Errorf("摘要生成失败：模型返回为空")
 	}
 
-	return a.store.Replace(sessionID, []session.StoredMessage{{
+	if err := a.store.Replace(sessionID, []session.StoredMessage{{
 		Message: llm.Message{Role: llm.RoleUser, Content: summaryPrefix + summary.String()},
 		Kind:    "summary",
 		TS:      time.Now(),
-	}})
+	}}); err != nil {
+		return err
+	}
+	// 旧的实测用量对应压缩前的上下文，清除以免误导
+	_ = a.store.SetUsage(sessionID, nil)
+	return nil
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。

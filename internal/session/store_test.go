@@ -98,6 +98,32 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+func TestSetUsage(t *testing.T) {
+	s := newTestStore(t)
+	m, _ := s.Create()
+	s.Append(m.ID, StoredMessage{Message: llm.Message{Role: "user", Content: "hi"}, TS: time.Now()})
+
+	if err := s.SetUsage(m.ID, &Usage{PromptTokens: 100, CompletionTokens: 20}); err != nil {
+		t.Fatal(err)
+	}
+	meta, msgs, _ := s.Get(m.ID)
+	if meta.LastUsage == nil || meta.LastUsage.PromptTokens != 100 {
+		t.Errorf("usage = %+v", meta.LastUsage)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("messages affected by SetUsage: %d", len(msgs))
+	}
+
+	// 清除
+	if err := s.SetUsage(m.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	meta, _, _ = s.Get(m.ID)
+	if meta.LastUsage != nil {
+		t.Errorf("usage not cleared: %+v", meta.LastUsage)
+	}
+}
+
 func TestReplace(t *testing.T) {
 	s := newTestStore(t)
 	m, _ := s.Create()

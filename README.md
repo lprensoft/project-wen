@@ -38,7 +38,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 |---|---|
 | `model.provider` / `model.name` | 使用的 Provider 与模型 id |
 | `model.thinking` | 思考模式：`off` / `low` / `medium` / `high` / `xhigh` / `max`，默认 `high`（开启时 `temperature` 不生效；思考过程在 Web UI 以可折叠块展示） |
-| `model.context_length` | 模型上下文窗口（token），默认 1000000；超出预算时自动从最旧对话轮次整轮裁剪 |
+| `model.context_length` | 模型上下文窗口（token），默认 1000000；超出预算时自动从最旧对话轮次整轮裁剪；会话实测占用达到 90% 时自动压缩为摘要 |
 | `providers.<name>` | Provider 注册表：`type`（当前仅 `openai_compat`）、`base_url`、`api_key` |
 | `agent.system_prompt` | 系统提示词（当前留空；运行时会自动在其前注入 `[系统环境]` 块：操作系统、Shell、工作目录、区域语言、当前时间） |
 | `agent.max_turns` | 单次请求内工具循环上限 |
