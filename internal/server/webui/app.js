@@ -385,7 +385,6 @@ async function sendMessage() {
 const COMMANDS = [
   { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量" },
   { cmd: "/compact", desc: "压缩当前会话为摘要" },
-  { cmd: "/plugins", desc: "查看与开关插件" },
 ];
 const cmdMenu = $("#cmd-menu");
 let cmdMatches = [];
@@ -454,8 +453,6 @@ async function handleCommand(text) {
     await runStatus();
   } else if (cmd === "/compact") {
     await runCompact();
-  } else if (cmd === "/plugins") {
-    await runPlugins();
   } else {
     addSysBlock("⚠️ 未知命令：" + cmd + "\n可用命令：/status、/compact");
   }
@@ -492,55 +489,6 @@ async function runStatus() {
     addSysBlock(lines.join("\n"));
   } catch (e) {
     addError("获取状态失败：" + e.message);
-  }
-}
-
-async function runPlugins() {
-  try {
-    const list = await fetch("/api/plugins").then((r) => r.json());
-    renderPluginsBlock(addSysBlock(""), list);
-  } catch (e) {
-    addError("获取插件列表失败：" + e.message);
-  }
-}
-
-function renderPluginsBlock(block, list) {
-  block.textContent = "";
-  block.classList.add("plugins-block");
-  const title = document.createElement("div");
-  title.className = "plugins-title";
-  title.textContent = "🔌 插件（点击按钮切换开关，立即生效）";
-  block.appendChild(title);
-  for (const p of list) {
-    const row = document.createElement("div");
-    row.className = "plugin-row";
-    const info = document.createElement("span");
-    info.className = "plugin-info";
-    let text = p.name + " — " + p.description;
-    if (p.tool_names && p.tool_names.length) text += "（工具: " + p.tool_names.join(", ") + "）";
-    if (p.has_prompt) text += "（注入提示词）";
-    info.textContent = text;
-    const btn = document.createElement("button");
-    btn.className = "plugin-toggle" + (p.enabled ? " on" : "");
-    btn.textContent = p.enabled ? "已启用" : "已禁用";
-    btn.addEventListener("click", async () => {
-      try {
-        const res = await fetch("/api/plugins/" + encodeURIComponent(p.name), {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: !p.enabled }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || "HTTP " + res.status);
-        }
-        renderPluginsBlock(block, await res.json());
-      } catch (e) {
-        addError("切换插件失败：" + e.message);
-      }
-    });
-    row.append(info, btn);
-    block.appendChild(row);
   }
 }
 
@@ -593,13 +541,13 @@ async function runCompact() {
   }
 }
 
-// ---------- 设置面板 ----------
+// ---------- 设置页（全屏覆盖，左侧栏目导航 + 右侧内容） ----------
 
-const settingsOverlay = $("#settings-overlay");
+const settingsView = $("#settings-view");
 const settingsPluginsEl = $("#settings-plugins");
 
 async function openSettings() {
-  settingsOverlay.classList.remove("hidden");
+  settingsView.classList.remove("hidden");
   settingsPluginsEl.textContent = "加载中…";
   try {
     renderSettingsPlugins(await fetch("/api/plugins").then((r) => r.json()));
@@ -609,36 +557,20 @@ async function openSettings() {
 }
 
 function closeSettings() {
-  settingsOverlay.classList.add("hidden");
+  settingsView.classList.add("hidden");
 }
 
 function renderSettingsPlugins(list) {
   settingsPluginsEl.textContent = "";
   for (const p of list) {
-    const row = document.createElement("div");
-    row.className = "settings-plugin-row";
+    const card = document.createElement("div");
+    card.className = "plugin-card";
 
-    const info = document.createElement("div");
-    info.className = "settings-plugin-info";
-    const name = document.createElement("div");
-    name.className = "settings-plugin-name";
+    const head = document.createElement("div");
+    head.className = "plugin-card-head";
+    const name = document.createElement("span");
+    name.className = "plugin-card-name";
     name.textContent = p.name;
-    for (const t of p.tool_names || []) {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "🔧 " + t;
-      name.appendChild(tag);
-    }
-    if (p.has_prompt) {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "💬 注入提示词";
-      name.appendChild(tag);
-    }
-    const desc = document.createElement("div");
-    desc.className = "settings-plugin-desc";
-    desc.textContent = p.description;
-    info.append(name, desc);
 
     const label = document.createElement("label");
     label.className = "switch";
@@ -648,6 +580,29 @@ function renderSettingsPlugins(list) {
     const slider = document.createElement("span");
     slider.className = "slider";
     label.append(input, slider);
+    head.append(name, label);
+    card.appendChild(head);
+
+    const tags = document.createElement("div");
+    tags.className = "plugin-card-tags";
+    for (const t of p.tool_names || []) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "工具 " + t;
+      tags.appendChild(tag);
+    }
+    if (p.has_prompt) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "注入提示词";
+      tags.appendChild(tag);
+    }
+    if (tags.childElementCount > 0) card.appendChild(tags);
+
+    const desc = document.createElement("div");
+    desc.className = "plugin-card-desc";
+    desc.textContent = p.description;
+    card.appendChild(desc);
 
     input.addEventListener("change", async () => {
       const want = input.checked;
@@ -670,18 +625,14 @@ function renderSettingsPlugins(list) {
       }
     });
 
-    row.append(info, label);
-    settingsPluginsEl.appendChild(row);
+    settingsPluginsEl.appendChild(card);
   }
 }
 
 $("#btn-settings").addEventListener("click", openSettings);
-$("#btn-settings-close").addEventListener("click", closeSettings);
-settingsOverlay.addEventListener("click", (e) => {
-  if (e.target === settingsOverlay) closeSettings(); // 点击遮罩空白处关闭
-});
+$("#btn-settings-back").addEventListener("click", closeSettings);
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !settingsOverlay.classList.contains("hidden")) closeSettings();
+  if (e.key === "Escape" && !settingsView.classList.contains("hidden")) closeSettings();
 });
 
 // 解析 POST 响应体中的 SSE 流，逐个产出 {type, ...} 事件对象

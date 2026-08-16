@@ -26,7 +26,9 @@
       </div>
       <ul id="session-list" class="session-list"></ul>
       <div class="sidebar-footer">
-        <button id="btn-settings" class="btn-icon" title="设置">⚙️ 设置</button>
+        <button id="btn-settings" class="btn-icon btn-square" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
       </div>
     </aside>
 
@@ -42,17 +44,22 @@
     </main>
   </div>
 
-  <div id="settings-overlay" class="settings-overlay hidden">
-    <div class="settings-panel">
-      <div class="settings-header">
-        <span class="settings-title">设置</span>
-        <button id="btn-settings-close" class="btn-icon" title="关闭">✕</button>
-      </div>
-      <div class="settings-body">
-        <section class="settings-section">
+  <div id="settings-view" class="settings-view hidden">
+    <div class="settings-header">
+      <button id="btn-settings-back" class="btn-icon btn-square" title="返回">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+      </button>
+      <span class="settings-title">设置</span>
+    </div>
+    <div class="settings-main">
+      <nav class="settings-nav">
+        <button class="settings-nav-item active" data-section="plugins">插件</button>
+      </nav>
+      <div class="settings-content">
+        <section class="settings-section" id="section-plugins">
           <h3>插件</h3>
           <p class="settings-desc">开关立即生效并持久化，作用于下一次对话请求。</p>
-          <div id="settings-plugins" class="settings-plugins"></div>
+          <div id="settings-plugins" class="plugin-grid"></div>
         </section>
       </div>
     </div>
