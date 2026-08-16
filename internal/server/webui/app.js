@@ -593,6 +593,97 @@ async function runCompact() {
   }
 }
 
+// ---------- 设置面板 ----------
+
+const settingsOverlay = $("#settings-overlay");
+const settingsPluginsEl = $("#settings-plugins");
+
+async function openSettings() {
+  settingsOverlay.classList.remove("hidden");
+  settingsPluginsEl.textContent = "加载中…";
+  try {
+    renderSettingsPlugins(await fetch("/api/plugins").then((r) => r.json()));
+  } catch (e) {
+    settingsPluginsEl.textContent = "加载插件列表失败：" + e.message;
+  }
+}
+
+function closeSettings() {
+  settingsOverlay.classList.add("hidden");
+}
+
+function renderSettingsPlugins(list) {
+  settingsPluginsEl.textContent = "";
+  for (const p of list) {
+    const row = document.createElement("div");
+    row.className = "settings-plugin-row";
+
+    const info = document.createElement("div");
+    info.className = "settings-plugin-info";
+    const name = document.createElement("div");
+    name.className = "settings-plugin-name";
+    name.textContent = p.name;
+    for (const t of p.tool_names || []) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "🔧 " + t;
+      name.appendChild(tag);
+    }
+    if (p.has_prompt) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "💬 注入提示词";
+      name.appendChild(tag);
+    }
+    const desc = document.createElement("div");
+    desc.className = "settings-plugin-desc";
+    desc.textContent = p.description;
+    info.append(name, desc);
+
+    const label = document.createElement("label");
+    label.className = "switch";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = p.enabled;
+    const slider = document.createElement("span");
+    slider.className = "slider";
+    label.append(input, slider);
+
+    input.addEventListener("change", async () => {
+      const want = input.checked;
+      input.disabled = true;
+      try {
+        const res = await fetch("/api/plugins/" + encodeURIComponent(p.name), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: want }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || "HTTP " + res.status);
+        }
+        renderSettingsPlugins(await res.json());
+      } catch (e) {
+        input.checked = !want; // 失败回滚开关状态
+        input.disabled = false;
+        addError("切换插件失败：" + e.message);
+      }
+    });
+
+    row.append(info, label);
+    settingsPluginsEl.appendChild(row);
+  }
+}
+
+$("#btn-settings").addEventListener("click", openSettings);
+$("#btn-settings-close").addEventListener("click", closeSettings);
+settingsOverlay.addEventListener("click", (e) => {
+  if (e.target === settingsOverlay) closeSettings(); // 点击遮罩空白处关闭
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !settingsOverlay.classList.contains("hidden")) closeSettings();
+});
+
 // 解析 POST 响应体中的 SSE 流，逐个产出 {type, ...} 事件对象
 async function* sseEvents(body) {
   const reader = body.getReader();
