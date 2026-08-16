@@ -568,9 +568,17 @@ async function* sseEvents(body) {
 
 // ---------- 输入框行为 ----------
 
+// 输入框随内容增高，最多 3 行；超过 3 行固定高度并出现滚动条
+const inputMaxHeight = (() => {
+  const cs = getComputedStyle(inputEl);
+  return parseFloat(cs.lineHeight) * 3 +
+    parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+})();
+
 function autoGrow() {
   inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, inputMaxHeight) + "px";
+  inputEl.style.overflowY = inputEl.scrollHeight > inputMaxHeight ? "auto" : "hidden";
 }
 
 inputEl.addEventListener("input", () => {
