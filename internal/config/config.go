@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 
 	"wen/internal/plugin"
@@ -105,8 +104,8 @@ func ResolvePath(flagPath string) string {
 	return filepath.Join(home, ".wen", "config.yaml")
 }
 
-// Load 加载配置：读取 path 指向的 YAML（不存在则用默认值），
-// 同目录的 .env 会先载入进程环境，再对整份 YAML 做 ${VAR} 替换。
+// Load 加载配置：读取 path 指向的 YAML（不存在则用默认值）。
+// 值中的 ${VAR} 占位符会替换为进程环境变量（api_key 推荐直接写在配置里）。
 func Load(path string) (*Config, error) {
 	cfg := Default()
 
@@ -115,9 +114,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("resolve config path: %w", err)
 	}
 	cfg.BaseDir = filepath.Dir(abs)
-
-	// .env 与配置文件同目录；不覆盖已存在的环境变量。
-	_ = godotenv.Load(filepath.Join(cfg.BaseDir, ".env"))
 
 	raw, err := os.ReadFile(abs)
 	if os.IsNotExist(err) {
@@ -144,7 +140,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("provider %q: unsupported type %q (only openai_compat)", c.Model.Provider, p.Type)
 	}
 	if p.APIKey == "" {
-		return fmt.Errorf("provider %q: api_key is empty (set it in config or .env)", c.Model.Provider)
+		return fmt.Errorf("provider %q: api_key is empty (set it in config.yaml)", c.Model.Provider)
 	}
 	if c.Agent.MaxTurns <= 0 {
 		c.Agent.MaxTurns = 20

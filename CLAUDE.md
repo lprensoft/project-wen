@@ -13,7 +13,7 @@
 ## Git 工作流约定
 
 1. **功能开发一律先建分支**（`feature/<功能名>`），实现并验证通过后合并回 `main`，不直接在 `main` 上开发。
-2. **敏感与本地文件不入库**：`.env`（密钥）、`config.yaml`（本地配置）、`sessions/`（会话数据）、`*.log`、构建产物均已在 `.gitignore` 中，新增此类文件时同步维护忽略列表。
+2. **敏感与本地文件不入库**：`config.yaml`（本地配置，含 API Key）、`sessions/`（会话数据）、`*.log`、构建产物均已在 `.gitignore` 中，新增此类文件时同步维护忽略列表。
 3. 提交信息用中文，说明"做了什么、为什么"。
 
 ## 常用命令
@@ -21,5 +21,5 @@
 ```bash
 go build -o wen.exe ./cmd/wen   # 构建
 go test ./...                   # 测试
-go run ./cmd/wen                # 运行（读取 ./config.yaml 与 .env）
+go run ./cmd/wen                # 运行（读取 ./config.yaml，密钥也在其中）
 ```
