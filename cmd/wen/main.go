@@ -57,7 +57,12 @@ func main() {
 		ContextLength: cfg.Model.ContextLength,
 	})
 
-	srv := server.New(ag, store)
+	srv := server.New(ag, store, server.Info{
+		Provider:      cfg.Model.Provider,
+		Model:         cfg.Model.Name,
+		Thinking:      cfg.Model.Thinking,
+		ContextLength: cfg.Model.ContextLength,
+	})
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	log.Printf("配置文件: %s", path)

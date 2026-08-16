@@ -140,6 +140,32 @@ function addBubble(role, text) {
   return bubble;
 }
 
+function addSysBlock(text) {
+  hideHint();
+  const div = document.createElement("div");
+  div.className = "sys-block";
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function addSummaryBlock(text) {
+  hideHint();
+  const details = document.createElement("details");
+  details.className = "thinking-block";
+  const summary = document.createElement("summary");
+  summary.textContent = "📦 历史摘要（已压缩）";
+  details.appendChild(summary);
+  const div = document.createElement("div");
+  div.className = "thinking-content";
+  div.textContent = text;
+  details.appendChild(div);
+  messagesEl.appendChild(details);
+  scrollBottom();
+  return details;
+}
+
 function addThinkingBlock(text, open) {
   hideHint();
   const details = document.createElement("details");
@@ -222,7 +248,9 @@ function renderHistory(messages) {
   hideHint();
   const toolBlocks = {}; // tool_call id -> {el, args}
   for (const m of messages) {
-    if (m.role === "user") {
+    if (m.kind === "summary") {
+      addSummaryBlock(m.content);
+    } else if (m.role === "user") {
       addBubble("user", m.content);
     } else if (m.role === "assistant") {
       if (m.reasoning_content) addThinkingBlock(m.reasoning_content, false);
@@ -242,6 +270,10 @@ function renderHistory(messages) {
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text || busy) return;
+  if (text.startsWith("/")) {
+    await handleCommand(text);
+    return;
+  }
   if (!currentSession) await newSession();
 
   busy = true;
@@ -312,6 +344,97 @@ async function sendMessage() {
     sendBtn.disabled = false;
     loadSessions(); // 刷新标题
     inputEl.focus();
+  }
+}
+
+// ---------- 斜杠命令（本地处理，不进入对话历史） ----------
+
+async function handleCommand(text) {
+  inputEl.value = "";
+  autoGrow();
+  addBubble("user", text);
+  const cmd = text.split(/\s+/)[0].toLowerCase();
+  if (cmd === "/status") {
+    await runStatus();
+  } else if (cmd === "/compact") {
+    await runCompact();
+  } else {
+    addSysBlock("⚠️ 未知命令：" + cmd + "\n可用命令：/status、/compact");
+  }
+  inputEl.focus();
+}
+
+async function runStatus() {
+  try {
+    const q = currentSession ? "?session_id=" + encodeURIComponent(currentSession) : "";
+    const st = await fetch("/api/status" + q).then((r) => r.json());
+    const lines = [
+      "📊 Agent 状态",
+      "模型：" + st.provider + " / " + st.model,
+      "思考深度：" + st.thinking,
+      "上下文窗口：" + st.context_length.toLocaleString() + " tokens",
+    ];
+    if (st.session) {
+      const pct = ((st.session.est_tokens / st.context_length) * 100).toFixed(2);
+      lines.push(
+        "当前会话：" + st.session.message_count + " 条消息，约 " +
+        st.session.est_tokens.toLocaleString() + " tokens（占用 " + pct + "%）"
+      );
+    } else {
+      lines.push("当前会话：无");
+    }
+    addSysBlock(lines.join("\n"));
+  } catch (e) {
+    addError("获取状态失败：" + e.message);
+  }
+}
+
+async function runCompact() {
+  if (!currentSession) {
+    addSysBlock("⚠️ 没有活动会话，无法压缩");
+    return;
+  }
+  busy = true;
+  sendBtn.disabled = true;
+  // 压缩过程的动态展示块：摘要内容实时流入
+  const block = document.createElement("details");
+  block.className = "thinking-block";
+  block.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = "📦 正在压缩会话…";
+  block.appendChild(summary);
+  const contentEl = document.createElement("div");
+  contentEl.className = "thinking-content";
+  block.appendChild(contentEl);
+  messagesEl.appendChild(block);
+  scrollBottom();
+
+  try {
+    const res = await fetch(`/api/sessions/${currentSession}/compact`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    let failed = false;
+    for await (const ev of sseEvents(res.body)) {
+      if (ev.type === "delta") {
+        contentEl.textContent += ev.content || "";
+        scrollBottom();
+      } else if (ev.type === "error") {
+        failed = true;
+        addError("压缩失败：" + (ev.error || "未知错误"));
+      }
+    }
+    if (!failed) {
+      busy = false; // selectSession 在 busy 时不工作，先复位
+      await selectSession(currentSession); // 重新加载压缩后的历史
+      addSysBlock("✅ 压缩完成");
+    }
+  } catch (e) {
+    addError("压缩失败：" + e.message);
+  } finally {
+    busy = false;
+    sendBtn.disabled = false;
   }
 }
 

@@ -17,5 +17,6 @@ type Meta struct {
 // StoredMessage 是 JSONL 中的一条消息记录（meta 行之后）。
 type StoredMessage struct {
 	llm.Message
-	TS time.Time `json:"ts"`
+	Kind string    `json:"kind,omitempty"` // "" 普通消息；"summary" 压缩摘要
+	TS   time.Time `json:"ts"`
 }

@@ -98,6 +98,33 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+func TestReplace(t *testing.T) {
+	s := newTestStore(t)
+	m, _ := s.Create()
+	s.SetTitle(m.ID, "标题")
+	for i := 0; i < 3; i++ {
+		s.Append(m.ID, StoredMessage{Message: llm.Message{Role: "user", Content: "旧消息"}, TS: time.Now()})
+	}
+
+	err := s.Replace(m.ID, []StoredMessage{
+		{Message: llm.Message{Role: "user", Content: "摘要"}, Kind: "summary", TS: time.Now()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	meta, msgs, err := s.Get(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "标题" {
+		t.Errorf("meta title lost: %q", meta.Title)
+	}
+	if len(msgs) != 1 || msgs[0].Kind != "summary" || msgs[0].Content != "摘要" {
+		t.Errorf("replaced messages = %+v", msgs)
+	}
+}
+
 func TestInvalidID(t *testing.T) {
 	s := newTestStore(t)
 	for _, id := range []string{"", "../evil", `a\b`, "a/b"} {
