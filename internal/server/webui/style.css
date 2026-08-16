@@ -316,7 +316,36 @@ body {
   padding: 14px clamp(16px, 8%, 120px) 20px;
   border-top: 1px solid var(--border);
   background: var(--panel);
+  position: relative;
 }
+
+/* 命令菜单：悬浮于输入框上方 */
+.cmd-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: clamp(16px, 8%, 120px);
+  min-width: 340px;
+  max-width: 60%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  z-index: 10;
+}
+.cmd-menu.hidden { display: none; }
+
+.cmd-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.cmd-item.active, .cmd-item:hover { background: var(--active-bg); }
+.cmd-name { color: var(--accent); font-family: Consolas, "Courier New", monospace; flex-shrink: 0; }
+.cmd-desc { color: var(--text-dim); font-size: 12px; }
 
 .composer textarea {
   flex: 1;
