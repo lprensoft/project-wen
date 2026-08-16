@@ -285,6 +285,20 @@ body {
 }
 .tool-detail .label { color: var(--text-dim); font-family: inherit; }
 
+/* 系统信息块（命令输出等，本地展示） */
+.sys-block {
+  align-self: center;
+  max-width: 85%;
+  background: var(--tool-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  line-height: 1.8;
+}
+
 .msg-error {
   align-self: center;
   color: var(--danger);

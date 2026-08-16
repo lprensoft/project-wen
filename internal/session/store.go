@@ -211,6 +211,39 @@ func (s *Store) SetTitle(id, title string) error {
 	return os.Rename(tmp, p)
 }
 
+// Replace 用给定消息整体替换 session 内容（meta 行保留，原子写入）。
+func (s *Store) Replace(id string, msgs []StoredMessage) error {
+	p, err := s.path(id)
+	if err != nil {
+		return err
+	}
+	l := s.lock(id)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(p)
+	if err != nil {
+		return err
+	}
+	var buf []byte
+	line, _ := json.Marshal(meta)
+	buf = append(buf, line...)
+	buf = append(buf, '\n')
+	for _, m := range msgs {
+		line, err := json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		buf = append(buf, line...)
+		buf = append(buf, '\n')
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, p)
+}
+
 // Delete 删除 session 文件。
 func (s *Store) Delete(id string) error {
 	p, err := s.path(id)

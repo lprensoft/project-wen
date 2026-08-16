@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"wen/internal/agent"
+	"wen/internal/llm"
 	"wen/internal/session"
 )
 
@@ -85,10 +86,19 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	emit, ok := startSSE(w)
+	if !ok {
+		return
+	}
+	s.agent.Run(r.Context(), req.SessionID, req.Message, emit)
+}
+
+// startSSE 设置 SSE 响应头并返回事件写入函数（Agent 从单 goroutine 调用，无需加锁）。
+func startSSE(w http.ResponseWriter) (func(agent.Event), bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
-		return
+		return nil, false
 	}
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -96,15 +106,50 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// Agent 从单 goroutine 调用 emit，无需加锁
-	emit := func(ev agent.Event) {
+	return func(ev agent.Event) {
 		data, err := json.Marshal(ev)
 		if err != nil {
 			return
 		}
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
 		flusher.Flush()
-	}
+	}, true
+}
 
-	s.agent.Run(r.Context(), req.SessionID, req.Message, emit)
+// status 返回 Agent 配置与（可选的）当前会话上下文用量。
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
+		"provider":       s.info.Provider,
+		"model":          s.info.Model,
+		"thinking":       s.info.Thinking,
+		"context_length": s.info.ContextLength,
+	}
+	if sid := r.URL.Query().Get("session_id"); sid != "" {
+		if _, msgs, err := s.store.Get(sid); err == nil {
+			lms := make([]llm.Message, 0, len(msgs))
+			for _, m := range msgs {
+				lms = append(lms, m.Message)
+			}
+			resp["session"] = map[string]any{
+				"id":            sid,
+				"message_count": len(msgs),
+				"est_tokens":    agent.EstimateHistoryTokens(lms),
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// compact 压缩指定会话，过程以 SSE 流返回。
+func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, _, err := s.store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("session not found: %s", id))
+		return
+	}
+	emit, ok := startSSE(w)
+	if !ok {
+		return
+	}
+	s.agent.Compact(r.Context(), id, emit)
 }

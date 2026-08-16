@@ -227,6 +227,60 @@ func TestTrimToBudget(t *testing.T) {
 	}
 }
 
+func TestCompact(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+
+	// 先跑一轮带工具的对话，制造可压缩的历史
+	provider := &mockProvider{turns: []mockTurn{
+		{toolCalls: []llm.ToolCall{{ID: "call_1", Name: "echo", Arguments: json.RawMessage(`{"text":"hi"}`)}}},
+		{content: "第一轮回答"},
+		{content: "这是压缩摘要内容"}, // Compact 使用的第三次调用
+	}}
+	registry := tools.NewRegistry()
+	registry.Register(echoTool{})
+	ag := New(provider, registry, store, Options{Model: "test", MaxTurns: 5, Thinking: "high"})
+	ag.Run(context.Background(), meta.ID, "做点事", func(Event) {})
+
+	var streamed string
+	var done bool
+	ag.Compact(context.Background(), meta.ID, func(ev Event) {
+		if ev.Type == EventDelta {
+			streamed += ev.Content
+		}
+		if ev.Type == EventDone {
+			done = true
+		}
+		if ev.Type == EventError {
+			t.Fatalf("compact error: %s", ev.Error)
+		}
+	})
+	if !done || streamed != "这是压缩摘要内容" {
+		t.Errorf("done=%v streamed=%q", done, streamed)
+	}
+
+	// 压缩请求：思考关闭、序列化历史包含工具信息
+	compactReq := provider.reqs[len(provider.reqs)-1]
+	if compactReq.Thinking != "off" {
+		t.Errorf("compact thinking = %q, want off", compactReq.Thinking)
+	}
+	if !strings.Contains(compactReq.Messages[0].Content, "echo") {
+		t.Error("serialized history should mention tool call")
+	}
+
+	// 历史被替换为单条 summary 消息
+	_, msgs, _ := store.Get(meta.ID)
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages after compact, want 1", len(msgs))
+	}
+	if msgs[0].Kind != "summary" || msgs[0].Role != "user" {
+		t.Errorf("summary message = kind %q role %q", msgs[0].Kind, msgs[0].Role)
+	}
+	if !strings.Contains(msgs[0].Content, "这是压缩摘要内容") {
+		t.Errorf("summary content = %q", msgs[0].Content)
+	}
+}
+
 func TestSystemMessageContainsEnvContext(t *testing.T) {
 	store, _ := session.NewStore(t.TempDir())
 	meta, _ := store.Create()
