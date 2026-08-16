@@ -1,6 +1,6 @@
 # Wen Agent 配置示例
-# 复制为 config.yaml 后按需修改；API Key 放在同目录 .env 中（参考 .env.example）。
-# 加载优先级：CLI flag > 环境变量 > config.yaml > 内置默认值
+# 复制为 config.yaml 后按需修改（config.yaml 已在 .gitignore 中，不会提交入库）。
+# 加载优先级：CLI flag > config.yaml > 内置默认值
 
 server:
   host: 127.0.0.1
@@ -20,7 +20,7 @@ providers:
   deepseek:
     type: openai_compat      # MVP 仅支持 openai_compat
     base_url: https://api.deepseek.com
-    api_key: ${DEEPSEEK_API_KEY}   # 从 .env / 环境变量替换
+    api_key: sk-你的密钥       # 直接填写；也支持 ${VAR} 从进程环境变量读取
 
 agent:
   system_prompt: ""          # 系统提示词，先留空

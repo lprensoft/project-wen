@@ -5,17 +5,16 @@
 ## 特性
 
 - **LLM 可配置**：`providers` 注册表 + `model` 选择，后续接入其他 OpenAI 兼容后端只需改配置
-- **插件化架构**：精简核心（agent 循环 / session / server / llm）+ 插件扩展。工具能力全部由插件提供，插件可运行时开关（`/plugins` 命令或 API），并可选择性向系统提示词注入片段。内置三个系统插件：`read_file`、`exec_command`、`web_fetch`
+- **插件化架构**：精简核心（agent 循环 / session / server / llm）+ 插件扩展。工具能力全部由插件提供，插件可运行时开关（Web UI 设置页或 API），并可选择性向系统提示词注入片段。内置三个系统插件：`read_file`、`exec_command`、`web_fetch`
 - **Web UI**：`go:embed` 内嵌单页聊天界面，SSE 流式输出，工具调用过程可视化
 - **Session 管理**：每个会话一个 JSONL 文件（首行 meta + 逐行消息），重启不丢历史
-- **配置分离**：`config.yaml` 放配置，`.env` 放密钥，支持 `${VAR}` 环境变量替换
+- **单一配置文件**：全部配置（含 API Key）统一在 `config.yaml`（已被 .gitignore 保护），值支持 `${VAR}` 从环境变量读取
 
 ## 快速开始
 
 ```bash
-# 1. 准备配置（也可跳过——全部走默认值，只需设置环境变量 DEEPSEEK_API_KEY）
+# 1. 准备配置：复制示例并填入 providers.deepseek.api_key
 cp config.example.yaml config.yaml
-cp .env.example .env        # 编辑 .env，填入真实 DEEPSEEK_API_KEY
 
 # 2. 运行
 go run ./cmd/wen
@@ -24,7 +23,7 @@ go run ./cmd/wen
 # http://127.0.0.1:8080
 ```
 
-配置文件查找顺序：`-c` 指定路径 → 当前目录 `config.yaml` → `~/.wen/config.yaml`。`.env` 与配置文件同目录。
+配置文件查找顺序：`-c` 指定路径 → 当前目录 `config.yaml` → `~/.wen/config.yaml`。
 
 ```bash
 wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
@@ -62,7 +61,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 
 ```
 cmd/wen/                 入口（注册内置插件、装配各层）
-internal/config/         配置加载（YAML + .env + ${VAR} 替换）
+internal/config/         配置加载（YAML + ${VAR} 环境变量替换）
 internal/llm/            Provider 接口 + OpenAI 兼容实现
 internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下文预算）
 internal/plugin/         插件协议（Plugin / Tool 接口）+ Manager（开关与聚合）

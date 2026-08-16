@@ -21,9 +21,8 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 	}
 }
 
-func TestLoadYAMLWithEnvFile(t *testing.T) {
+func TestLoadYAMLWithInlineKey(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("WEN_TEST_KEY=sk-from-dotenv\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
 server:
   port: 9999
@@ -34,7 +33,7 @@ providers:
   deepseek:
     type: openai_compat
     base_url: https://api.deepseek.com
-    api_key: ${WEN_TEST_KEY}
+    api_key: sk-inline-key
 `), 0o644)
 
 	cfg, err := Load(filepath.Join(dir, "config.yaml"))
@@ -47,12 +46,32 @@ providers:
 	if cfg.Model.Name != "deepseek-reasoner" {
 		t.Errorf("model = %q", cfg.Model.Name)
 	}
-	if got := cfg.Providers["deepseek"].APIKey; got != "sk-from-dotenv" {
-		t.Errorf("api_key = %q, want value from .env", got)
+	if got := cfg.Providers["deepseek"].APIKey; got != "sk-inline-key" {
+		t.Errorf("api_key = %q, want inline value", got)
 	}
 	// 未覆盖的字段保留默认值
 	if cfg.Model.Temperature != 0.7 || cfg.Agent.MaxTurns != 20 {
 		t.Errorf("unset fields lost defaults: %+v", cfg)
+	}
+}
+
+func TestLoadYAMLWithEnvVarPlaceholder(t *testing.T) {
+	t.Setenv("WEN_TEST_KEY", "sk-from-env")
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+providers:
+  deepseek:
+    type: openai_compat
+    base_url: https://api.deepseek.com
+    api_key: ${WEN_TEST_KEY}
+`), 0o644)
+
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Providers["deepseek"].APIKey; got != "sk-from-env" {
+		t.Errorf("api_key = %q, want value from env var", got)
 	}
 }
 

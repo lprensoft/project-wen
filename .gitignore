@@ -10,3 +10,4 @@ plugins.state.json
 /wen
 /wen.exe
 *.log
+/wen.exe~
