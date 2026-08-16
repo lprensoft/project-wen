@@ -1,0 +1,81 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadDefaultsWhenFileMissing(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test-default")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "config.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.Port != 8080 || cfg.Model.Name != "deepseek-chat" {
+		t.Errorf("defaults not applied: %+v", cfg)
+	}
+	if got := cfg.Providers["deepseek"].APIKey; got != "sk-test-default" {
+		t.Errorf("api_key env expansion failed, got %q", got)
+	}
+}
+
+func TestLoadYAMLWithEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("WEN_TEST_KEY=sk-from-dotenv\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+server:
+  port: 9999
+model:
+  provider: deepseek
+  name: deepseek-reasoner
+providers:
+  deepseek:
+    type: openai_compat
+    base_url: https://api.deepseek.com
+    api_key: ${WEN_TEST_KEY}
+`), 0o644)
+
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.Port != 9999 {
+		t.Errorf("port = %d, want 9999", cfg.Server.Port)
+	}
+	if cfg.Model.Name != "deepseek-reasoner" {
+		t.Errorf("model = %q", cfg.Model.Name)
+	}
+	if got := cfg.Providers["deepseek"].APIKey; got != "sk-from-dotenv" {
+		t.Errorf("api_key = %q, want value from .env", got)
+	}
+	// 未覆盖的字段保留默认值
+	if cfg.Model.Temperature != 0.7 || cfg.Agent.MaxTurns != 20 {
+		t.Errorf("unset fields lost defaults: %+v", cfg)
+	}
+}
+
+func TestValidateRejectsMissingProvider(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+model:
+  provider: nope
+`), 0o644)
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestSessionDirDefault(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-x")
+	dir := t.TempDir()
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(dir, "sessions")
+	if got := cfg.SessionDir(); got != want {
+		t.Errorf("SessionDir = %q, want %q", got, want)
+	}
+}

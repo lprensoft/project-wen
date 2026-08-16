@@ -1,0 +1,69 @@
+package llm
+
+import (
+	"context"
+	"encoding/json"
+)
+
+// Role 常量与 OpenAI 协议一致。
+const (
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+	RoleTool      = "tool"
+)
+
+type Message struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning_content,omitempty"` // 思考内容；带工具调用时必须回传给 API
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`        // assistant 发起的工具调用
+	ToolCallID string     `json:"tool_call_id,omitempty"`      // role=tool 时对应的调用 ID
+}
+
+type ToolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// ToolSpec 描述一个可供模型调用的工具。
+type ToolSpec struct {
+	Name        string
+	Description string
+	Schema      json.RawMessage // 参数 JSON Schema
+}
+
+type ChatRequest struct {
+	Model       string
+	Messages    []Message
+	Tools       []ToolSpec
+	Temperature float64
+	MaxTokens   int
+	// Thinking 思考模式："off" 关闭；"low"/"medium"/"high"/"xhigh"/"max" 为思考强度
+	//（DeepSeek 服务端将 medium/xhigh 归并为 high）。思考开启时 Temperature 不生效。
+	Thinking string
+}
+
+type EventType int
+
+const (
+	EventContentDelta   EventType = iota // Content 为文本增量
+	EventReasoningDelta                  // Content 为思考内容增量
+	EventToolCalls                       // ToolCalls 为累积完整的工具调用
+	EventDone
+	EventError
+)
+
+type StreamEvent struct {
+	Type      EventType
+	Content   string
+	ToolCalls []ToolCall
+	Err       error
+}
+
+// Provider 是 LLM 后端的统一接口。
+// ChatStream 返回的 channel 依次吐出事件，流结束（含出错）后关闭。
+type Provider interface {
+	ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}

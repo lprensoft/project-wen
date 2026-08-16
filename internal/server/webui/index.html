@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wen Agent</title>
+  <script>
+    // 首屏前确定主题，避免闪白/闪黑
+    (function () {
+      var s = localStorage.getItem("wen-theme") || "system";
+      var dark = s === "dark" || (s === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="logo">Wen Agent</span>
+        <div class="header-actions">
+          <button id="btn-theme" class="btn-icon" title="切换主题"></button>
+          <button id="btn-new" class="btn-primary" title="新建会话">＋ 新会话</button>
+        </div>
+      </div>
+      <ul id="session-list" class="session-list"></ul>
+    </aside>
+
+    <main class="chat">
+      <div id="messages" class="messages">
+        <div class="empty-hint" id="empty-hint">新建或选择一个会话开始对话</div>
+      </div>
+      <form id="chat-form" class="composer">
+        <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <button type="submit" id="btn-send" class="btn-primary">发送</button>
+      </form>
+    </main>
+  </div>
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

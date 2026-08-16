@@ -1,0 +1,334 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #e2e4e8;
+  --text: #1f2328;
+  --text-dim: #6b7280;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --user-bubble: #2563eb;
+  --tool-bg: #f0f1f3;
+  --active-bg: #e8effd;
+  --danger: #dc2626;
+  --danger-bg: #fee2e2;
+  --code-bg: rgba(0, 0, 0, 0.06);
+  --pre-bg: #0f172a;
+  --pre-text: #e2e8f0;
+}
+
+:root[data-theme="dark"] {
+  --bg: #12151a;
+  --panel: #1a1f26;
+  --border: #2b323c;
+  --text: #e5e7eb;
+  --text-dim: #98a2b0;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --user-bubble: #2b5cc4;
+  --tool-bg: #232a33;
+  --active-bg: #1f2c48;
+  --danger: #f87171;
+  --danger-bg: #3d1f1f;
+  --code-bg: rgba(255, 255, 255, 0.1);
+  --pre-bg: #0b1017;
+  --pre-text: #d7e0ec;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.app { display: flex; height: 100vh; }
+
+/* ---------- 侧边栏 ---------- */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 14px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo { font-weight: 700; font-size: 15px; }
+
+.header-actions { display: flex; align-items: center; gap: 6px; }
+
+.btn-icon {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.btn-icon:hover { background: var(--bg); }
+
+.session-list { list-style: none; overflow-y: auto; flex: 1; padding: 8px; }
+
+.session-item {
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--text-dim);
+}
+
+.session-item:hover { background: var(--bg); }
+.session-item.active { background: var(--active-bg); color: var(--accent); font-weight: 600; }
+
+.session-item .title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.session-item .btn-del {
+  border: none; background: none; cursor: pointer;
+  color: var(--text-dim); font-size: 13px; padding: 2px 4px;
+  border-radius: 4px; visibility: hidden;
+}
+.session-item:hover .btn-del { visibility: visible; }
+.session-item .btn-del:hover { color: var(--danger); background: var(--danger-bg); }
+
+/* ---------- 聊天区 ---------- */
+.chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px clamp(16px, 8%, 120px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 容器溢出滚动时禁止压缩子项：overflow:hidden 的子项（如工具块）
+   自动最小高度会失效，会被 flex 压成一条细线 */
+.messages > * { flex-shrink: 0; }
+
+.empty-hint {
+  margin: auto;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.msg { display: flex; flex-direction: column; max-width: 85%; }
+.msg.user { align-self: flex-end; align-items: flex-end; }
+.msg.assistant { align-self: flex-start; align-items: flex-start; }
+
+.bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user .bubble { background: var(--user-bubble); color: #fff; border-bottom-right-radius: 4px; }
+.msg.assistant .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+
+/* ---------- Markdown 内容（助手气泡） ---------- */
+.bubble.md { white-space: normal; }
+
+.bubble.md > *:first-child { margin-top: 0; }
+.bubble.md > *:last-child { margin-bottom: 0; }
+
+.bubble.md p { margin: 0 0 8px; }
+
+.bubble.md h1, .bubble.md h2, .bubble.md h3, .bubble.md h4 {
+  margin: 14px 0 6px;
+  line-height: 1.4;
+}
+.bubble.md h1 { font-size: 18px; }
+.bubble.md h2 { font-size: 16px; }
+.bubble.md h3 { font-size: 15px; }
+.bubble.md h4 { font-size: 14px; }
+
+.bubble.md code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.bubble.md pre {
+  background: var(--pre-bg);
+  color: var(--pre-text);
+  padding: 10px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 8px 0;
+  line-height: 1.55;
+}
+.bubble.md pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.bubble.md ul, .bubble.md ol { margin: 4px 0 8px; padding-left: 22px; }
+.bubble.md li { margin: 2px 0; }
+.bubble.md li > p { margin: 0; }
+
+.bubble.md blockquote {
+  border-left: 3px solid var(--border);
+  padding: 2px 0 2px 10px;
+  margin: 8px 0;
+  color: var(--text-dim);
+}
+
+.bubble.md table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.bubble.md th, .bubble.md td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  text-align: left;
+}
+.bubble.md th { background: var(--tool-bg); }
+
+.bubble.md a { color: var(--accent); }
+.bubble.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.bubble.md img { max-width: 100%; border-radius: 6px; }
+
+.msg.assistant .bubble.streaming::after {
+  content: "▍";
+  color: var(--accent);
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 思考过程块 */
+.thinking-block {
+  align-self: flex-start;
+  max-width: 85%;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.thinking-block summary {
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.thinking-block .thinking-content {
+  border-top: 1px dashed var(--border);
+  padding: 8px 12px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* 工具调用块 */
+.tool-block {
+  align-self: flex-start;
+  max-width: 85%;
+  background: var(--tool-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  overflow: hidden;
+}
+
+.tool-block summary {
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--text-dim);
+  user-select: none;
+}
+.tool-block summary .tool-name { color: var(--accent); font-family: Consolas, monospace; }
+.tool-block .tool-detail {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+  color: var(--text);
+}
+.tool-detail .label { color: var(--text-dim); font-family: inherit; }
+
+.msg-error {
+  align-self: center;
+  color: var(--danger);
+  background: var(--danger-bg);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+/* ---------- 输入区 ---------- */
+.composer {
+  display: flex;
+  gap: 10px;
+  padding: 14px clamp(16px, 8%, 120px) 20px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 160px;
+  outline: none;
+  background: var(--panel);
+  color: var(--text);
+}
+.composer textarea:focus { border-color: var(--accent); }
+
+.btn-primary {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }

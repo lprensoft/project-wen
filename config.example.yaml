@@ -1,0 +1,34 @@
+# Wen Agent 配置示例
+# 复制为 config.yaml 后按需修改；API Key 放在同目录 .env 中（参考 .env.example）。
+# 加载优先级：CLI flag > 环境变量 > config.yaml > 内置默认值
+
+server:
+  host: 127.0.0.1
+  port: 8080
+
+# 当前使用的模型（provider 名 + 模型 id）
+model:
+  provider: deepseek
+  name: deepseek-chat
+  temperature: 0.7           # 思考模式开启时不生效
+  max_tokens: 4096
+  thinking: high             # 思考模式：off / low / medium / high / xhigh / max（默认 high）
+  context_length: 1000000    # 模型上下文窗口（token），超出时自动裁剪最旧对话轮次
+
+# Provider 注册表 —— 后续接入 OpenAI / Ollama 等只需在此加条目
+providers:
+  deepseek:
+    type: openai_compat      # MVP 仅支持 openai_compat
+    base_url: https://api.deepseek.com
+    api_key: ${DEEPSEEK_API_KEY}   # 从 .env / 环境变量替换
+
+agent:
+  system_prompt: ""          # 系统提示词，先留空
+  max_turns: 20              # 单次用户请求内工具循环上限
+  tools:
+    enabled: [read_file, exec_command]
+    exec_timeout_seconds: 60
+    workdir: ""              # 工具工作目录，空 = 进程当前目录
+
+session:
+  dir: ""                    # session 存储目录，空 = <配置目录>/sessions

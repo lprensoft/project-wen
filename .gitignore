@@ -1,0 +1,11 @@
+# 密钥与本地配置
+.env
+config.yaml
+
+# 本地会话数据
+sessions/
+
+# 构建产物与运行日志（锚定根目录，避免误伤 cmd/wen/）
+/wen
+/wen.exe
+*.log
