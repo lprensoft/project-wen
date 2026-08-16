@@ -347,6 +347,68 @@ async function sendMessage() {
   }
 }
 
+// ---------- 命令菜单（输入 / 时弹出，随输入筛选） ----------
+
+const COMMANDS = [
+  { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量" },
+  { cmd: "/compact", desc: "压缩当前会话为摘要" },
+];
+const cmdMenu = $("#cmd-menu");
+let cmdMatches = [];
+let cmdIndex = -1;
+
+function updateCmdMenu() {
+  const text = inputEl.value;
+  // 仅当整个输入是一个正在敲的命令词（以 / 开头、无空白）时才弹出
+  if (!text.startsWith("/") || /\s/.test(text)) {
+    hideCmdMenu();
+    return;
+  }
+  cmdMatches = COMMANDS.filter((c) => c.cmd.startsWith(text.toLowerCase()));
+  if (cmdMatches.length === 0) {
+    hideCmdMenu();
+    return;
+  }
+  cmdIndex = 0;
+  cmdMenu.innerHTML = "";
+  cmdMatches.forEach((c, i) => {
+    const item = document.createElement("div");
+    item.className = "cmd-item" + (i === cmdIndex ? " active" : "");
+    const name = document.createElement("span");
+    name.className = "cmd-name";
+    name.textContent = c.cmd;
+    const desc = document.createElement("span");
+    desc.className = "cmd-desc";
+    desc.textContent = c.desc;
+    item.append(name, desc);
+    // mousedown + preventDefault：避免输入框先失焦
+    item.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pickCommand(i);
+    });
+    cmdMenu.appendChild(item);
+  });
+  cmdMenu.classList.remove("hidden");
+}
+
+function hideCmdMenu() {
+  cmdMenu.classList.add("hidden");
+  cmdMatches = [];
+  cmdIndex = -1;
+}
+
+function pickCommand(i) {
+  inputEl.value = cmdMatches[i].cmd;
+  hideCmdMenu();
+  autoGrow();
+  inputEl.focus();
+}
+
+function moveCmdSel(delta) {
+  cmdIndex = (cmdIndex + delta + cmdMatches.length) % cmdMatches.length;
+  [...cmdMenu.children].forEach((el, i) => el.classList.toggle("active", i === cmdIndex));
+}
+
 // ---------- 斜杠命令（本地处理，不进入对话历史） ----------
 
 async function handleCommand(text) {
@@ -470,8 +532,18 @@ function autoGrow() {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
 }
 
-inputEl.addEventListener("input", autoGrow);
+inputEl.addEventListener("input", () => {
+  autoGrow();
+  updateCmdMenu();
+});
+inputEl.addEventListener("blur", hideCmdMenu);
 inputEl.addEventListener("keydown", (e) => {
+  if (cmdMatches.length > 0 && !e.isComposing) {
+    if (e.key === "ArrowDown") { e.preventDefault(); moveCmdSel(1); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); moveCmdSel(-1); return; }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickCommand(cmdIndex); return; }
+    if (e.key === "Escape") { hideCmdMenu(); return; }
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     sendMessage();
