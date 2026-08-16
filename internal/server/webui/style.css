@@ -356,10 +356,10 @@ body {
   font: inherit;
   font-size: 14px;
   line-height: 1.5;
-  max-height: 160px;
   outline: none;
   background: var(--panel);
   color: var(--text);
+  overflow-y: hidden; /* 默认无滚动条，超过 3 行后由 JS 打开 */
 }
 .composer textarea:focus { border-color: var(--accent); }
 
