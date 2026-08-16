@@ -75,6 +75,10 @@ go test ./...    # 测试
 go vet ./...     # 静态检查
 ```
 
+## 许可证
+
+本项目基于 [GNU GPL v3.0](LICENSE) 开源。
+
 ## 后续规划
 
 - 更多 Provider 类型（Anthropic、Ollama 等）与模型 fallback
