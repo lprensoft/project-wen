@@ -299,6 +299,34 @@ body {
   line-height: 1.8;
 }
 
+/* 插件列表块 */
+.plugins-block { align-self: center; width: min(680px, 92%); }
+.plugins-title { margin-bottom: 6px; }
+.plugin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.plugin-info { flex: 1; }
+.plugin-toggle {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 3px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.plugin-toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .msg-error {
   align-self: center;
   color: var(--danger);

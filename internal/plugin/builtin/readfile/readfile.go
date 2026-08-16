@@ -1,0 +1,80 @@
+// Package readfile 提供读取本地文本文件的系统插件。
+package readfile
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"wen/internal/plugin"
+)
+
+const defaultMaxBytes = 64 * 1024
+
+// Plugin 是 read_file 系统插件（不注入提示词）。
+type Plugin struct {
+	workdir  string
+	maxBytes int
+}
+
+func New() *Plugin { return &Plugin{maxBytes: defaultMaxBytes} }
+
+func (p *Plugin) Name() string        { return "read_file" }
+func (p *Plugin) Description() string { return "读取本地文本文件内容" }
+func (p *Plugin) SystemPrompt() string { return "" }
+
+func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
+	p.workdir = ictx.Workdir
+	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)
+	return nil
+}
+
+func (p *Plugin) Tools() []plugin.Tool { return []plugin.Tool{&tool{p: p}} }
+
+type tool struct {
+	p *Plugin
+}
+
+func (t *tool) Name() string { return "read_file" }
+
+func (t *tool) Description() string {
+	return "读取指定路径的文本文件内容。相对路径基于工作目录解析。文件过大时截断。"
+}
+
+func (t *tool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {"type": "string", "description": "要读取的文件路径（绝对或相对）"}
+		},
+		"required": ["path"]
+	}`)
+}
+
+func (t *tool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if a.Path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	path := a.Path
+	if !filepath.IsAbs(path) && t.p.workdir != "" {
+		path = filepath.Join(t.p.workdir, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	data, truncated := plugin.TruncateUTF8(data, t.p.maxBytes)
+	out := string(data)
+	if truncated {
+		out += fmt.Sprintf("\n...[内容超过 %d 字节，已截断]", t.p.maxBytes)
+	}
+	return out, nil
+}

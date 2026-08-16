@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"wen/internal/agent"
+	"wen/internal/plugin"
 	"wen/internal/session"
 )
 
@@ -21,13 +22,14 @@ type Info struct {
 }
 
 type Server struct {
-	agent *agent.Agent
-	store *session.Store
-	info  Info
+	agent   *agent.Agent
+	store   *session.Store
+	plugins *plugin.Manager
+	info    Info
 }
 
-func New(a *agent.Agent, store *session.Store, info Info) *Server {
-	return &Server{agent: a, store: store, info: info}
+func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, info Info) *Server {
+	return &Server{agent: a, store: store, plugins: plugins, info: info}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -43,6 +45,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.compact)
+	mux.HandleFunc("GET /api/plugins", s.listPlugins)
+	mux.HandleFunc("PUT /api/plugins/{name}", s.setPlugin)
 
 	return mux
 }

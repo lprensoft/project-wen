@@ -145,6 +145,27 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// listPlugins 返回全部插件状态。
+func (s *Server) listPlugins(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.plugins.List())
+}
+
+// setPlugin 运行时启用/禁用插件。
+func (s *Server) setPlugin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := s.plugins.SetEnabled(r.PathValue("name"), req.Enabled); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.plugins.List())
+}
+
 // compact 压缩指定会话，过程以 SSE 流返回。
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
