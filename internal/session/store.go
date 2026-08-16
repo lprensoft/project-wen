@@ -178,8 +178,18 @@ func (s *Store) Append(id string, msg StoredMessage) error {
 	return err
 }
 
-// SetTitle 更新 meta 行的标题（整体重写文件，原子替换）。
+// SetTitle 更新 meta 行的标题。
 func (s *Store) SetTitle(id, title string) error {
+	return s.updateMeta(id, func(m *Meta) { m.Title = title })
+}
+
+// SetUsage 更新 meta 行记录的最近一次实测 token 用量（nil 表示清除）。
+func (s *Store) SetUsage(id string, u *Usage) error {
+	return s.updateMeta(id, func(m *Meta) { m.LastUsage = u })
+}
+
+// updateMeta 读取并修改 meta 行后原子回写，消息内容不动。
+func (s *Store) updateMeta(id string, mutate func(*Meta)) error {
 	p, err := s.path(id)
 	if err != nil {
 		return err
@@ -200,7 +210,7 @@ func (s *Store) SetTitle(id, title string) error {
 	if err := json.Unmarshal(raw[:idx], &meta); err != nil {
 		return fmt.Errorf("bad meta line: %w", err)
 	}
-	meta.Title = title
+	mutate(&meta)
 	line, _ := json.Marshal(meta)
 
 	tmp := p + ".tmp"

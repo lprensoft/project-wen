@@ -125,16 +125,21 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"context_length": s.info.ContextLength,
 	}
 	if sid := r.URL.Query().Get("session_id"); sid != "" {
-		if _, msgs, err := s.store.Get(sid); err == nil {
+		if meta, msgs, err := s.store.Get(sid); err == nil {
 			lms := make([]llm.Message, 0, len(msgs))
 			for _, m := range msgs {
 				lms = append(lms, m.Message)
 			}
-			resp["session"] = map[string]any{
+			sess := map[string]any{
 				"id":            sid,
 				"message_count": len(msgs),
 				"est_tokens":    agent.EstimateHistoryTokens(lms),
 			}
+			if meta.LastUsage != nil {
+				// 实测值：最近一次请求的完整上下文 + 本次输出
+				sess["measured_tokens"] = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
+			}
+			resp["session"] = sess
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)

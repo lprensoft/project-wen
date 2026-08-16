@@ -14,13 +14,19 @@ import (
 type EventType string
 
 const (
-	EventDelta      EventType = "delta"       // 助手文本增量
-	EventThinking   EventType = "thinking"    // 思考内容增量
-	EventToolStart  EventType = "tool_start"  // 开始执行工具
-	EventToolResult EventType = "tool_result" // 工具执行结果
-	EventDone       EventType = "done"        // 本轮请求结束
-	EventError      EventType = "error"
+	EventDelta        EventType = "delta"         // 助手文本增量
+	EventThinking     EventType = "thinking"      // 思考内容增量
+	EventToolStart    EventType = "tool_start"    // 开始执行工具
+	EventToolResult   EventType = "tool_result"   // 工具执行结果
+	EventCompactStart EventType = "compact_start" // 自动压缩开始
+	EventCompactDelta EventType = "compact_delta" // 自动压缩摘要增量
+	EventCompactDone  EventType = "compact_done"  // 自动压缩结束（Error 非空表示失败）
+	EventDone         EventType = "done"          // 本轮请求结束
+	EventError        EventType = "error"
 )
+
+// autoCompactThreshold 会话上下文占用达到窗口的该比例时触发自动压缩。
+const autoCompactThreshold = 0.90
 
 // Event 是 Agent 运行过程中对外发布的事件（server 将其转为 SSE 帧）。
 type Event struct {
@@ -103,9 +109,16 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	msgs = append(msgs, userMsg)
 
 	for turn := 0; turn < a.opts.MaxTurns; turn++ {
-		content, reasoning, toolCalls, err := a.stream(ctx, msgs, emit)
+		content, reasoning, toolCalls, usage, err := a.stream(ctx, msgs, emit)
 		if err != nil {
 			return err
+		}
+		if usage != nil {
+			// 记录实测用量（供 /status 展示与自动压缩判断）
+			_ = a.store.SetUsage(sessionID, &session.Usage{
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
+			})
 		}
 
 		// reasoning 一并持久化并留在上下文里：带工具调用时 DeepSeek 要求回传
@@ -116,6 +129,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		msgs = append(msgs, assistant)
 
 		if len(toolCalls) == 0 {
+			a.maybeAutoCompact(ctx, sessionID, usage, emit)
 			return nil // 无工具调用，本轮结束
 		}
 
@@ -134,8 +148,8 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	return fmt.Errorf("reached max_turns (%d) without a final answer", a.opts.MaxTurns)
 }
 
-// stream 发起一次 LLM 调用，转发文本与思考增量，返回完整文本、思考内容与工具调用。
-func (a *Agent) stream(ctx context.Context, msgs []llm.Message, emit func(Event)) (string, string, []llm.ToolCall, error) {
+// stream 发起一次 LLM 调用，转发文本与思考增量，返回完整文本、思考内容、工具调用与实测用量。
+func (a *Agent) stream(ctx context.Context, msgs []llm.Message, emit func(Event)) (string, string, []llm.ToolCall, *llm.Usage, error) {
 	events, err := a.provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       a.opts.Model,
 		Messages:    a.trimToBudget(msgs),
@@ -145,11 +159,12 @@ func (a *Agent) stream(ctx context.Context, msgs []llm.Message, emit func(Event)
 		Thinking:    a.opts.Thinking,
 	})
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
 
 	var content, reasoning string
 	var toolCalls []llm.ToolCall
+	var usage *llm.Usage
 	for ev := range events {
 		switch ev.Type {
 		case llm.EventContentDelta:
@@ -160,14 +175,38 @@ func (a *Agent) stream(ctx context.Context, msgs []llm.Message, emit func(Event)
 			emit(Event{Type: EventThinking, Content: ev.Content})
 		case llm.EventToolCalls:
 			toolCalls = ev.ToolCalls
+		case llm.EventUsage:
+			usage = ev.Usage
 		case llm.EventError:
-			return "", "", nil, ev.Err
+			return "", "", nil, nil, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
-	return content, reasoning, toolCalls, nil
+	return content, reasoning, toolCalls, usage, nil
+}
+
+// maybeAutoCompact 在实测上下文占用达到窗口阈值时自动压缩会话。
+func (a *Agent) maybeAutoCompact(ctx context.Context, sessionID string, usage *llm.Usage, emit func(Event)) {
+	if usage == nil || a.opts.ContextLength <= 0 {
+		return
+	}
+	used := usage.PromptTokens + usage.CompletionTokens
+	if float64(used) < float64(a.opts.ContextLength)*autoCompactThreshold {
+		return
+	}
+	emit(Event{Type: EventCompactStart})
+	wrapped := func(ev Event) {
+		if ev.Type == EventDelta {
+			emit(Event{Type: EventCompactDelta, Content: ev.Content})
+		}
+	}
+	if err := a.compact(ctx, sessionID, wrapped); err != nil {
+		emit(Event{Type: EventCompactDone, Error: err.Error()})
+		return
+	}
+	emit(Event{Type: EventCompactDone})
 }
 
 // estimateTokens 粗略估算消息 token 数：UTF-8 字节数 / 3

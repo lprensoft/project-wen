@@ -285,6 +285,8 @@ async function sendMessage() {
   let assistantBubble = null; // 惰性创建，收到第一个 delta 才建
   let assistantRaw = "";      // 当前气泡的原始 Markdown 文本
   let thinkingBlock = null;   // 当前轮的思考块
+  let compactBlock = null;    // 自动压缩的动态展示块
+  let autoCompacted = false;  // 本轮发生过自动压缩，结束后需重载历史
   const toolBlocks = {};
   const finishBubble = () => {
     if (assistantBubble) assistantBubble.classList.remove("streaming");
@@ -328,6 +330,33 @@ async function sendMessage() {
       } else if (ev.type === "tool_result") {
         const tb = toolBlocks[ev.tool_call_id];
         if (tb) setToolDetail(tb.el.querySelector(".tool-detail"), tb.args, ev.tool_result);
+      } else if (ev.type === "compact_start") {
+        finishBubble();
+        finishThinking();
+        compactBlock = document.createElement("details");
+        compactBlock.className = "thinking-block";
+        compactBlock.open = true;
+        const cs = document.createElement("summary");
+        cs.textContent = "📦 上下文接近上限，正在自动压缩会话…";
+        compactBlock.appendChild(cs);
+        const cc = document.createElement("div");
+        cc.className = "thinking-content";
+        compactBlock.appendChild(cc);
+        messagesEl.appendChild(compactBlock);
+        scrollBottom();
+      } else if (ev.type === "compact_delta") {
+        if (compactBlock) {
+          compactBlock.querySelector(".thinking-content").textContent += ev.content || "";
+          scrollBottom();
+        }
+      } else if (ev.type === "compact_done") {
+        if (ev.error) {
+          addError("自动压缩失败：" + ev.error);
+        } else {
+          autoCompacted = true; // 流结束后重载历史并提示
+          if (compactBlock) compactBlock.open = false;
+        }
+        compactBlock = null;
       } else if (ev.type === "error") {
         addError("出错了：" + (ev.error || "未知错误"));
       } else if (ev.type === "done") {
@@ -342,6 +371,10 @@ async function sendMessage() {
     finishThinking();
     busy = false;
     sendBtn.disabled = false;
+    if (autoCompacted) {
+      await selectSession(currentSession); // 重载压缩后的历史
+      addSysBlock("✅ 会话已自动压缩");
+    }
     loadSessions(); // 刷新标题
     inputEl.focus();
   }
@@ -437,11 +470,19 @@ async function runStatus() {
       "上下文窗口：" + st.context_length.toLocaleString() + " tokens",
     ];
     if (st.session) {
-      const pct = ((st.session.est_tokens / st.context_length) * 100).toFixed(2);
-      lines.push(
-        "当前会话：" + st.session.message_count + " 条消息，约 " +
-        st.session.est_tokens.toLocaleString() + " tokens（占用 " + pct + "%）"
-      );
+      if (st.session.measured_tokens != null) {
+        const pct = ((st.session.measured_tokens / st.context_length) * 100).toFixed(2);
+        lines.push(
+          "当前会话：" + st.session.message_count + " 条消息，实测 " +
+          st.session.measured_tokens.toLocaleString() + " tokens（占用 " + pct + "%）"
+        );
+      } else {
+        const pct = ((st.session.est_tokens / st.context_length) * 100).toFixed(2);
+        lines.push(
+          "当前会话：" + st.session.message_count + " 条消息，约 " +
+          st.session.est_tokens.toLocaleString() + " tokens（估算，占用 " + pct + "%）"
+        );
+      }
     } else {
       lines.push("当前会话：无");
     }

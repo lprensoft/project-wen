@@ -40,14 +40,19 @@ type wireThinking struct {
 }
 
 type wireRequest struct {
-	Model           string        `json:"model"`
-	Messages        []wireMessage `json:"messages"`
-	Tools           []wireTool    `json:"tools,omitempty"`
-	Temperature     *float64      `json:"temperature,omitempty"`
-	MaxTokens       int           `json:"max_tokens,omitempty"`
-	Stream          bool          `json:"stream"`
-	Thinking        *wireThinking `json:"thinking,omitempty"`
-	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	Model           string             `json:"model"`
+	Messages        []wireMessage      `json:"messages"`
+	Tools           []wireTool         `json:"tools,omitempty"`
+	Temperature     *float64           `json:"temperature,omitempty"`
+	MaxTokens       int                `json:"max_tokens,omitempty"`
+	Stream          bool               `json:"stream"`
+	StreamOptions   *wireStreamOptions `json:"stream_options,omitempty"`
+	Thinking        *wireThinking      `json:"thinking,omitempty"`
+	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
+}
+
+type wireStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type wireMessage struct {
@@ -90,13 +95,15 @@ type wireChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *Usage `json:"usage"` // 最后一个 chunk 携带（需 stream_options.include_usage）
 }
 
 func buildRequest(req ChatRequest) wireRequest {
 	wr := wireRequest{
-		Model:     req.Model,
-		MaxTokens: req.MaxTokens,
-		Stream:    true,
+		Model:         req.Model,
+		MaxTokens:     req.MaxTokens,
+		Stream:        true,
+		StreamOptions: &wireStreamOptions{IncludeUsage: true},
 	}
 	switch req.Thinking {
 	case "", "off":
@@ -201,7 +208,15 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 				return
 			}
 			var chunk wireChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil || len(chunk.Choices) == 0 {
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+			if chunk.Usage != nil {
+				if !emit(StreamEvent{Type: EventUsage, Usage: chunk.Usage}) {
+					return
+				}
+			}
+			if len(chunk.Choices) == 0 {
 				continue
 			}
 			delta := chunk.Choices[0].Delta

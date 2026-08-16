@@ -22,6 +22,7 @@ type mockTurn struct {
 	content   string
 	reasoning string
 	toolCalls []llm.ToolCall
+	usage     *llm.Usage
 }
 
 func (m *mockProvider) ChatStream(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
@@ -40,6 +41,9 @@ func (m *mockProvider) ChatStream(ctx context.Context, req llm.ChatRequest) (<-c
 		}
 		if len(turn.toolCalls) > 0 {
 			ch <- llm.StreamEvent{Type: llm.EventToolCalls, ToolCalls: turn.toolCalls}
+		}
+		if turn.usage != nil {
+			ch <- llm.StreamEvent{Type: llm.EventUsage, Usage: turn.usage}
 		}
 		ch <- llm.StreamEvent{Type: llm.EventDone}
 	}()
@@ -224,6 +228,78 @@ func TestTrimToBudget(t *testing.T) {
 	ag2 := New(&mockProvider{}, tools.NewRegistry(), nil, Options{ContextLength: 1000000, MaxTokens: 4096})
 	if got2 := ag2.trimToBudget(msgs); len(got2) != len(msgs) {
 		t.Errorf("should not trim under budget, got %d/%d", len(got2), len(msgs))
+	}
+}
+
+func TestUsagePersistedAndNoCompactUnderThreshold(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	provider := &mockProvider{turns: []mockTurn{
+		{content: "回答", usage: &llm.Usage{PromptTokens: 500, CompletionTokens: 100}},
+	}}
+	ag := New(provider, tools.NewRegistry(), store, Options{Model: "test", ContextLength: 10000})
+
+	var types []EventType
+	ag.Run(context.Background(), meta.ID, "hi", func(ev Event) { types = append(types, ev.Type) })
+
+	gotMeta, _, _ := store.Get(meta.ID)
+	if gotMeta.LastUsage == nil || gotMeta.LastUsage.PromptTokens != 500 || gotMeta.LastUsage.CompletionTokens != 100 {
+		t.Errorf("usage not persisted: %+v", gotMeta.LastUsage)
+	}
+	for _, tp := range types {
+		if tp == EventCompactStart {
+			t.Error("should not auto-compact under threshold")
+		}
+	}
+}
+
+func TestAutoCompactOverThreshold(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	// 窗口 1000，实测 920+30=950 ≥ 90% → 触发自动压缩；第二轮是压缩调用
+	provider := &mockProvider{turns: []mockTurn{
+		{content: "很长的回答", usage: &llm.Usage{PromptTokens: 920, CompletionTokens: 30}},
+		{content: "自动摘要内容"},
+	}}
+	ag := New(provider, tools.NewRegistry(), store, Options{Model: "test", ContextLength: 1000})
+
+	var types []EventType
+	var compactText string
+	ag.Run(context.Background(), meta.ID, "hi", func(ev Event) {
+		types = append(types, ev.Type)
+		if ev.Type == EventCompactDelta {
+			compactText += ev.Content
+		}
+		if ev.Type == EventCompactDone && ev.Error != "" {
+			t.Fatalf("auto compact failed: %s", ev.Error)
+		}
+	})
+
+	has := func(want EventType) bool {
+		for _, tp := range types {
+			if tp == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(EventCompactStart) || !has(EventCompactDone) {
+		t.Fatalf("missing compact events: %v", types)
+	}
+	if compactText != "自动摘要内容" {
+		t.Errorf("compact delta = %q", compactText)
+	}
+	// done 必须在 compact_done 之后
+	if types[len(types)-1] != EventDone {
+		t.Errorf("last event = %v", types[len(types)-1])
+	}
+	// 历史被替换为摘要，实测用量被清除
+	gotMeta, msgs, _ := store.Get(meta.ID)
+	if len(msgs) != 1 || msgs[0].Kind != "summary" {
+		t.Errorf("session not compacted: %d msgs", len(msgs))
+	}
+	if gotMeta.LastUsage != nil {
+		t.Errorf("usage should be cleared after compact, got %+v", gotMeta.LastUsage)
 	}
 }
 

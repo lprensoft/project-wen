@@ -51,14 +51,23 @@ const (
 	EventContentDelta   EventType = iota // Content 为文本增量
 	EventReasoningDelta                  // Content 为思考内容增量
 	EventToolCalls                       // ToolCalls 为累积完整的工具调用
+	EventUsage                           // Usage 为本次请求的实测 token 用量
 	EventDone
 	EventError
 )
+
+// Usage 是 API 返回的实测 token 用量。
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
 
 type StreamEvent struct {
 	Type      EventType
 	Content   string
 	ToolCalls []ToolCall
+	Usage     *Usage
 	Err       error
 }
 
