@@ -96,7 +96,49 @@ body {
 .sidebar-footer {
   padding: 10px 12px;
   border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
+
+/* 三段式主题滑块：跟随系统 / 浅色 / 深色 */
+.theme-seg {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.theme-seg-btn {
+  position: relative;
+  z-index: 1;
+  width: 28px;
+  height: 24px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.theme-seg-btn svg { width: 14px; height: 14px; }
+.theme-seg-btn:hover { color: var(--text); }
+.theme-seg-btn.active { color: var(--accent); }
+.theme-seg-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 28px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--active-bg);
+  transition: transform 0.15s ease;
+}
+.theme-seg[data-active="light"] .theme-seg-thumb { transform: translateX(28px); }
+.theme-seg[data-active="dark"] .theme-seg-thumb { transform: translateX(56px); }
 
 .session-item {
   padding: 9px 10px;

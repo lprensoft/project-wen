@@ -9,27 +9,25 @@ const sendBtn = $("#btn-send");
 let currentSession = null; // 当前 session id
 let busy = false;          // 正在等待回复
 
-// ---------- 主题（跟随系统 / 浅色 / 深色） ----------
+// ---------- 主题（三段滑块：跟随系统 / 浅色 / 深色） ----------
 
-const THEMES = ["system", "light", "dark"];
-const THEME_META = {
-  system: { icon: "🖥️", label: "跟随系统" },
-  light: { icon: "☀️", label: "浅色" },
-  dark: { icon: "🌙", label: "深色" },
-};
-const themeBtn = $("#btn-theme");
+const themeSeg = $("#theme-seg");
 const darkMedia = window.matchMedia("(prefers-color-scheme: dark)");
 let themeSetting = localStorage.getItem("wen-theme") || "system";
 
 function applyTheme() {
   const dark = themeSetting === "dark" || (themeSetting === "system" && darkMedia.matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  themeBtn.textContent = THEME_META[themeSetting].icon;
-  themeBtn.title = "主题：" + THEME_META[themeSetting].label + "（点击切换）";
+  themeSeg.dataset.active = themeSetting; // 滑块指示位置由 CSS 按此属性移动
+  for (const btn of themeSeg.querySelectorAll(".theme-seg-btn")) {
+    btn.classList.toggle("active", btn.dataset.themeOpt === themeSetting);
+  }
 }
 
-themeBtn.addEventListener("click", () => {
-  themeSetting = THEMES[(THEMES.indexOf(themeSetting) + 1) % THEMES.length];
+themeSeg.addEventListener("click", (e) => {
+  const btn = e.target.closest(".theme-seg-btn");
+  if (!btn) return;
+  themeSetting = btn.dataset.themeOpt;
   localStorage.setItem("wen-theme", themeSetting);
   applyTheme();
 });
