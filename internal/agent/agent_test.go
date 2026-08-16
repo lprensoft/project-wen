@@ -6,10 +6,39 @@ import (
 	"strings"
 	"testing"
 
-	"wen/internal/agent/tools"
 	"wen/internal/llm"
+	"wen/internal/plugin"
 	"wen/internal/session"
 )
+
+// echoPlugin 是仅提供 echo 工具的测试插件。
+type echoPlugin struct{}
+
+func (echoPlugin) Name() string                                  { return "echo_plugin" }
+func (echoPlugin) Description() string                           { return "测试插件" }
+func (echoPlugin) Init(plugin.InitContext, map[string]any) error { return nil }
+func (echoPlugin) SystemPrompt() string                          { return "" }
+func (echoPlugin) Tools() []plugin.Tool                          { return []plugin.Tool{echoTool{}} }
+
+// promptPlugin 是仅注入提示词的测试插件。
+type promptPlugin struct{}
+
+func (promptPlugin) Name() string                                  { return "prompt_plugin" }
+func (promptPlugin) Description() string                           { return "测试提示词注入" }
+func (promptPlugin) Init(plugin.InitContext, map[string]any) error { return nil }
+func (promptPlugin) SystemPrompt() string                          { return "插件注入的提示词片段" }
+func (promptPlugin) Tools() []plugin.Tool                          { return nil }
+
+func newTestManager(t *testing.T, ps ...plugin.Plugin) *plugin.Manager {
+	t.Helper()
+	m := plugin.NewManager(plugin.InitContext{}, "")
+	for _, p := range ps {
+		if err := m.Register(p, plugin.PluginConfig{Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return m
+}
 
 // mockProvider 按预设脚本依次响应每轮调用，并记录收到的请求。
 type mockProvider struct {
@@ -80,10 +109,7 @@ func TestRunToolLoop(t *testing.T) {
 		{content: "工具返回了 echo: hi"},
 	}}
 
-	registry := tools.NewRegistry()
-	registry.Register(echoTool{})
-
-	ag := New(provider, registry, store, Options{Model: "test", MaxTurns: 5})
+	ag := New(provider, newTestManager(t, echoPlugin{}), store, Options{Model: "test", MaxTurns: 5})
 
 	var events []Event
 	ag.Run(context.Background(), meta.ID, "调用一下 echo", func(ev Event) { events = append(events, ev) })
@@ -150,7 +176,7 @@ func TestRunPlainChat(t *testing.T) {
 	meta, _ := store.Create()
 	provider := &mockProvider{turns: []mockTurn{{content: "你好"}}}
 
-	ag := New(provider, tools.NewRegistry(), store, Options{Model: "test"})
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
 
 	var final string
 	var done bool
@@ -175,7 +201,7 @@ func TestThinkingEventsAndPersistence(t *testing.T) {
 	meta, _ := store.Create()
 	provider := &mockProvider{turns: []mockTurn{{reasoning: "推理一下", content: "答案"}}}
 
-	ag := New(provider, tools.NewRegistry(), store, Options{Model: "test", Thinking: "high"})
+	ag := New(provider, newTestManager(t), store, Options{Model: "test", Thinking: "high"})
 
 	var thinking string
 	ag.Run(context.Background(), meta.ID, "问题", func(ev Event) {
@@ -208,7 +234,7 @@ func TestTrimToBudget(t *testing.T) {
 		{Role: "user", Content: "最新问题"},
 	}
 	// 预算只够最近内容：ContextLength - MaxTokens - 2048 ≈ 4952 token
-	ag := New(&mockProvider{}, tools.NewRegistry(), nil, Options{ContextLength: 8000, MaxTokens: 1000})
+	ag := New(&mockProvider{}, newTestManager(t), nil, Options{ContextLength: 8000, MaxTokens: 1000})
 	got := ag.trimToBudget(msgs)
 
 	if got[0].Role != "system" {
@@ -225,7 +251,7 @@ func TestTrimToBudget(t *testing.T) {
 		t.Error("latest user message must be kept")
 	}
 	// 预算充足时不裁剪
-	ag2 := New(&mockProvider{}, tools.NewRegistry(), nil, Options{ContextLength: 1000000, MaxTokens: 4096})
+	ag2 := New(&mockProvider{}, newTestManager(t), nil, Options{ContextLength: 1000000, MaxTokens: 4096})
 	if got2 := ag2.trimToBudget(msgs); len(got2) != len(msgs) {
 		t.Errorf("should not trim under budget, got %d/%d", len(got2), len(msgs))
 	}
@@ -237,7 +263,7 @@ func TestUsagePersistedAndNoCompactUnderThreshold(t *testing.T) {
 	provider := &mockProvider{turns: []mockTurn{
 		{content: "回答", usage: &llm.Usage{PromptTokens: 500, CompletionTokens: 100}},
 	}}
-	ag := New(provider, tools.NewRegistry(), store, Options{Model: "test", ContextLength: 10000})
+	ag := New(provider, newTestManager(t), store, Options{Model: "test", ContextLength: 10000})
 
 	var types []EventType
 	ag.Run(context.Background(), meta.ID, "hi", func(ev Event) { types = append(types, ev.Type) })
@@ -261,7 +287,7 @@ func TestAutoCompactOverThreshold(t *testing.T) {
 		{content: "很长的回答", usage: &llm.Usage{PromptTokens: 920, CompletionTokens: 30}},
 		{content: "自动摘要内容"},
 	}}
-	ag := New(provider, tools.NewRegistry(), store, Options{Model: "test", ContextLength: 1000})
+	ag := New(provider, newTestManager(t), store, Options{Model: "test", ContextLength: 1000})
 
 	var types []EventType
 	var compactText string
@@ -313,9 +339,7 @@ func TestCompact(t *testing.T) {
 		{content: "第一轮回答"},
 		{content: "这是压缩摘要内容"}, // Compact 使用的第三次调用
 	}}
-	registry := tools.NewRegistry()
-	registry.Register(echoTool{})
-	ag := New(provider, registry, store, Options{Model: "test", MaxTurns: 5, Thinking: "high"})
+	ag := New(provider, newTestManager(t, echoPlugin{}), store, Options{Model: "test", MaxTurns: 5, Thinking: "high"})
 	ag.Run(context.Background(), meta.ID, "做点事", func(Event) {})
 
 	var streamed string
@@ -357,12 +381,35 @@ func TestCompact(t *testing.T) {
 	}
 }
 
+func TestPluginPromptInjectionOrder(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	provider := &mockProvider{turns: []mockTurn{{content: "ok"}}}
+
+	ag := New(provider, newTestManager(t, promptPlugin{}), store, Options{
+		Model:        "test",
+		SystemPrompt: "用户配置提示词",
+	})
+	ag.Run(context.Background(), meta.ID, "hi", func(Event) {})
+
+	sys := provider.reqs[0].Messages[0].Content
+	iEnv := strings.Index(sys, "[系统环境]")
+	iPlugin := strings.Index(sys, "插件注入的提示词片段")
+	iUser := strings.Index(sys, "用户配置提示词")
+	if iEnv < 0 || iPlugin < 0 || iUser < 0 {
+		t.Fatalf("system message missing parts:\n%s", sys)
+	}
+	if !(iEnv < iPlugin && iPlugin < iUser) {
+		t.Errorf("order wrong: env=%d plugin=%d user=%d", iEnv, iPlugin, iUser)
+	}
+}
+
 func TestSystemMessageContainsEnvContext(t *testing.T) {
 	store, _ := session.NewStore(t.TempDir())
 	meta, _ := store.Create()
 	provider := &mockProvider{turns: []mockTurn{{content: "ok"}}}
 
-	ag := New(provider, tools.NewRegistry(), store, Options{
+	ag := New(provider, newTestManager(t), store, Options{
 		Model:        "test",
 		SystemPrompt: "自定义提示词",
 		Workdir:      "D:\\some\\dir",

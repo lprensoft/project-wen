@@ -385,6 +385,7 @@ async function sendMessage() {
 const COMMANDS = [
   { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量" },
   { cmd: "/compact", desc: "压缩当前会话为摘要" },
+  { cmd: "/plugins", desc: "查看与开关插件" },
 ];
 const cmdMenu = $("#cmd-menu");
 let cmdMatches = [];
@@ -453,6 +454,8 @@ async function handleCommand(text) {
     await runStatus();
   } else if (cmd === "/compact") {
     await runCompact();
+  } else if (cmd === "/plugins") {
+    await runPlugins();
   } else {
     addSysBlock("⚠️ 未知命令：" + cmd + "\n可用命令：/status、/compact");
   }
@@ -489,6 +492,55 @@ async function runStatus() {
     addSysBlock(lines.join("\n"));
   } catch (e) {
     addError("获取状态失败：" + e.message);
+  }
+}
+
+async function runPlugins() {
+  try {
+    const list = await fetch("/api/plugins").then((r) => r.json());
+    renderPluginsBlock(addSysBlock(""), list);
+  } catch (e) {
+    addError("获取插件列表失败：" + e.message);
+  }
+}
+
+function renderPluginsBlock(block, list) {
+  block.textContent = "";
+  block.classList.add("plugins-block");
+  const title = document.createElement("div");
+  title.className = "plugins-title";
+  title.textContent = "🔌 插件（点击按钮切换开关，立即生效）";
+  block.appendChild(title);
+  for (const p of list) {
+    const row = document.createElement("div");
+    row.className = "plugin-row";
+    const info = document.createElement("span");
+    info.className = "plugin-info";
+    let text = p.name + " — " + p.description;
+    if (p.tool_names && p.tool_names.length) text += "（工具: " + p.tool_names.join(", ") + "）";
+    if (p.has_prompt) text += "（注入提示词）";
+    info.textContent = text;
+    const btn = document.createElement("button");
+    btn.className = "plugin-toggle" + (p.enabled ? " on" : "");
+    btn.textContent = p.enabled ? "已启用" : "已禁用";
+    btn.addEventListener("click", async () => {
+      try {
+        const res = await fetch("/api/plugins/" + encodeURIComponent(p.name), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !p.enabled }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || "HTTP " + res.status);
+        }
+        renderPluginsBlock(block, await res.json());
+      } catch (e) {
+        addError("切换插件失败：" + e.message);
+      }
+    });
+    row.append(info, btn);
+    block.appendChild(row);
   }
 }
 

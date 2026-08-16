@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"wen/internal/agent/tools"
 	"wen/internal/llm"
+	"wen/internal/plugin"
 	"wen/internal/session"
 )
 
@@ -52,16 +53,16 @@ type Options struct {
 
 type Agent struct {
 	provider llm.Provider
-	registry *tools.Registry
+	plugins  *plugin.Manager
 	store    *session.Store
 	opts     Options
 }
 
-func New(provider llm.Provider, registry *tools.Registry, store *session.Store, opts Options) *Agent {
+func New(provider llm.Provider, plugins *plugin.Manager, store *session.Store, opts Options) *Agent {
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 20
 	}
-	return &Agent{provider: provider, registry: registry, store: store, opts: opts}
+	return &Agent{provider: provider, plugins: plugins, store: store, opts: opts}
 }
 
 const titleMaxRunes = 30
@@ -96,13 +97,14 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		return err
 	}
 
-	// 组装上下文：system（环境块 + 可选配置提示词）+ 历史 + 本条
+	// 组装上下文：system（环境块 + 启用插件的提示词片段 + 可选配置提示词）+ 历史 + 本条
 	msgs := make([]llm.Message, 0, len(history)+2)
-	system := envContext(a.opts.Workdir)
+	parts := []string{envContext(a.opts.Workdir)}
+	parts = append(parts, a.plugins.SystemPrompts()...)
 	if a.opts.SystemPrompt != "" {
-		system += "\n\n" + a.opts.SystemPrompt
+		parts = append(parts, a.opts.SystemPrompt)
 	}
-	msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: system})
+	msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: strings.Join(parts, "\n\n")})
 	for _, h := range history {
 		msgs = append(msgs, h.Message)
 	}
@@ -153,7 +155,7 @@ func (a *Agent) stream(ctx context.Context, msgs []llm.Message, emit func(Event)
 	events, err := a.provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       a.opts.Model,
 		Messages:    a.trimToBudget(msgs),
-		Tools:       a.registry.Specs(),
+		Tools:       a.toolSpecs(),
 		Temperature: a.opts.Temperature,
 		MaxTokens:   a.opts.MaxTokens,
 		Thinking:    a.opts.Thinking,
@@ -250,8 +252,22 @@ func (a *Agent) trimToBudget(msgs []llm.Message) []llm.Message {
 	return msgs
 }
 
+// toolSpecs 每次请求时从启用插件动态生成工具声明（运行时开关天然生效）。
+func (a *Agent) toolSpecs() []llm.ToolSpec {
+	enabled := a.plugins.EnabledTools()
+	specs := make([]llm.ToolSpec, 0, len(enabled))
+	for _, t := range enabled {
+		specs = append(specs, llm.ToolSpec{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Schema:      t.Schema(),
+		})
+	}
+	return specs
+}
+
 func (a *Agent) execute(ctx context.Context, call llm.ToolCall) string {
-	tool, ok := a.registry.Get(call.Name)
+	tool, ok := a.plugins.FindTool(call.Name)
 	if !ok {
 		return fmt.Sprintf("error: unknown tool %q", call.Name)
 	}

@@ -6,12 +6,16 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"wen/internal/agent"
-	"wen/internal/agent/tools"
 	"wen/internal/config"
 	"wen/internal/llm"
+	"wen/internal/plugin"
+	"wen/internal/plugin/builtin/execcmd"
+	"wen/internal/plugin/builtin/readfile"
+	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/server"
 	"wen/internal/session"
 )
@@ -35,18 +39,19 @@ func main() {
 	providerCfg := cfg.Providers[cfg.Model.Provider]
 	provider := llm.NewOpenAICompat(providerCfg.BaseURL, providerCfg.APIKey)
 
-	workdir := cfg.Agent.Tools.Workdir
+	workdir := cfg.Agent.Workdir
 	if workdir == "" {
 		workdir, _ = os.Getwd()
 	}
-	registry := buildRegistry(cfg, workdir)
+
+	plugins := buildPlugins(cfg, workdir)
 
 	store, err := session.NewStore(cfg.SessionDir())
 	if err != nil {
 		log.Fatalf("初始化 session 存储失败: %v", err)
 	}
 
-	ag := agent.New(provider, registry, store, agent.Options{
+	ag := agent.New(provider, plugins, store, agent.Options{
 		Model:         cfg.Model.Name,
 		Temperature:   cfg.Model.Temperature,
 		MaxTokens:     cfg.Model.MaxTokens,
@@ -57,7 +62,7 @@ func main() {
 		ContextLength: cfg.Model.ContextLength,
 	})
 
-	srv := server.New(ag, store, server.Info{
+	srv := server.New(ag, store, plugins, server.Info{
 		Provider:      cfg.Model.Provider,
 		Model:         cfg.Model.Name,
 		Thinking:      cfg.Model.Thinking,
@@ -67,6 +72,13 @@ func main() {
 
 	log.Printf("配置文件: %s", path)
 	log.Printf("模型: %s/%s  会话目录: %s", cfg.Model.Provider, cfg.Model.Name, cfg.SessionDir())
+	for _, st := range plugins.List() {
+		state := "禁用"
+		if st.Enabled {
+			state = "启用"
+		}
+		log.Printf("插件: %-12s [%s] %s", st.Name, state, st.Description)
+	}
 	log.Printf("Wen Agent 已启动: http://%s", addr)
 
 	httpServer := &http.Server{
@@ -79,22 +91,20 @@ func main() {
 	}
 }
 
-func buildRegistry(cfg *config.Config, workdir string) *tools.Registry {
-	available := map[string]tools.Tool{
-		"read_file": &tools.ReadFile{Workdir: workdir},
-		"exec_command": &tools.ExecCommand{
-			Workdir: workdir,
-			Timeout: time.Duration(cfg.Agent.Tools.ExecTimeoutSeconds) * time.Second,
-		},
-	}
-	registry := tools.NewRegistry()
-	for _, name := range cfg.Agent.Tools.Enabled {
-		t, ok := available[name]
+// buildPlugins 注册全部内置系统插件，配置缺省时默认启用。
+func buildPlugins(cfg *config.Config, workdir string) *plugin.Manager {
+	m := plugin.NewManager(
+		plugin.InitContext{Workdir: workdir},
+		filepath.Join(cfg.BaseDir, "plugins.state.json"),
+	)
+	for _, p := range []plugin.Plugin{readfile.New(), execcmd.New(), webfetch.New()} {
+		pc, ok := cfg.Plugins[p.Name()]
 		if !ok {
-			log.Printf("警告: 未知工具 %q，已忽略", name)
-			continue
+			pc = plugin.PluginConfig{Enabled: true}
 		}
-		registry.Register(t)
+		if err := m.Register(p, pc); err != nil {
+			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
+		}
 	}
-	return registry
+	return m
 }

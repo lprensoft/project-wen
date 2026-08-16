@@ -8,14 +8,17 @@ import (
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
+
+	"wen/internal/plugin"
 )
 
 type Config struct {
-	Server    ServerConfig              `yaml:"server"`
-	Model     ModelConfig               `yaml:"model"`
-	Providers map[string]ProviderConfig `yaml:"providers"`
-	Agent     AgentConfig               `yaml:"agent"`
-	Session   SessionConfig             `yaml:"session"`
+	Server    ServerConfig                   `yaml:"server"`
+	Model     ModelConfig                    `yaml:"model"`
+	Providers map[string]ProviderConfig      `yaml:"providers"`
+	Agent     AgentConfig                    `yaml:"agent"`
+	Session   SessionConfig                  `yaml:"session"`
+	Plugins   map[string]plugin.PluginConfig `yaml:"plugins"`
 
 	// BaseDir 是配置文件所在目录，用于解析相对路径（不在 YAML 中）。
 	BaseDir string `yaml:"-"`
@@ -45,15 +48,9 @@ type ProviderConfig struct {
 }
 
 type AgentConfig struct {
-	SystemPrompt string      `yaml:"system_prompt"`
-	MaxTurns     int         `yaml:"max_turns"`
-	Tools        ToolsConfig `yaml:"tools"`
-}
-
-type ToolsConfig struct {
-	Enabled            []string `yaml:"enabled"`
-	ExecTimeoutSeconds int      `yaml:"exec_timeout_seconds"`
-	Workdir            string   `yaml:"workdir"`
+	SystemPrompt string `yaml:"system_prompt"`
+	MaxTurns     int    `yaml:"max_turns"`
+	Workdir      string `yaml:"workdir"` // 工具与环境块使用的工作目录，空 = 进程当前目录
 }
 
 type SessionConfig struct {
@@ -82,10 +79,12 @@ func Default() *Config {
 		Agent: AgentConfig{
 			SystemPrompt: "",
 			MaxTurns:     20,
-			Tools: ToolsConfig{
-				Enabled:            []string{"read_file", "exec_command"},
-				ExecTimeoutSeconds: 60,
-			},
+		},
+		// 系统插件默认全部启用；config.yaml 的 plugins 段可覆盖（yaml 按 key 合并）
+		Plugins: map[string]plugin.PluginConfig{
+			"read_file":    {Enabled: true},
+			"exec_command": {Enabled: true},
+			"web_fetch":    {Enabled: true},
 		},
 	}
 }
