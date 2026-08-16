@@ -25,6 +25,9 @@
         </div>
       </div>
       <ul id="session-list" class="session-list"></ul>
+      <div class="sidebar-footer">
+        <button id="btn-settings" class="btn-icon" title="设置">⚙️ 设置</button>
+      </div>
     </aside>
 
     <main class="chat">
@@ -38,6 +41,23 @@
       </form>
     </main>
   </div>
+
+  <div id="settings-overlay" class="settings-overlay hidden">
+    <div class="settings-panel">
+      <div class="settings-header">
+        <span class="settings-title">设置</span>
+        <button id="btn-settings-close" class="btn-icon" title="关闭">✕</button>
+      </div>
+      <div class="settings-body">
+        <section class="settings-section">
+          <h3>插件</h3>
+          <p class="settings-desc">开关立即生效并持久化，作用于下一次对话请求。</p>
+          <div id="settings-plugins" class="settings-plugins"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/purify.min.js"></script>
   <script src="app.js"></script>
