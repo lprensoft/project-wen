@@ -51,6 +51,21 @@ func IsInteractive(ctx context.Context) bool {
 	return v
 }
 
+type ephemeralKey struct{}
+
+// WithEphemeralInput 标记本轮输入是机器注入的一次性提示（如心跳提示词）：
+// 只在本轮发给模型，落盘后不进入后续轮次的上下文，界面也不按用户消息展示。
+// 助手的回复不受影响，照常保留。
+func WithEphemeralInput(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ephemeralKey{}, true)
+}
+
+// IsEphemeralInput 返回本轮输入是否为一次性提示。
+func IsEphemeralInput(ctx context.Context) bool {
+	v, _ := ctx.Value(ephemeralKey{}).(bool)
+	return v
+}
+
 // TurnEndEvent 描述一轮成功结束的对话。
 type TurnEndEvent struct {
 	SessionID   string

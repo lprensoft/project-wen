@@ -193,8 +193,11 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	ctx = plugin.WithScope(ctx, scope)
 	ev.Scope = scope
 
-	// 首条用户消息生成标题（连同它所属的可见域一起记下）
-	if meta.Title == "" {
+	ephemeral := plugin.IsEphemeralInput(ctx)
+
+	// 首条用户消息生成标题（连同它所属的可见域一起记下）。
+	// 一次性输入不参与命名：心跳提示词不该成为会话标题。
+	if meta.Title == "" && !ephemeral {
 		title := []rune(userInput)
 		if len(title) > titleMaxRunes {
 			title = title[:titleMaxRunes]
@@ -204,7 +207,11 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 
 	origin := plugin.TurnOriginFrom(ctx)
 	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput}
-	if err := a.append(sessionID, userMsg, scope.Write, origin); err != nil {
+	userKind := ""
+	if ephemeral {
+		userKind = session.KindEphemeral
+	}
+	if err := a.appendKind(sessionID, userMsg, scope.Write, origin, userKind); err != nil {
 		return "", err
 	}
 	// 只有真人交互的轮次才算「活跃」：机器自发的轮次若也计入，
@@ -485,5 +492,9 @@ func (a *Agent) execute(ctx context.Context, call llm.ToolCall) string {
 // 消息必须使用同一个值，否则 tool_use 与 tool_result 会被过滤拆散。
 // origin 是本轮的发起方（同样整轮一致），空串 = 前台界面。
 func (a *Agent) append(sessionID string, msg llm.Message, tag, origin string) error {
-	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Tag: tag, Origin: origin, TS: time.Now()})
+	return a.appendKind(sessionID, msg, tag, origin, "")
+}
+
+func (a *Agent) appendKind(sessionID string, msg llm.Message, tag, origin, kind string) error {
+	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Kind: kind, Tag: tag, Origin: origin, TS: time.Now()})
 }

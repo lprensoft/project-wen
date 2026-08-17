@@ -97,6 +97,21 @@ func TestPickSessionCreates(t *testing.T) {
 	}
 }
 
+// 心跳轮次带一次性输入标记。
+func TestBeatMarksEphemeral(t *testing.T) {
+	var sawEphemeral bool
+	turn := func(ctx context.Context, _, _ string) (string, error) {
+		sawEphemeral = plugin.IsEphemeralInput(ctx)
+		return "ok", nil
+	}
+	p, store := newInited(t, turn, nil)
+	_, _ = store.Create()
+	p.beat(context.Background())
+	if !sawEphemeral {
+		t.Fatal("心跳轮次应标记为一次性输入")
+	}
+}
+
 // beat 在会话忙时静默跳过，不算错误。
 func TestBeatSkipsBusy(t *testing.T) {
 	called := 0

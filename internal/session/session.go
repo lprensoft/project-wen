@@ -32,6 +32,10 @@ type Meta struct {
 // KindSummary 标记压缩摘要消息（Kind 为空则是普通消息）。
 const KindSummary = "summary"
 
+// KindEphemeral 标记一次性输入：机器注入的提示（如心跳），只在它自己那一轮
+// 发给模型，后续轮次组装上下文时被过滤，界面也不按用户消息展示。
+const KindEphemeral = "ephemeral"
+
 // StoredMessage 是 JSONL 中的一条消息记录（meta 行之后）。
 type StoredMessage struct {
 	llm.Message

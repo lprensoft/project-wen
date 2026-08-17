@@ -55,6 +55,8 @@
 
 **交互标记**：真人在对面的轮次（Web UI 的 chat handler、QQ 等远程 IM 插件）用 `WithInteractive(ctx)` 标记，核心只在此时更新 `Meta.LastActiveAt`。「最近活跃会话」按它判定（缺字段回落 `CreatedAt`，查询逻辑放插件侧）；机器自发的轮次（心跳、定时任务）不标记，否则以最近活跃会话为落点的后台功能会自我续命。
 
+机器注入的提示词（如心跳）用 `WithEphemeralInput(ctx)` 标记为**一次性输入**：只在当轮发给模型，落盘带 `Kind=ephemeral`（审计与界面提示仍在），后续轮次的上下文、压缩摘要、会话标题都不含它，Web UI 渲染成一行来源提示而非用户气泡；助手的回复照常保留。抽掉 user 消息后 Anthropic 侧可能出现连续 assistant，其组装层本就合并同角色消息，安全。
+
 后台轮次**不注入 confirmer**，execcmd 的「拿不到答复=拒绝」正是无人值守想要的默认；要接入远程确认（如 QQ 的 /apply //deny）由发起方插件自己 `WithConfirmer`。起 goroutine 的插件必须实现 `Stoppable`（只做取消 + 有界等待，不得等整轮对话），并保证 `Init` 可重入（先停旧循环再起新的）。`TurnObserver.OnTurnEnd` 在轮次收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
 
 ## 可见域约定

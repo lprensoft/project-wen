@@ -221,9 +221,13 @@ func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Optio
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。
+// 一次性输入（心跳提示词等）不进摘要：它们是机器注入的模板文案，不是对话内容。
 func serializeHistory(msgs []session.StoredMessage) string {
 	var b strings.Builder
 	for _, m := range msgs {
+		if m.Kind == session.KindEphemeral {
+			continue
+		}
 		switch m.Role {
 		case llm.RoleUser:
 			fmt.Fprintf(&b, "用户: %s\n", m.Content)
