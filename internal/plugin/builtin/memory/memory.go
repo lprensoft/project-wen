@@ -21,16 +21,18 @@ const (
 	maxExtractBytes = 24 * 1024
 )
 
-// 记忆库的归属范围。
+// 记忆库的存放范围。配置键沿用 scope，但代码里叫 library——「可见域」这个核心概念
+// 也叫 scope，同名会让这段逻辑难以阅读。
 const (
-	scopeGlobal  = "global"  // 全局单库，所有工作目录共享
-	scopeProject = "project" // 按工作目录分库
-	defaultScope = scopeGlobal
+	libraryGlobal  = "global"  // 全局单库，所有工作目录共享
+	libraryProject = "project" // 按工作目录分库
+	defaultLibrary = libraryGlobal
 )
 
-// memoriesDir 按 scope 决定记忆目录。
-func memoriesDir(ictx plugin.InitContext, scope string) (string, error) {
-	if scope == scopeProject {
+// memoriesDir 按存放范围决定基准记忆目录。按可见域分出的库是它的同级目录，
+// 见 plugin.DomainDir。
+func memoriesDir(ictx plugin.InitContext, library string) (string, error) {
+	if library == libraryProject {
 		if ictx.Workdir == "" {
 			return "", fmt.Errorf("按项目分库需要工作目录，当前未设置（可改用全局记忆库）")
 		}
@@ -46,19 +48,25 @@ func memoriesDir(ictx plugin.InitContext, scope string) (string, error) {
 type Plugin struct {
 	mu sync.RWMutex
 
-	store           *Store
-	scope           string
+	libBase         string // 基准记忆库目录（= 共享域）
+	store           *Store // 基准库，等价于 storeFor("")
+	library         string
 	complete        plugin.CompleteFunc
 	maxIndexEntries int
 	maxIndexBytes   int
 	maxEntryBytes   int
 	autoExtract     bool
 	maxExtract      int
+
+	// 按可见域分出的库，惰性创建。单独一把锁：Store 自带目录指纹缓存，
+	// 每次重建会白丢缓存，而这张表的生命周期与配置无关。
+	storesMu sync.Mutex
+	stores   map[string]*Store
 }
 
 func New() *Plugin {
 	return &Plugin{
-		scope:           defaultScope,
+		library:         defaultLibrary,
 		maxIndexEntries: defaultMaxIndexEntries,
 		maxIndexBytes:   defaultMaxIndexBytes,
 		maxEntryBytes:   defaultMaxEntryBytes,
@@ -81,10 +89,10 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "全局：所有工作目录共享一份，存于配置目录下；" +
 				"按项目：存于工作目录的 .wen/memories/，不同项目互不可见（建议加入该项目的 .gitignore）。" +
 				"切换后原位置的记忆不会自动迁移。",
-			Default: defaultScope,
+			Default: defaultLibrary,
 			Options: []plugin.ConfigOption{
-				{Value: scopeGlobal, Label: "全局"},
-				{Value: scopeProject, Label: "按项目（工作目录）"},
+				{Value: libraryGlobal, Label: "全局"},
+				{Value: libraryProject, Label: "按项目（工作目录）"},
 			},
 		},
 		{
@@ -137,16 +145,21 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 
 // Init 需要一个可写目录；没有则拒绝启用，避免把记忆散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
-	scope := plugin.CfgString(cfg, "scope", defaultScope)
-	dir, err := memoriesDir(ictx, scope)
+	library := plugin.CfgString(cfg, "scope", defaultLibrary)
+	dir, err := memoriesDir(ictx, library)
 	if err != nil {
 		return err
 	}
 
+	p.storesMu.Lock()
+	p.stores = map[string]*Store{}
+	p.storesMu.Unlock()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.scope = scope
+	p.library = library
+	p.libBase = dir
 	p.store = NewStore(dir)
 	p.complete = ictx.Complete
 	p.maxIndexEntries = plugin.CfgInt(cfg, "max_index_entries", defaultMaxIndexEntries)
@@ -226,12 +239,12 @@ func (p *Plugin) SystemPrompt() string { return promptGuide }
 
 // TurnPrompt 注入本轮可读的记忆索引。
 // 记忆库为空时不注入：判据已在 SystemPrompt 里，那是引导保存第一条记忆的东西。
-func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, error) {
+func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if s.store == nil {
 		return "", nil
 	}
-	entries, err := s.store.List()
+	entries, err := p.visibleEntries(ctx)
 	if err != nil || len(entries) == 0 {
 		return "", err
 	}

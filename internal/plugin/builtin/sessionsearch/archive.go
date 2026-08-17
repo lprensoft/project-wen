@@ -21,17 +21,20 @@ import (
 //
 // 这里只做文件写入，不发起模型调用；从历史中提炼长期记忆是 memory 插件订阅同一个
 // 钩子完成的事。
+// 归档按可见域分目录：ev.Scope 决定这一组历史落在哪个目录下。共享域用基准目录
+// （升级前的归档因此照旧可读），其余域用同级的 <archives>-<tag>。
 func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, error) {
 	s := p.snapshot()
 	if s.archiveDir == "" || s.maxArchives <= 0 || len(ev.History) == 0 {
 		return "", nil
 	}
-	if err := os.MkdirAll(s.archiveDir, 0o755); err != nil {
+	dir := plugin.DomainDir(s.archiveDir, ev.Scope)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("创建归档目录失败: %w", err)
 	}
 
 	name := fmt.Sprintf("%s-%s.md", sanitizeID(ev.SessionID), time.Now().Format("20060102-150405"))
-	path := filepath.Join(s.archiveDir, name)
+	path := filepath.Join(dir, name)
 	raw := []byte(renderArchive(ev))
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
@@ -41,9 +44,57 @@ func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, e
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("写入归档失败: %w", err)
 	}
-	pruneArchives(s.archiveDir, s.maxArchives)
+	// 按域各留 N 份：全局计数的话，写得频繁的那个域会把别的域的归档挤掉，
+	// 那不是泄漏而是数据丢失
+	pruneArchives(dir, s.maxArchives)
 
-	return fmt.Sprintf("（本次压缩前的完整历史已归档：%s）", name), nil
+	return fmt.Sprintf("（本次压缩前的完整历史已归档：%s）", archiveRef(ev.Scope, name)), nil
+}
+
+// archiveRef / parseArchiveRef 是归档在工具接口上的标识：带域的归档写成 <tag>/<name>，
+// 共享域的仍是裸文件名。模型看到什么就能读什么，无需理解目录布局。
+func archiveRef(tag, name string) string {
+	if tag == "" {
+		return name
+	}
+	return tag + "/" + name
+}
+
+// parseArchiveRef 拆出标识里的域与文件名，并确认二者都不指向目录外。
+func parseArchiveRef(ref string) (tag, name string, err error) {
+	ref = strings.TrimSpace(strings.ReplaceAll(ref, "\\", "/"))
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		tag, name = ref[:i], ref[i+1:]
+	} else {
+		name = ref
+	}
+	name = filepath.Base(name)
+	if name == "" || name == "." {
+		return "", "", fmt.Errorf("归档名 %q 不合法", ref)
+	}
+	if !strings.HasSuffix(name, ".md") {
+		name += ".md"
+	}
+	if tag != "" && !validDomain(tag) {
+		return "", "", fmt.Errorf("归档名 %q 不合法", ref)
+	}
+	return tag, name, nil
+}
+
+// validDomain 与插件名同规。可见域标签会被拼进目录，不能放过任意字符串。
+func validDomain(tag string) bool {
+	if tag == "" {
+		return true
+	}
+	for i, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '_'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // sanitizeID 只保留字母数字与连字符下划线，避免异常的会话 id 影响归档文件名。
@@ -143,13 +194,29 @@ func pruneArchives(dir string, max int) {
 
 // archiveHit 是归档文件中的一处命中。
 type archiveHit struct {
-	name    string
+	name    string // 对外标识，见 archiveRef
 	mod     time.Time
 	matches []string
 }
 
-// searchArchives 在归档文件里做包含匹配，返回命中的文件与摘录。
-func searchArchives(dir, keyword string, from, to time.Time, maxSnippets int) ([]archiveHit, error) {
+// searchArchives 在本轮可读的各个归档目录里做包含匹配，返回命中的文件与摘录。
+func searchArchives(base string, sc plugin.Scope, keyword string, from, to time.Time, maxSnippets int) ([]archiveHit, error) {
+	if base == "" {
+		return nil, nil
+	}
+	var hits []archiveHit
+	for _, tag := range plugin.ReadDomains(base, sc) {
+		found, err := searchArchiveDir(plugin.DomainDir(base, tag), tag, keyword, from, to, maxSnippets)
+		if err != nil {
+			continue // 某个域读不出来不该让其余域也查不了
+		}
+		hits = append(hits, found...)
+	}
+	slices.SortFunc(hits, func(a, b archiveHit) int { return b.mod.Compare(a.mod) })
+	return hits, nil
+}
+
+func searchArchiveDir(dir, tag, keyword string, from, to time.Time, maxSnippets int) ([]archiveHit, error) {
 	des, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -180,12 +247,12 @@ func searchArchives(dir, keyword string, from, to time.Time, maxSnippets int) ([
 		if kw != "" && !strings.Contains(strings.ToLower(text), kw) {
 			continue
 		}
-		hit := archiveHit{name: de.Name(), mod: fi.ModTime()}
+		hit := archiveHit{name: archiveRef(tag, de.Name()), mod: fi.ModTime()}
 		if kw != "" {
 			for line := range strings.SplitSeq(text, "\n") {
 				if strings.Contains(strings.ToLower(line), kw) {
 					hit.matches = append(hit.matches, strings.TrimSpace(line))
-					if len(hit.matches) >= maxSnippets {
+					if maxSnippets > 0 && len(hit.matches) >= maxSnippets {
 						break
 					}
 				}
@@ -193,6 +260,5 @@ func searchArchives(dir, keyword string, from, to time.Time, maxSnippets int) ([
 		}
 		hits = append(hits, hit)
 	}
-	slices.SortFunc(hits, func(a, b archiveHit) int { return b.mod.Compare(a.mod) })
 	return hits, nil
 }
