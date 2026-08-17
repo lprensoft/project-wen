@@ -8,6 +8,15 @@ const sendBtn = $("#btn-send");
 
 let currentSession = null; // 当前 session id
 let busy = false;          // 正在等待回复
+let chatAbort = null;      // 进行中对话的中断控制器，非 null 表示可停止
+
+// 发送按钮在等待回复期间变为「停止」，点击可中断本轮生成
+function setSending(on) {
+  busy = on;
+  sendBtn.textContent = on ? "停止" : "发送";
+  sendBtn.classList.toggle("stop", on);
+  sendBtn.title = on ? "停止生成" : "";
+}
 
 // ---------- 主题（三段滑块：跟随系统 / 浅色 / 深色） ----------
 
@@ -347,11 +356,13 @@ async function sendMessage() {
   }
   if (!currentSession) await newSession();
 
-  busy = true;
-  sendBtn.disabled = true;
+  chatAbort = new AbortController();
+  setSending(true);
   inputEl.value = "";
   autoGrow();
   addBubble("user", text);
+
+  let aborted = false; // 用户点了停止，结束后按落盘内容重载历史
 
   let assistantBubble = null; // 惰性创建，收到第一个 delta 才建
   let assistantRaw = "";      // 当前气泡的原始 Markdown 文本
@@ -375,6 +386,7 @@ async function sendMessage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: currentSession, message: text }),
+      signal: chatAbort.signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -447,13 +459,20 @@ async function sendMessage() {
       }
     }
   } catch (e) {
-    addError("请求失败：" + e.message);
+    if (e.name === "AbortError") {
+      aborted = true; // 中断 SSE 即取消服务端本轮 ctx，生成随之终止
+    } else {
+      addError("请求失败：" + e.message);
+    }
   } finally {
     finishBubble();
     finishThinking();
-    busy = false;
-    sendBtn.disabled = false;
-    if (autoCompacted) {
+    setSending(false);
+    chatAbort = null;
+    if (aborted) {
+      await selectSession(currentSession); // 半截生成不落盘，按磁盘内容重载对齐
+      addSysBlock("⏹ 已停止生成");
+    } else if (autoCompacted) {
       await selectSession(currentSession); // 重载压缩后的历史
       addSysBlock("✅ 会话已自动压缩");
     }
@@ -1538,6 +1557,11 @@ inputEl.addEventListener("keydown", (e) => {
 
 $("#chat-form").addEventListener("submit", (e) => {
   e.preventDefault();
+  if (busy) {
+    // 等待回复期间按钮是「停止」：点击中断本轮生成（Enter 发送不受影响，仍被 sendMessage 的 busy 挡住）
+    if (chatAbort) chatAbort.abort();
+    return;
+  }
   sendMessage();
 });
 

@@ -491,6 +491,9 @@ body {
 }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
+/* 等待回复期间发送按钮变为「停止」，可中断本轮生成 */
+.btn-primary.stop { background: var(--danger); }
+.btn-primary.stop:hover { filter: brightness(0.9); }
 
 /* ---------- 设置页（全屏覆盖） ---------- */
 .settings-view {
