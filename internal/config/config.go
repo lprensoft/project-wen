@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,16 +11,14 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"wen/internal/llm"
-	"wen/internal/plugin"
 )
 
 type Config struct {
-	Server    ServerConfig                   `yaml:"server"`
-	Model     ModelConfig                    `yaml:"model"`
-	Providers map[string]ProviderConfig      `yaml:"providers"`
-	Agent     AgentConfig                    `yaml:"agent"`
-	Session   SessionConfig                  `yaml:"session"`
-	Plugins   map[string]plugin.PluginConfig `yaml:"plugins"`
+	Server    ServerConfig              `yaml:"server"`
+	Model     ModelConfig               `yaml:"model"`
+	Providers map[string]ProviderConfig `yaml:"providers"`
+	Agent     AgentConfig               `yaml:"agent"`
+	Session   SessionConfig             `yaml:"session"`
 
 	// BaseDir 是配置文件所在目录，用于解析相对路径（不在 YAML 中）。
 	BaseDir string `yaml:"-"`
@@ -81,18 +80,24 @@ func Default() *Config {
 			SystemPrompt: "",
 			MaxTurns:     20,
 		},
-		// 系统插件默认启用；config.yaml 的 plugins 段可覆盖（yaml 按 key 合并）。
-		// 会显著改变模型行为方式的插件（roleplay / dual_persona）默认关闭，由用户主动打开。
-		Plugins: map[string]plugin.PluginConfig{
-			"read_file":      {Enabled: true},
-			"exec_command":   {Enabled: true},
-			"web_fetch":      {Enabled: true},
-			"memory":         {Enabled: true},
-			"session_search": {Enabled: true},
-			"roleplay":       {Enabled: false},
-			"dual_persona":   {Enabled: false},
-		},
 	}
+}
+
+// warnLegacyPlugins 提醒用户配置文件里的 plugins 段已不再生效。
+//
+// 插件的开关与配置改为只由界面管理、只存 plugins.state.json：两处都能配的时候，
+// 到底哪一份在生效需要记住一条优先级规则，而界面上改过的值又不回写配置文件，
+// 于是配置文件里的内容会慢慢变成误导。这里只警告不报错——不该因为一段过时的配置
+// 就让程序起不来。
+func warnLegacyPlugins(path string, raw []byte) {
+	var probe struct {
+		Plugins map[string]any `yaml:"plugins"`
+	}
+	if err := yaml.Unmarshal(raw, &probe); err != nil || len(probe.Plugins) == 0 {
+		return
+	}
+	log.Printf("提示: %s 中的 plugins 段已不再生效，可以删掉。"+
+		"插件的开关与配置请在设置页调整（存于 <配置目录>/plugins.state.json）", path)
 }
 
 // ResolvePath 确定配置文件路径：显式 flag > ./config.yaml > ~/.wen/config.yaml。
@@ -134,6 +139,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(expandEnv(raw), cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	warnLegacyPlugins(path, raw)
 	expandInPlace(cfg)
 	return cfg, cfg.validate()
 }

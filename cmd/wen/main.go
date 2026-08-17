@@ -110,15 +110,20 @@ func main() {
 	}
 }
 
-// defaultOffPlugins 是默认不启用的插件：它们会显著改变模型的行为方式，
-// 应当由用户主动打开，而不是装上就生效。
-var defaultOffPlugins = map[string]bool{
-	roleplay.New().Name():    true,
-	dualpersona.New().Name(): true,
+// needsSetupPlugins 是默认不启用的插件：它们不配置就没法工作——roleplay 没有角色设定
+// 就不成其为角色扮演，dual_persona 没有触发词就永远切不过去。默认打开一个空壳只会让人
+// 以为功能坏了，所以留给用户配好再开。
+//
+// 其余插件用声明的默认参数就能直接工作，因此默认启用。
+var needsSetupPlugins = map[string]bool{
+	"roleplay":     true,
+	"dual_persona": true,
 }
 
-// buildPlugins 注册全部内置系统插件，配置缺省时默认启用（defaultOffPlugins 除外）。
-// 注册顺序即提示词拼接顺序。
+// buildPlugins 注册全部内置系统插件，注册顺序即提示词拼接顺序。
+//
+// 开关与配置的唯一来源是 <配置目录>/plugins.state.json（由设置页维护）；这里给出的只是
+// 首次安装、状态文件还不存在时的初值。
 // complete 供插件发起辅助模型调用；它在 Agent 建好之前就要传进来，故用闭包延迟取值。
 func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFunc) *plugin.Manager {
 	m := plugin.NewManager(
@@ -132,11 +137,9 @@ func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFu
 		roleplay.New(), dualpersona.New(),
 	}
 	for _, p := range builtins {
-		pc, ok := cfg.Plugins[p.Name()]
-		if !ok {
-			pc = plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
-		}
-		if err := m.Register(p, pc); err != nil {
+		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
+		init := plugin.PluginConfig{Enabled: !needsSetupPlugins[p.Name()]}
+		if err := m.Register(p, init); err != nil {
 			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}

@@ -21,6 +21,36 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 	}
 }
 
+func TestLegacyPluginsSectionIgnoredNotFatal(t *testing.T) {
+	// 插件配置改为只由界面管理。老配置文件里残留的 plugins 段应被忽略，
+	// 但不能因此让程序起不来——只在启动日志里提醒一句。
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+model:
+  provider: deepseek
+providers:
+  deepseek:
+    type: openai_compat
+    base_url: https://api.deepseek.com
+    api_key: sk-x
+plugins:
+  exec_command:
+    enabled: false
+    config:
+      guard: off
+  no_such_plugin:
+    enabled: true
+`), 0o644)
+
+	cfg, err := Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("残留的 plugins 段不该导致加载失败: %v", err)
+	}
+	if cfg.Model.Provider != "deepseek" {
+		t.Errorf("其余配置应照常生效: %+v", cfg.Model)
+	}
+}
+
 func TestLoadYAMLWithInlineKey(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
