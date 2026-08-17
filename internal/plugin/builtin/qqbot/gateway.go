@@ -206,4 +206,3 @@ func readFrame(conn *websocket.Conn) (wsFrame, error) {
 	err = json.Unmarshal(raw, &f)
 	return f, err
 }
-

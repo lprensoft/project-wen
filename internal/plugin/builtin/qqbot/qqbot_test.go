@@ -253,6 +253,34 @@ func TestMarkdownFallback(t *testing.T) {
 	}
 }
 
+// 后台轮次（心跳等）落到 QQ 绑定的会话时，把最终文本以主动消息推给绑定用户；
+// 前台轮次与本插件自己发起的轮次不推。
+func TestBackgroundTurnPush(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	if err := p.binding.set("user1", "sess-hb"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{
+		SessionID: "sess-hb", Origin: "heartbeat", FinalText: "早上好，有新进展。",
+	})
+	m := f.expectSend(t)
+	if m.openid != "user1" || !strings.Contains(m.content, "早上好") {
+		t.Fatalf("后台轮次结果应推给绑定用户: %+v", m)
+	}
+	if m.msgID != "" {
+		t.Fatalf("推送应是主动消息（无 msg_id）: %+v", m)
+	}
+
+	// 前台轮次、自己发起的轮次、未绑定会话：都不推
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "sess-hb", Origin: "", FinalText: "前台"})
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "sess-hb", Origin: "qq_bot", FinalText: "自己"})
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "sess-other", Origin: "heartbeat", FinalText: "无关"})
+	f.expectNoSend(t, 500*time.Millisecond)
+}
+
+func noopTurn(context.Context, string, string) (string, error) { return "", nil }
+
 // 白名单外的用户被拒绝，无任何回复。
 func TestWhitelistBlocksStrangers(t *testing.T) {
 	_, f, _ := newInited(t, func(context.Context, string, string) (string, error) {

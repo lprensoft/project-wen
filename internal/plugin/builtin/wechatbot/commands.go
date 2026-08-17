@@ -34,6 +34,11 @@ func (p *Plugin) handleInbound(ctx context.Context, msg inbound, dedupKey string
 		log.Printf("wechat_bot: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）", msg.userID)
 		return
 	}
+	// 记住该用户最近一次入站的 context_token：后台轮次（心跳等）的结果要靠它推送
+	p.mu.Lock()
+	tokens := p.tokens
+	p.mu.Unlock()
+	tokens.remember(msg.userID, msg.contextToken)
 	if msg.text == "" {
 		if unsupported {
 			p.send(ctx, msg.userID, "暂不支持该消息类型，请发文字或语音。", msg.contextToken)
