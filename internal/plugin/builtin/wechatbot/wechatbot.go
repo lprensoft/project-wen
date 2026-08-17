@@ -46,6 +46,8 @@ type Plugin struct {
 	apiBase        string // 扫码入口用的公共基址；绑定后改用服务端下发的专属 baseurl
 	whitelist      map[string]bool
 	confirmTimeout time.Duration
+	showThinking   bool // 把每轮思考链推送到微信
+	showTools      bool // 把工具调用（仅名字）推送到微信
 
 	// 凭证（扫码绑定后持久化到 StateDir/credentials.json）
 	creds    credentials
@@ -113,6 +115,14 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default: defConfirmTimeout, Min: plugin.IntPtr(10), Max: plugin.IntPtr(3600),
 			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
 		},
+		{
+			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
+			Description: "开启后把每轮的完整思考链推送到微信；关闭（默认）只发最终回复",
+		},
+		{
+			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
+			Description: "开启后推送调用了哪些工具（只有名字，不含参数与结果，避免隐私外泄）；关闭（默认）不推送",
+		},
 	}
 }
 
@@ -155,6 +165,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
 	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second
+	p.showThinking = plugin.CfgBool(cfg, "show_thinking", false)
+	p.showTools = plugin.CfgBool(cfg, "show_tools", false)
 	p.creds = creds
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn

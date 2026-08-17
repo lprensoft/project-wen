@@ -38,8 +38,10 @@ func New() *Plugin {
 	}
 }
 
-func (p *Plugin) Name() string        { return "exec_command" }
-func (p *Plugin) Description() string { return "在工作目录下执行 shell 命令，危险操作先由用户确认" }
+func (p *Plugin) Name() string { return "exec_command" }
+func (p *Plugin) Description() string {
+	return "在工作目录下执行 shell 命令，危险操作先由用户确认"
+}
 
 // SystemPrompt 在拦截开启时告诉模型这条规则。不说明的话，被拒绝的模型会去改写命令
 // 重试——那正是最该避免的行为。

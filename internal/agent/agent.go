@@ -266,6 +266,21 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		msgs = append(msgs, assistant)
 		pinned = append(pinned, false)
 
+		// 过程通知：每轮模型响应的完整思考链与工具调用批次（发起方装了回调才有）。
+		// 工具通知只带名字——参数与结果可能载有隐私，转发与否不该由核心替接收方决定。
+		if noteFn := plugin.TurnNotesFrom(ctx); noteFn != nil {
+			if strings.TrimSpace(r.reasoning) != "" {
+				noteFn(plugin.TurnNote{Kind: plugin.NoteThinking, Text: r.reasoning})
+			}
+			if len(r.toolCalls) > 0 {
+				names := make([]string, 0, len(r.toolCalls))
+				for _, call := range r.toolCalls {
+					names = append(names, call.Name)
+				}
+				noteFn(plugin.TurnNote{Kind: plugin.NoteToolCalls, Tools: names})
+			}
+		}
+
 		if len(r.toolCalls) == 0 {
 			// 无工具调用，本轮结束
 			a.maybeAutoCompact(ctx, provider, opts, sessionID, r.usage, emit)
@@ -381,7 +396,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, provider llm.Provider, opt
 }
 
 // estimateTokens 粗略估算消息 token 数：UTF-8 字节数 / 3
-//（中文约 1 字 1 token，对英文略偏高，作为安全裕量）。
+// （中文约 1 字 1 token，对英文略偏高，作为安全裕量）。
 func estimateTokens(m llm.Message) int {
 	n := len(m.Content) + len(m.Reasoning)
 	for _, tc := range m.ToolCalls {

@@ -21,8 +21,8 @@ type Plugin struct {
 
 func New() *Plugin { return &Plugin{maxBytes: defaultMaxBytes} }
 
-func (p *Plugin) Name() string        { return "read_file" }
-func (p *Plugin) Description() string { return "读取本地文本文件内容" }
+func (p *Plugin) Name() string         { return "read_file" }
+func (p *Plugin) Description() string  { return "读取本地文本文件内容" }
 func (p *Plugin) SystemPrompt() string { return "" }
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {

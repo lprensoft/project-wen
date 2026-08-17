@@ -190,6 +190,12 @@ func testICtx(t *testing.T, store *session.Store, sessDir string, runTurn plugin
 // newBound 起一个已绑定假平台的插件。
 func newBound(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string) (*Plugin, *fakeILink, *session.Store, string) {
 	t.Helper()
+	return newBoundCfg(t, runTurn, whitelist, nil)
+}
+
+// newBoundCfg 同 newBound，extra 覆盖默认配置项。
+func newBoundCfg(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any) (*Plugin, *fakeILink, *session.Store, string) {
+	t.Helper()
 	f := newFakeILink(t)
 	sessDir, stateDir := t.TempDir(), t.TempDir()
 	store, err := session.NewStore(sessDir)
@@ -201,6 +207,9 @@ func newBound(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string) (*Plug
 	p := New()
 	p.pauseOnExpired = 100 * time.Millisecond // 测试不等真的一小时
 	cfg := map[string]any{"api_base": f.srv.URL, "whitelist": whitelist}
+	for k, v := range extra {
+		cfg[k] = v
+	}
 	if err := p.Init(testICtx(t, store, sessDir, runTurn, stateDir), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -496,6 +505,45 @@ func TestBackgroundTurnPush(t *testing.T) {
 	}
 	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "sess-mute", Origin: "heartbeat", FinalText: "无token"})
 	f.expectNoSend(t, 500*time.Millisecond)
+}
+
+// 展示开关：默认不装通知回调；开启后思考与工具调用按序推送、转纯文本。
+func TestShowProcess(t *testing.T) {
+	// 默认关闭：轮次 ctx 里不应有通知回调
+	sawNotes := false
+	plain := func(ctx context.Context, _, _ string) (string, error) {
+		sawNotes = plugin.TurnNotesFrom(ctx) != nil
+		return "ok", nil
+	}
+	_, f, _, _ := newBound(t, plain, "")
+	f.pushText(binderID, "你好")
+	f.expectSend(t)
+	if sawNotes {
+		t.Fatal("默认配置下不应安装过程通知回调")
+	}
+
+	// 都开启：思考 → 工具 → 最终回复，三条按序；工具名经纯文本转换为「」
+	notesTurn := func(ctx context.Context, _, _ string) (string, error) {
+		if fn := plugin.TurnNotesFrom(ctx); fn != nil {
+			fn(plugin.TurnNote{Kind: plugin.NoteThinking, Text: "让我想想"})
+			fn(plugin.TurnNote{Kind: plugin.NoteToolCalls, Tools: []string{"exec_command"}})
+		}
+		return "最终回复", nil
+	}
+	_, f2, _, _ := newBoundCfg(t, notesTurn, "",
+		map[string]any{"show_thinking": true, "show_tools": true})
+	f2.pushText(binderID, "查一下")
+	m := f2.expectSend(t)
+	if !strings.Contains(m.text, "🧠 思考过程") || !strings.Contains(m.text, "让我想想") {
+		t.Fatalf("第一条应是思考链: %q", m.text)
+	}
+	m = f2.expectSend(t)
+	if !strings.Contains(m.text, "🔧 调用工具") || !strings.Contains(m.text, "「exec_command」") {
+		t.Fatalf("第二条应是工具名列表（纯文本格式）: %q", m.text)
+	}
+	if m = f2.expectSend(t); !strings.Contains(m.text, "最终回复") {
+		t.Fatalf("第三条应是最终回复: %q", m.text)
+	}
 }
 
 // ---------- 轮询循环 ----------

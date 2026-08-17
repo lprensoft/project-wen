@@ -134,6 +134,7 @@ func (p *Plugin) process(ctx context.Context, msg inbound) {
 func (p *Plugin) chat(ctx context.Context, msg inbound) {
 	p.mu.Lock()
 	runTurn := p.runTurn
+	showThinking, showTools := p.showThinking, p.showTools
 	p.mu.Unlock()
 
 	sid, err := p.sessionFor(msg.userID)
@@ -146,6 +147,17 @@ func (p *Plugin) chat(ctx context.Context, msg inbound) {
 	// 微信对面是真人：标记交互（更新会话活跃时间），并接入微信侧的确认通道
 	tctx = plugin.WithInteractive(tctx)
 	tctx = plugin.WithConfirmer(tctx, p.confirmerFor(msg.userID, msg.contextToken))
+	// 按配置转发过程通知：思考链、工具调用（仅名字）。同步发送保证与最终回复的顺序
+	if showThinking || showTools {
+		tctx = plugin.WithTurnNotes(tctx, func(n plugin.TurnNote) {
+			switch {
+			case n.Kind == plugin.NoteThinking && showThinking:
+				p.send(ctx, msg.userID, thinkingLine(n.Text), msg.contextToken)
+			case n.Kind == plugin.NoteToolCalls && showTools:
+				p.send(ctx, msg.userID, toolsLine(n.Tools), msg.contextToken)
+			}
+		})
+	}
 
 	p.setTyping(ctx, msg.userID, msg.contextToken, true)
 	final, err := runTurn(tctx, sid, msg.text)
@@ -245,6 +257,20 @@ func (p *Plugin) cmdCompact(ctx context.Context, msg inbound) {
 		return
 	}
 	p.send(ctx, msg.userID, "📦 会话历史已压缩完成。", msg.contextToken)
+}
+
+// thinkingLine / toolsLine 的措辞与 Web UI 的过程展示保持一致（🧠 思考过程 / 🔧 调用工具）。
+// 行内代码标记经 send 的纯文本转换后呈现为「工具名」。
+func thinkingLine(text string) string {
+	return "🧠 思考过程\n" + strings.TrimSpace(text)
+}
+
+func toolsLine(tools []string) string {
+	quoted := make([]string, 0, len(tools))
+	for _, t := range tools {
+		quoted = append(quoted, "`"+t+"`")
+	}
+	return "🔧 调用工具 " + strings.Join(quoted, "、")
 }
 
 // comma 加千位分隔符，与 Web UI 的 toLocaleString 显示一致。

@@ -66,6 +66,39 @@ func IsEphemeralInput(ctx context.Context) bool {
 	return v
 }
 
+// 轮次过程通知的种类。
+const (
+	NoteThinking  = "thinking"   // 一段完整的思考链
+	NoteToolCalls = "tool_calls" // 一批将要执行的工具调用
+)
+
+// TurnNote 是轮次进行中的过程性通知：每次模型响应产出的完整思考链、每批工具调用。
+// 与流式 emit 不同，通知以「完整块」为粒度——面向的是无法流式渲染的接收方（远程 IM）。
+type TurnNote struct {
+	Kind  string
+	Text  string   // Kind=NoteThinking 时为思考全文
+	Tools []string // Kind=NoteToolCalls 时为本批工具名（不含参数与结果，那些可能载有隐私）
+}
+
+// TurnNoteFunc 接收过程通知。在轮次的同步路径上被调用，实现应快速返回或自行异步。
+type TurnNoteFunc func(TurnNote)
+
+type turnNotesKey struct{}
+
+// WithTurnNotes 为本轮对话安装过程通知回调。发起方（如 IM 插件）借此把思考过程
+// 与工具调用转发到远端；不安装则核心不产生任何通知开销。
+func WithTurnNotes(ctx context.Context, fn TurnNoteFunc) context.Context {
+	return context.WithValue(ctx, turnNotesKey{}, fn)
+}
+
+// TurnNotesFrom 取出本轮的过程通知回调，未安装返回 nil。
+func TurnNotesFrom(ctx context.Context) TurnNoteFunc {
+	if fn, ok := ctx.Value(turnNotesKey{}).(TurnNoteFunc); ok {
+		return fn
+	}
+	return nil
+}
+
 // TurnEndEvent 描述一轮成功结束的对话。
 type TurnEndEvent struct {
 	SessionID   string
