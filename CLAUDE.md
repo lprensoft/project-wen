@@ -34,7 +34,7 @@
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「危险命令」「心跳」「定时」「QQ」或「微信」这回事。
 
-远程 IM 插件目前有两个同构实现：`qq_bot`（QQ 官方开放平台，WebSocket 网关）与 `wechat_bot`（微信官方 ClawBot 插件，iLink HTTP 长轮询，扫码绑定走「插件操作入口」）。共同约定：每个远端用户映射一个普通会话、命令集 /new /status /compact /help /apply /deny、`WithInteractive` + 自带确认通道、白名单外一律拒绝只记日志、markdown 转纯文本共用 `internal/mdtext`。
+远程 IM 插件目前有两个同构实现：`qq_bot`（QQ 官方开放平台，WebSocket 网关）与 `wechat_bot`（微信官方 ClawBot 插件，iLink HTTP 长轮询，扫码绑定走「插件操作入口」）。共同约定：每个远端用户映射一个普通会话、命令集 /new /status /compact /help /apply /deny、`WithInteractive` + 自带确认通道、白名单外一律拒绝只记日志、markdown 转纯文本共用 `internal/mdtext`。两者都实现 `TurnObserver`：**后台轮次**（`Origin` 非空且非自身，如心跳、定时任务）落在 IM 绑定的会话上时，把助手最终文本推送给绑定用户——否则结果只进会话文件，远端永远看不到；前台轮次与自己发起的轮次不推（各有回复渠道）。QQ 推送走主动消息（无 msg_id，受限容忍）；微信必须回带 context_token，故按用户持久化最近一次入站消息的 token（`tokens.json`，0600），没有 token 的用户只记日志。推送 goroutine 用插件自己的 ctx——广播的 ctx 在发起方轮次结束后立即被取消。
 
 ## 插件持久化与生命周期约定
 

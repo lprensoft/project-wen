@@ -459,6 +459,45 @@ func TestConfirmApply(t *testing.T) {
 	}
 }
 
+// 后台轮次（心跳等）落到微信绑定的会话时，用该用户最近入站的 context_token 推送；
+// 没有 token（从未来过消息）只记日志不发；前台与自己发起的轮次不推。
+func TestBackgroundTurnPush(t *testing.T) {
+	p, f, _, stateDir := newBound(t, echoTurn, "")
+
+	// 先让绑定人发一条消息：建立会话映射并记住 context_token
+	f.pushText(binderID, "你好")
+	f.expectSend(t)
+	sid := p.binding.get(binderID)
+	if sid == "" {
+		t.Fatal("对话后应有会话映射")
+	}
+
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{
+		SessionID: sid, Origin: "heartbeat", FinalText: "**心跳**问候",
+	})
+	m := f.expectSend(t)
+	if m.to != binderID || m.contextToken != "CTX-"+binderID {
+		t.Fatalf("推送应用最近入站的 context_token: %+v", m)
+	}
+	if strings.Contains(m.text, "**") || !strings.Contains(m.text, "心跳问候") {
+		t.Fatalf("推送应转纯文本: %q", m.text)
+	}
+
+	// token 已持久化：重启后仍可推送
+	if raw, err := os.ReadFile(stateDir + "/tokens.json"); err != nil || !strings.Contains(string(raw), "CTX-"+binderID) {
+		t.Fatalf("context_token 应持久化: %v %s", err, raw)
+	}
+
+	// 前台轮次、自己发起的轮次、无 token 的用户：都不推
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: sid, Origin: "", FinalText: "前台"})
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: sid, Origin: "wechat_bot", FinalText: "自己"})
+	if err := p.binding.set("mute@im.wechat", "sess-mute"); err != nil {
+		t.Fatal(err)
+	}
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "sess-mute", Origin: "heartbeat", FinalText: "无token"})
+	f.expectNoSend(t, 500*time.Millisecond)
+}
+
 // ---------- 轮询循环 ----------
 
 // 会话过期（-14）暂停后自动恢复。

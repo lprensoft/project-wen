@@ -61,6 +61,7 @@ type Plugin struct {
 	// 运行组件
 	dedup   *deduper
 	binding *sessionBinding // 微信用户 ID → 会话 ID
+	tokens  *tokenStore     // 微信用户 ID → 最近入站的 context_token（后台推送用）
 	broker  *confirmBroker
 	workers map[string]chan inbound
 	typing  map[string]string // 微信用户 ID → typing_ticket 缓存
@@ -132,6 +133,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("加载会话映射失败: %w", err)
 	}
+	tokens, err := loadTokens(ictx.StateDir)
+	if err != nil {
+		return fmt.Errorf("加载推送票据失败: %w", err)
+	}
 	creds, err := loadCredentials(ictx.StateDir)
 	if err != nil {
 		return fmt.Errorf("加载绑定凭证失败: %w", err)
@@ -159,6 +164,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.sessions = sessions
 	p.dedup = newDeduper()
 	p.binding = binding
+	p.tokens = tokens
 	p.broker = newConfirmBroker()
 	p.workers = map[string]chan inbound{}
 	p.typing = map[string]string{}

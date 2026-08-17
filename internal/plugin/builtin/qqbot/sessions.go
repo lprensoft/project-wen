@@ -36,6 +36,19 @@ func (b *sessionBinding) get(openid string) string {
 	return b.m[openid]
 }
 
+// usersFor 反查绑定到某会话的全部用户（后台轮次落到该会话时要把结果推给谁）。
+func (b *sessionBinding) usersFor(sessionID string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []string
+	for openid, sid := range b.m {
+		if sid == sessionID {
+			out = append(out, openid)
+		}
+	}
+	return out
+}
+
 func (b *sessionBinding) set(openid, sessionID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
