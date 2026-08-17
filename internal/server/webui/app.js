@@ -1108,9 +1108,12 @@ function closeProviderModal() {
   providerEditing = null;
 }
 
-function showProviderError(msg) {
+// kind：error（默认，红）/ info（进行中，蓝）/ ok（成功，绿）
+function showProviderError(msg, kind) {
   providerErrorEl.textContent = msg;
   providerErrorEl.classList.toggle("hidden", !msg);
+  providerErrorEl.classList.toggle("is-info", kind === "info");
+  providerErrorEl.classList.toggle("is-ok", kind === "ok");
 }
 
 async function saveProvider() {
@@ -1143,7 +1146,9 @@ async function testProvider() {
     showProviderError("请先为该提供商添加模型后再测试");
     return;
   }
-  showProviderError("正在测试…");
+  showProviderError("正在测试…", "info");
+  const testBtn = $("#btn-provider-test");
+  testBtn.disabled = true;
   try {
     const res = await fetch("/api/models/test", {
       method: "POST",
@@ -1160,9 +1165,11 @@ async function testProvider() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || "HTTP " + res.status);
     }
-    showProviderError("连接正常（模型 " + model.id + "）");
+    showProviderError("连接正常（模型 " + model.id + "）", "ok");
   } catch (e) {
     showProviderError(e.message);
+  } finally {
+    testBtn.disabled = false;
   }
 }
 

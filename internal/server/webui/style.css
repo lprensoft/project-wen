@@ -13,6 +13,8 @@
   --active-bg: #e8effd;
   --danger: #dc2626;
   --danger-bg: #fee2e2;
+  --ok: #15803d;
+  --ok-bg: #dcfce7;
   --code-bg: rgba(0, 0, 0, 0.06);
   --pre-bg: #0f172a;
   --pre-text: #e2e8f0;
@@ -31,6 +33,8 @@
   --active-bg: #1f2c48;
   --danger: #f87171;
   --danger-bg: #3d1f1f;
+  --ok: #4ade80;
+  --ok-bg: #16301f;
   --code-bg: rgba(255, 255, 255, 0.1);
   --pre-bg: #0b1017;
   --pre-text: #d7e0ec;
@@ -692,6 +696,9 @@ body {
   background: var(--danger-bg);
 }
 .modal-error.hidden { display: none; }
+/* 提示条的三种状态：进行中（蓝）/ 成功（绿）/ 失败（红，默认） */
+.modal-error.is-info { color: var(--accent); background: var(--active-bg); }
+.modal-error.is-ok { color: var(--ok); background: var(--ok-bg); }
 
 .btn-ghost {
   border: 1px solid var(--border);
@@ -704,6 +711,7 @@ body {
   cursor: pointer;
 }
 .btn-ghost:hover { background: var(--bg); }
+.btn-ghost:disabled { opacity: 0.6; cursor: wait; }
 
 /* 配置表单项 */
 .field { display: flex; flex-direction: column; gap: 5px; }
