@@ -287,6 +287,32 @@ func TestInitReenteringIsSafe(t *testing.T) {
 	}
 }
 
+func TestLabelAndPromptUseOppositePerson(t *testing.T) {
+	// 界面上那一项叫「我的信息」（填的人是用户），注入给模型的段落写作「对方信息」
+	// ——提示词是模型以第一人称读的，人称一统一意思就反了。
+	var label, desc string
+	for _, f := range New().ConfigFields() {
+		if f.Key == "user_profile" {
+			label, desc = f.Label, f.Description
+		}
+	}
+	if label != "我的信息" {
+		t.Errorf("界面标签 = %q, want 我的信息", label)
+	}
+	if strings.Contains(desc, "对方") {
+		t.Errorf("界面说明应站在用户视角: %q", desc)
+	}
+
+	p := newTestPlugin(t, map[string]any{"persona": "角色", "user_profile": "身高一米八三"})
+	got := p.SystemPrompt()
+	if !strings.Contains(got, "[对方信息]") {
+		t.Errorf("注入给模型的段落应写作「对方信息」:\n%s", got)
+	}
+	if strings.Contains(got, "[我的信息]") {
+		t.Errorf("注入的提示词里不能出现「我的信息」，模型会把「我」当成自己:\n%s", got)
+	}
+}
+
 func TestConfigFieldsDeclareTextType(t *testing.T) {
 	want := map[string]string{
 		"persona":      plugin.FieldText,

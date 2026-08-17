@@ -1,6 +1,10 @@
-// Package roleplay 提供角色扮演的系统插件：把用户配置的角色设定与对方信息作为
+// Package roleplay 提供角色扮演的系统插件：把用户配置的角色设定与用户自己的信息作为
 // 最高优先级提示词注入，附一套让中文表达脱离机械感的规则、一套以【】做场景与动作
 // 演绎的规则，以及时间一致性约束。
+//
+// 注意界面与提示词的人称是相反的：设置页上那一项叫「我的信息」（填的人是用户自己），
+// 而注入给模型的段落写作「对方信息」——提示词是模型以第一人称读的，那里的「我」指它。
+// 两处不要统一。
 //
 // 本插件不提供工具，也不落盘。它硬依赖 memory 与 session_search：一个有连续性的
 // 角色需要记得住跨会话的事、查得到之前说过的原话，缺了这两样，角色每开一个新会话
@@ -21,7 +25,7 @@ const (
 	defaultInteraction = true
 	defaultHumanize    = true
 	defaultTimeRules   = true
-	// defaultMaxTextBytes 限制角色设定与对方信息的合计长度。这些内容每轮随 system
+	// defaultMaxTextBytes 限制角色设定与用户信息的合计长度。这些内容每轮随 system
 	// 消息全额重发、且不参与预算裁剪，还计入自动压缩判据，必须有硬上限。
 	defaultMaxTextBytes = 8 * 1024
 )
@@ -49,7 +53,7 @@ func New() *Plugin {
 
 func (p *Plugin) Name() string { return "roleplay" }
 func (p *Plugin) Description() string {
-	return "按设定扮演角色：注入角色设定与对方信息，以【】演绎场景动作，约束表达方式与时间一致性"
+	return "按设定扮演角色：注入角色设定与我的信息，以【】演绎场景动作，约束表达方式与时间一致性"
 }
 
 // Requires 硬依赖记忆与会话检索：角色的连续性建立在「记得住」与「查得到」之上。
@@ -63,8 +67,10 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default:     "",
 		},
 		{
-			Key: "user_profile", Label: "对方信息", Type: plugin.FieldText,
-			Description: "对方的基本情况，作为初始已知信息。可以留空，改在对话中告知，由记忆插件记下来。",
+			// 标签用「我的信息」：填的人就是你自己。注入给模型的那一段仍写作
+			// 「对方信息」——提示词是模型以第一人称读的，那里的「我」指它自己。
+			Key: "user_profile", Label: "我的信息", Type: plugin.FieldText,
+			Description: "你的基本情况，作为角色一开始就知道的信息。可以留空，改在对话中告诉它，由记忆插件记下来。",
 			Default:     "",
 		},
 		{
@@ -84,7 +90,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "max_text_bytes", Label: "设定文本上限（字节）", Type: plugin.FieldInt,
-			Description: "角色设定与对方信息的合计上限。它们每轮全额重发且不参与预算裁剪，超出部分会被截断。",
+			Description: "角色设定与我的信息的合计上限。它们每轮全额重发且不参与预算裁剪，超出部分会被截断。",
 			Default:     defaultMaxTextBytes,
 			Min:         plugin.IntPtr(512),
 			Max:         plugin.IntPtr(64 * 1024),
