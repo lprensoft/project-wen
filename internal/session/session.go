@@ -18,7 +18,11 @@ type Meta struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
-	LastUsage *Usage    `json:"last_usage,omitempty"`
+	// LastActiveAt 是最近一次有真人交互的轮次时间（前台界面、远程 IM）。
+	// 机器自发的轮次（定时触发等）不更新它，「最近活跃会话」据此判定。
+	// 旧会话没有该字段，使用方应回落到 CreatedAt。
+	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
+	LastUsage    *Usage     `json:"last_usage,omitempty"`
 	// Tag 是生成该标题的那一轮消息所属的可见域标签（空串 = 共享）。
 	// 标题取自首条用户消息，因此它和消息一样需要归属，否则会话检索会把不可读域的
 	// 内容通过标题漏出去。
@@ -31,7 +35,9 @@ const KindSummary = "summary"
 // StoredMessage 是 JSONL 中的一条消息记录（meta 行之后）。
 type StoredMessage struct {
 	llm.Message
-	Kind string    `json:"kind,omitempty"` // "" 普通消息；KindSummary 压缩摘要
-	Tag  string    `json:"tag,omitempty"`  // 可见域标签，空串 = 共享（所有域可读）
-	TS   time.Time `json:"ts"`
+	Kind string `json:"kind,omitempty"` // "" 普通消息；KindSummary 压缩摘要
+	Tag  string `json:"tag,omitempty"`  // 可见域标签，空串 = 共享（所有域可读）
+	// Origin 是本轮对话的发起方插件名，空串 = 前台界面。供审计与界面区分后台轮次。
+	Origin string    `json:"origin,omitempty"`
+	TS     time.Time `json:"ts"`
 }

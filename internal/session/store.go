@@ -197,6 +197,11 @@ func (s *Store) SetUsage(id string, u *Usage) error {
 	return s.updateMeta(id, func(m *Meta) { m.LastUsage = u })
 }
 
+// SetLastActive 更新 meta 行记录的最近真人交互时间。
+func (s *Store) SetLastActive(id string, t time.Time) error {
+	return s.updateMeta(id, func(m *Meta) { m.LastActiveAt = &t })
+}
+
 // updateMeta 读取并修改 meta 行后原子回写，消息内容不动。
 func (s *Store) updateMeta(id string, mutate func(*Meta)) error {
 	p, err := s.path(id)
