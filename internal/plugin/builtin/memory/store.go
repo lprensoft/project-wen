@@ -153,8 +153,13 @@ func (s *Store) Get(name string) (Entry, error) {
 }
 
 // findEntry 依次尝试标题精确匹配与 slug 匹配，均不区分大小写。
+// 索引里一条记忆显示为「分类/标题」，模型很自然会把整串当成标题传进来，故先剥掉分类前缀。
 func findEntry(entries []Entry, name string) (Entry, bool) {
-	want := strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimSpace(name)
+	if typ, rest, ok := strings.Cut(name, "/"); ok && slices.Contains(Types, strings.TrimSpace(typ)) {
+		name = strings.TrimSpace(rest)
+	}
+	want := strings.ToLower(name)
 	if want == "" {
 		return Entry{}, false
 	}

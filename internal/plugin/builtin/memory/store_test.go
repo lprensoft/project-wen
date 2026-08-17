@@ -53,6 +53,22 @@ func TestSaveAndGetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGetAcceptsIndexDisplayForm(t *testing.T) {
+	s := newTestStore(t)
+	s.Save(Entry{Name: "接口命名规范", Description: "钩子", Type: "约定", Content: "正文"}, false)
+
+	// 索引里显示为「分类/标题」，模型很自然会把整串当标题传回来
+	for _, name := range []string{"接口命名规范", "约定/接口命名规范", " 约定 / 接口命名规范 "} {
+		if _, err := s.Get(name); err != nil {
+			t.Errorf("Get(%q) 应命中: %v", name, err)
+		}
+	}
+	// 不是已知分类的前缀不应被吞掉，否则会误伤标题里本来就有斜杠的记忆
+	if _, err := s.Get("随便/接口命名规范"); err == nil {
+		t.Error("非分类前缀不应被剥离")
+	}
+}
+
 func TestSaveRejectsOverwriteWithoutReplace(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.Save(Entry{Name: "配置", Type: "事实", Content: "v1"}, false); err != nil {
