@@ -681,10 +681,12 @@ body {
 .models-current b { color: var(--accent); font-weight: 600; }
 
 /* 提供商卡片同样按宽度换行；卡片内模型条数不等，align-items 防止被拉成同高 */
+/* 提供商卡片网格：与插件网格同法，不设 align-items，用 grid 默认的 stretch
+   让同一行的卡片自动等高。曾为避免条目少的卡片留白而改成自然高度，但模型条数
+   随使用增长，高低差比留白更碍眼；拉伸出的空白由 model-list 的 flex:1 收在底部。 */
 .provider-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-  align-items: start;
   gap: 12px;
 }
 .provider-card {
@@ -716,7 +718,7 @@ body {
   word-break: break-all;
 }
 
-.model-list { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--border); padding-top: 8px; }
+.model-list { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--border); padding-top: 8px; flex: 1; }
 .model-row {
   display: flex;
   align-items: center;
