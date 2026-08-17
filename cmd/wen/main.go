@@ -15,6 +15,7 @@ import (
 	"wen/internal/llm"
 	"wen/internal/modelcfg"
 	"wen/internal/plugin"
+	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/readfile"
@@ -112,7 +113,8 @@ func main() {
 // defaultOffPlugins 是默认不启用的插件：它们会显著改变模型的行为方式，
 // 应当由用户主动打开，而不是装上就生效。
 var defaultOffPlugins = map[string]bool{
-	roleplay.New().Name(): true,
+	roleplay.New().Name():    true,
+	dualpersona.New().Name(): true,
 }
 
 // buildPlugins 注册全部内置系统插件，配置缺省时默认启用（defaultOffPlugins 除外）。
@@ -125,7 +127,9 @@ func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFu
 	)
 	builtins := []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
-		roleplay.New(),
+		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
+		// 后者才能形成追加与覆盖的语义
+		roleplay.New(), dualpersona.New(),
 	}
 	for _, p := range builtins {
 		pc, ok := cfg.Plugins[p.Name()]

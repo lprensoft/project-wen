@@ -82,7 +82,7 @@ func Default() *Config {
 			MaxTurns:     20,
 		},
 		// 系统插件默认启用；config.yaml 的 plugins 段可覆盖（yaml 按 key 合并）。
-		// 会显著改变模型行为方式的插件（roleplay）默认关闭，由用户主动打开。
+		// 会显著改变模型行为方式的插件（roleplay / dual_persona）默认关闭，由用户主动打开。
 		Plugins: map[string]plugin.PluginConfig{
 			"read_file":      {Enabled: true},
 			"exec_command":   {Enabled: true},
@@ -90,6 +90,7 @@ func Default() *Config {
 			"memory":         {Enabled: true},
 			"session_search": {Enabled: true},
 			"roleplay":       {Enabled: false},
+			"dual_persona":   {Enabled: false},
 		},
 	}
 }
