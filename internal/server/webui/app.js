@@ -547,12 +547,28 @@ const settingsPluginsEl = $("#settings-plugins");
 async function openSettings() {
   settingsView.classList.remove("hidden");
   settingsPluginsEl.textContent = "加载中…";
+  loadModels();
   try {
     renderSettingsPlugins(await fetch("/api/plugins").then((r) => r.json()));
   } catch (e) {
     settingsPluginsEl.textContent = "加载插件列表失败：" + e.message;
   }
 }
+
+// 左侧栏目与右侧 section 按 data-section 对应
+function showSettingsSection(name) {
+  for (const b of document.querySelectorAll(".settings-nav-item")) {
+    b.classList.toggle("active", b.dataset.section === name);
+  }
+  for (const s of document.querySelectorAll(".settings-section")) {
+    s.classList.toggle("hidden", s.id !== "section-" + name);
+  }
+}
+
+$("#settings-nav").addEventListener("click", (e) => {
+  const btn = e.target.closest(".settings-nav-item");
+  if (btn) showSettingsSection(btn.dataset.section);
+});
 
 function closeSettings() {
   settingsView.classList.add("hidden");
@@ -644,8 +660,10 @@ $("#btn-settings").addEventListener("click", openSettings);
 $("#btn-settings-back").addEventListener("click", closeSettings);
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  // 配置弹窗盖在设置页之上，Esc 先关弹窗
-  if (!configModal.classList.contains("hidden")) closePluginConfig();
+  // 弹窗盖在设置页之上，Esc 先关最上层的弹窗
+  if (!providerModal.classList.contains("hidden")) closeProviderModal();
+  else if (!modelModal.classList.contains("hidden")) closeModelModal();
+  else if (!configModal.classList.contains("hidden")) closePluginConfig();
   else if (!settingsView.classList.contains("hidden")) closeSettings();
 });
 
@@ -809,6 +827,494 @@ configFormEl.addEventListener("submit", (e) => {
 });
 configModal.addEventListener("mousedown", (e) => {
   if (e.target === configModal) closePluginConfig(); // 点击遮罩关闭
+});
+
+// ---------- 模型配置 ----------
+
+const pencilIconSVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+const trashIconSVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' +
+  '<path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
+
+const modelsEl = $("#settings-models");
+const modelsErrorEl = $("#models-error");
+const modelsCurrentEl = $("#models-current");
+
+let modelsDoc = null; // 最近一次 /api/models 的响应
+
+async function loadModels() {
+  modelsEl.textContent = "加载中…";
+  try {
+    renderModels(await fetch("/api/models").then((r) => r.json()));
+  } catch (e) {
+    modelsEl.textContent = "加载模型配置失败：" + e.message;
+  }
+}
+
+function showModelsError(msg) {
+  modelsErrorEl.textContent = msg;
+  modelsErrorEl.classList.toggle("hidden", !msg);
+}
+
+// 提交整档配置：api_key 一律留空表示不修改，需要改的由调用方填上
+function payloadFromDoc() {
+  return {
+    providers: modelsDoc.providers.map((p) => ({
+      name: p.name,
+      type: p.type,
+      base_url: p.base_url,
+      api_key: "",
+      models: p.models,
+    })),
+    current: modelsDoc.current,
+  };
+}
+
+async function putModels(payload) {
+  const res = await fetch("/api/models", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "HTTP " + res.status);
+  }
+  renderModels(await res.json());
+}
+
+function typeLabel(value) {
+  const t = (modelsDoc.types || []).find((x) => x.value === value);
+  return t ? t.label : value;
+}
+
+function renderModels(doc) {
+  modelsDoc = doc;
+  showModelsError("");
+  modelsEl.textContent = "";
+
+  const cur = doc.current || {};
+  modelsCurrentEl.textContent = "";
+  modelsCurrentEl.append("当前使用：");
+  const b = document.createElement("b");
+  const curProvider = doc.providers.find((p) => p.name === cur.provider);
+  const curModel = curProvider && (curProvider.models || []).find((m) => m.id === cur.model);
+  b.textContent = cur.provider ? cur.provider + " / " + ((curModel && curModel.name) || cur.model || "—") : "未选择";
+  modelsCurrentEl.appendChild(b);
+
+  for (const p of doc.providers) {
+    modelsEl.appendChild(buildProviderCard(p));
+  }
+}
+
+function buildProviderCard(p) {
+  const card = document.createElement("div");
+  card.className = "provider-card";
+
+  const head = document.createElement("div");
+  head.className = "provider-head";
+  const name = document.createElement("span");
+  name.className = "provider-name";
+  name.textContent = p.name;
+  head.append(name, tagEl(typeLabel(p.type)));
+  if (p.source === "config") head.appendChild(tagEl("来自配置文件"));
+
+  const actions = document.createElement("div");
+  actions.className = "provider-actions";
+  actions.append(
+    iconButton(gearIconSVG, "编辑提供商", () => openProviderModal(p.name)),
+    iconButton(trashIconSVG, "删除提供商", () => deleteProvider(p.name)),
+  );
+  head.appendChild(actions);
+  card.appendChild(head);
+
+  const meta = document.createElement("div");
+  meta.className = "provider-meta";
+  meta.textContent = p.base_url + (p.has_api_key ? "  ·  API Key " + p.api_key_masked : "  ·  未配置 API Key");
+  card.appendChild(meta);
+
+  const list = document.createElement("div");
+  list.className = "model-list";
+  for (const m of p.models || []) list.appendChild(buildModelRow(p, m));
+  if ((p.models || []).length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "model-empty";
+    empty.textContent = "暂无模型";
+    list.appendChild(empty);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "btn-link";
+  add.textContent = "＋ 添加模型";
+  add.addEventListener("click", () => openModelModal(p.name, null));
+  list.appendChild(add);
+  card.appendChild(list);
+  return card;
+}
+
+function buildModelRow(p, m) {
+  const row = document.createElement("div");
+  row.className = "model-row";
+  const active = modelsDoc.current.provider === p.name && modelsDoc.current.model === m.id;
+  if (active) row.classList.add("active");
+  row.title = active ? "当前使用中" : "点击切换到该模型";
+
+  const radio = document.createElement("span");
+  radio.className = "model-radio";
+  const name = document.createElement("span");
+  name.className = "model-name";
+  name.textContent = m.name || m.id;
+  row.append(radio, name);
+  if (m.name) {
+    const id = document.createElement("span");
+    id.className = "model-id";
+    id.textContent = m.id;
+    row.appendChild(id);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "model-row-actions";
+  actions.append(
+    iconButton(pencilIconSVG, "编辑模型", (e) => { e.stopPropagation(); openModelModal(p.name, m.id); }),
+    iconButton(trashIconSVG, "删除模型", (e) => { e.stopPropagation(); deleteModel(p.name, m.id); }),
+  );
+  row.appendChild(actions);
+
+  row.addEventListener("click", () => switchModel(p.name, m.id));
+  return row;
+}
+
+function tagEl(text) {
+  const el = document.createElement("span");
+  el.className = "tag";
+  el.textContent = text;
+  return el;
+}
+
+function iconButton(svg, title, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-icon btn-square btn-gear";
+  btn.title = title;
+  btn.innerHTML = svg;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+async function switchModel(provider, model) {
+  if (modelsDoc.current.provider === provider && modelsDoc.current.model === model) return;
+  showModelsError("");
+  try {
+    const res = await fetch("/api/models/current", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, model }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "HTTP " + res.status);
+    }
+    renderModels(await res.json());
+  } catch (e) {
+    showModelsError("切换模型失败：" + e.message);
+  }
+}
+
+async function deleteProvider(name) {
+  if (!confirm(`确定删除提供商「${name}」？`)) return;
+  const payload = payloadFromDoc();
+  payload.providers = payload.providers.filter((p) => p.name !== name);
+  showModelsError("");
+  try {
+    await putModels(payload);
+  } catch (e) {
+    showModelsError("删除失败：" + e.message);
+  }
+}
+
+async function deleteModel(provider, id) {
+  if (!confirm(`确定删除模型「${id}」？`)) return;
+  const payload = payloadFromDoc();
+  const p = payload.providers.find((x) => x.name === provider);
+  p.models = (p.models || []).filter((m) => m.id !== id);
+  showModelsError("");
+  try {
+    await putModels(payload);
+  } catch (e) {
+    showModelsError("删除失败：" + e.message);
+  }
+}
+
+// ---------- 提供商弹窗 ----------
+
+const providerModal = $("#provider-modal");
+const providerForm = $("#provider-form");
+const providerErrorEl = $("#provider-error");
+const providerTitleEl = $("#provider-modal-title");
+let providerEditing = null; // 正在编辑的提供商名，null 表示新增
+let providerInputs = {};
+
+function openProviderModal(name) {
+  providerEditing = name || null;
+  const p = name ? modelsDoc.providers.find((x) => x.name === name) : null;
+  providerTitleEl.textContent = p ? "编辑提供商 · " + p.name : "新增提供商";
+  providerForm.textContent = "";
+  showProviderError("");
+
+  const nameInput = textInput(p ? p.name : "");
+  const typeSelect = document.createElement("select");
+  for (const t of modelsDoc.types || []) {
+    const opt = document.createElement("option");
+    opt.value = t.value;
+    opt.textContent = t.label;
+    typeSelect.appendChild(opt);
+  }
+  typeSelect.value = p ? p.type : (modelsDoc.types[0] || {}).value;
+  const urlInput = textInput(p ? p.base_url : defaultBaseURL(typeSelect.value));
+  const keyInput = textInput("");
+  keyInput.type = "password";
+  keyInput.placeholder = p && p.has_api_key ? "留空表示不修改（当前 " + p.api_key_masked + "）" : "";
+
+  // 切换 API 模式时，若地址还是另一模式的默认值就跟着换
+  typeSelect.addEventListener("change", () => {
+    const defaults = (modelsDoc.types || []).map((t) => t.default_base_url);
+    if (!urlInput.value.trim() || defaults.includes(urlInput.value.trim())) {
+      urlInput.value = defaultBaseURL(typeSelect.value);
+    }
+  });
+
+  providerForm.append(
+    fieldEl("名称", nameInput, "列表中显示的名字，需唯一。"),
+    fieldEl("API 模式", typeSelect, "Anthropic 模式使用 Messages API；OpenAI 兼容适用于 DeepSeek 等服务。"),
+    fieldEl("Base URL", urlInput, "服务地址，需以 http:// 或 https:// 开头。"),
+    fieldEl("API Key", keyInput, "保存在本机 models.json 中，不会提交到仓库。"),
+  );
+  providerInputs = { name: nameInput, type: typeSelect, base_url: urlInput, api_key: keyInput };
+
+  providerModal.classList.remove("hidden");
+  nameInput.focus();
+}
+
+function defaultBaseURL(type) {
+  const t = (modelsDoc.types || []).find((x) => x.value === type);
+  return t ? t.default_base_url : "";
+}
+
+function closeProviderModal() {
+  providerModal.classList.add("hidden");
+  providerEditing = null;
+}
+
+function showProviderError(msg) {
+  providerErrorEl.textContent = msg;
+  providerErrorEl.classList.toggle("hidden", !msg);
+}
+
+async function saveProvider() {
+  const values = {
+    name: providerInputs.name.value.trim(),
+    type: providerInputs.type.value,
+    base_url: providerInputs.base_url.value.trim(),
+    api_key: providerInputs.api_key.value.trim(),
+  };
+  const payload = payloadFromDoc();
+  if (providerEditing) {
+    const p = payload.providers.find((x) => x.name === providerEditing);
+    Object.assign(p, values, { models: p.models });
+    if (payload.current.provider === providerEditing) payload.current.provider = values.name;
+  } else {
+    payload.providers.push({ ...values, models: [] });
+  }
+  try {
+    await putModels(payload);
+    closeProviderModal();
+  } catch (e) {
+    showProviderError("保存失败：" + e.message);
+  }
+}
+
+async function testProvider() {
+  const p = providerEditing ? modelsDoc.providers.find((x) => x.name === providerEditing) : null;
+  const model = p && (p.models || [])[0];
+  if (!model) {
+    showProviderError("请先为该提供商添加模型后再测试");
+    return;
+  }
+  showProviderError("正在测试…");
+  try {
+    const res = await fetch("/api/models/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: providerEditing,
+        type: providerInputs.type.value,
+        base_url: providerInputs.base_url.value.trim(),
+        api_key: providerInputs.api_key.value.trim(),
+        model: model.id,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "HTTP " + res.status);
+    }
+    showProviderError("连接正常（模型 " + model.id + "）");
+  } catch (e) {
+    showProviderError(e.message);
+  }
+}
+
+// ---------- 模型弹窗 ----------
+
+const modelModal = $("#model-modal");
+const modelForm = $("#model-form");
+const modelErrorEl = $("#model-error");
+const modelTitleEl = $("#model-modal-title");
+let modelEditing = null; // {provider, id}，id 为 null 表示新增
+let modelInputs = {};
+
+function openModelModal(provider, id) {
+  const p = modelsDoc.providers.find((x) => x.name === provider);
+  const m = id ? (p.models || []).find((x) => x.id === id) : null;
+  modelEditing = { provider, id: id || null };
+  modelTitleEl.textContent = m ? "编辑模型 · " + m.id : "添加模型 · " + provider;
+  modelForm.textContent = "";
+  showModelError("");
+
+  const d = modelsDoc.defaults || {};
+  const idInput = textInput(m ? m.id : "");
+  const nameInput = textInput(m && m.name ? m.name : "");
+  const ctxInput = numberInput(m && m.context_length, `跟随全局（${d.context_length}）`);
+  const maxInput = numberInput(m && m.max_tokens, `跟随全局（${d.max_tokens}）`);
+  const tempInput = numberInput(m && m.temperature, `跟随全局（${d.temperature}）`);
+  tempInput.step = "0.1";
+
+  const thinkSelect = document.createElement("select");
+  const follow = document.createElement("option");
+  follow.value = "";
+  follow.textContent = `跟随全局（${d.thinking}）`;
+  thinkSelect.appendChild(follow);
+  for (const lv of modelsDoc.thinking_levels || []) {
+    const opt = document.createElement("option");
+    opt.value = lv;
+    opt.textContent = lv;
+    thinkSelect.appendChild(opt);
+  }
+  thinkSelect.value = m && m.thinking ? m.thinking : "";
+
+  const isAnthropic = p.type === "anthropic";
+  modelForm.append(
+    fieldEl("模型 ID", idInput, "传给 API 的模型 id，例如 deepseek-chat。"),
+    fieldEl("显示名", nameInput, "列表中显示的名字，留空则显示模型 ID。"),
+    fieldEl("上下文窗口", ctxInput, "token 数，用于裁剪与自动压缩阈值。留空则使用 config.yaml 的全局值。"),
+    fieldEl("最大输出 tokens", maxInput, "单次回复的输出上限。留空则使用全局值。"),
+    fieldEl("思考模式", thinkSelect, isAnthropic
+      ? "Anthropic 模式下 off 之外的档位映射为 adaptive + effort。"
+      : "off 关闭思考，其余为思考强度。"),
+    fieldEl("temperature", tempInput, isAnthropic
+      ? "Anthropic 模式忽略此项：当前世代 Claude 模型不接受采样参数。"
+      : "0 ~ 2，思考开启时不生效。留空则使用全局值。"),
+  );
+  modelInputs = { id: idInput, name: nameInput, context_length: ctxInput, max_tokens: maxInput, thinking: thinkSelect, temperature: tempInput };
+
+  modelModal.classList.remove("hidden");
+  idInput.focus();
+}
+
+function closeModelModal() {
+  modelModal.classList.add("hidden");
+  modelEditing = null;
+}
+
+function showModelError(msg) {
+  modelErrorEl.textContent = msg;
+  modelErrorEl.classList.toggle("hidden", !msg);
+}
+
+async function saveModel() {
+  const entry = { id: modelInputs.id.value.trim() };
+  const name = modelInputs.name.value.trim();
+  if (name) entry.name = name;
+  // 留空的可选项直接不提交，由服务端回退到全局值
+  const ctx = modelInputs.context_length.value.trim();
+  if (ctx) entry.context_length = Number(ctx);
+  const max = modelInputs.max_tokens.value.trim();
+  if (max) entry.max_tokens = Number(max);
+  const temp = modelInputs.temperature.value.trim();
+  if (temp) entry.temperature = Number(temp);
+  if (modelInputs.thinking.value) entry.thinking = modelInputs.thinking.value;
+
+  const payload = payloadFromDoc();
+  const p = payload.providers.find((x) => x.name === modelEditing.provider);
+  p.models = (p.models || []).slice();
+  if (modelEditing.id) {
+    const i = p.models.findIndex((m) => m.id === modelEditing.id);
+    p.models[i] = entry;
+    if (payload.current.provider === p.name && payload.current.model === modelEditing.id) {
+      payload.current.model = entry.id;
+    }
+  } else {
+    p.models.push(entry);
+  }
+  try {
+    await putModels(payload);
+    closeModelModal();
+  } catch (e) {
+    showModelError("保存失败：" + e.message);
+  }
+}
+
+// ---------- 表单小工具 ----------
+
+function textInput(value) {
+  const el = document.createElement("input");
+  el.type = "text";
+  el.value = value || "";
+  return el;
+}
+
+function numberInput(value, placeholder) {
+  const el = document.createElement("input");
+  el.type = "number";
+  el.value = value === undefined || value === null ? "" : String(value);
+  el.placeholder = placeholder || "";
+  return el;
+}
+
+function fieldEl(label, input, desc) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lab = document.createElement("span");
+  lab.className = "field-label";
+  lab.textContent = label;
+  wrap.append(lab, input);
+  if (desc) {
+    const d = document.createElement("div");
+    d.className = "field-desc";
+    d.textContent = desc;
+    wrap.appendChild(d);
+  }
+  return wrap;
+}
+
+$("#btn-add-provider").addEventListener("click", () => openProviderModal(null));
+$("#btn-provider-save").addEventListener("click", saveProvider);
+$("#btn-provider-test").addEventListener("click", testProvider);
+$("#btn-provider-cancel").addEventListener("click", closeProviderModal);
+$("#btn-provider-close").addEventListener("click", closeProviderModal);
+providerForm.addEventListener("submit", (e) => { e.preventDefault(); saveProvider(); });
+providerModal.addEventListener("mousedown", (e) => {
+  if (e.target === providerModal) closeProviderModal();
+});
+
+$("#btn-model-save").addEventListener("click", saveModel);
+$("#btn-model-cancel").addEventListener("click", closeModelModal);
+$("#btn-model-close").addEventListener("click", closeModelModal);
+modelForm.addEventListener("submit", (e) => { e.preventDefault(); saveModel(); });
+modelModal.addEventListener("mousedown", (e) => {
+  if (e.target === modelModal) closeModelModal();
 });
 
 // 解析 POST 响应体中的 SSE 流，逐个产出 {type, ...} 事件对象

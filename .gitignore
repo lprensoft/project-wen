@@ -2,9 +2,10 @@
 .env
 config.yaml
 
-# 本地会话数据与插件运行时状态
+# 本地会话数据与运行时状态（models.json 含明文 API Key）
 sessions/
 plugins.state.json
+models.json
 
 # 构建产物与运行日志（锚定根目录，避免误伤 cmd/wen/）
 /wen
