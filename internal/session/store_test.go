@@ -51,6 +51,55 @@ func TestCreateAppendGet(t *testing.T) {
 	}
 }
 
+func TestTagRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	meta, _ := s.Create()
+
+	if err := s.Append(meta.ID, StoredMessage{
+		Message: llm.Message{Role: "user", Content: "带标签"}, Tag: "inner", TS: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(meta.ID, StoredMessage{
+		Message: llm.Message{Role: "user", Content: "无标签"}, TS: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTitleTagged(meta.ID, "标题", "inner"); err != nil {
+		t.Fatal(err)
+	}
+
+	gotMeta, msgs, err := s.Get(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMeta.Title != "标题" || gotMeta.Tag != "inner" {
+		t.Errorf("meta = %+v", gotMeta)
+	}
+	if msgs[0].Tag != "inner" || msgs[1].Tag != "" {
+		t.Errorf("消息标签未正确落盘: %q %q", msgs[0].Tag, msgs[1].Tag)
+	}
+
+	// SetUsage 等其它 meta 改动不应把标签抹掉（updateMeta 是整行重写的）
+	if err := s.SetUsage(meta.ID, &Usage{PromptTokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if gotMeta, _, _ = s.Get(meta.ID); gotMeta.Tag != "inner" {
+		t.Errorf("其它 meta 改动把标签抹掉了: %+v", gotMeta)
+	}
+
+	// Replace 保留 meta 行，也就保留标签
+	if err := s.Replace(meta.ID, []StoredMessage{
+		{Message: llm.Message{Role: "user", Content: "摘要"}, Kind: KindSummary, Tag: "inner", TS: time.Now()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gotMeta, msgs, _ = s.Get(meta.ID)
+	if gotMeta.Tag != "inner" || len(msgs) != 1 || msgs[0].Tag != "inner" || msgs[0].Kind != KindSummary {
+		t.Errorf("Replace 后: meta=%+v msgs=%+v", gotMeta, msgs)
+	}
+}
+
 func TestSetTitleAndList(t *testing.T) {
 	s := newTestStore(t)
 	m1, _ := s.Create()

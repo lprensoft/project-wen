@@ -38,9 +38,11 @@ type InitContext struct {
 type CompleteFunc func(ctx context.Context, prompt string) (string, error)
 
 // CompactEvent 描述一次会话历史压缩。
+// 历史带可见域标签时按标签分组压缩，每组产生一次独立的事件。
 type CompactEvent struct {
 	SessionID string
-	History   []llm.Message // 即将被摘要替换掉的完整历史
+	Scope     string        // 本组历史所属的可见域标签（空串 = 共享）
+	History   []llm.Message // 即将被摘要替换掉的这一组历史
 	Summary   string        // 已生成的摘要正文
 }
 

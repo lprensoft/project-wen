@@ -234,7 +234,7 @@ func TestTrimToBudget(t *testing.T) {
 		{Role: "user", Content: "最新问题"},
 	}
 	// 预算只够最近内容：ContextLength - MaxTokens - 2048 ≈ 4952 token
-	got := trimToBudget(Options{ContextLength: 8000, MaxTokens: 1000}, msgs)
+	got := trimToBudget(Options{ContextLength: 8000, MaxTokens: 1000}, msgs, nil)
 
 	if got[0].Role != "system" {
 		t.Fatal("system message must be kept")
@@ -250,7 +250,7 @@ func TestTrimToBudget(t *testing.T) {
 		t.Error("latest user message must be kept")
 	}
 	// 预算充足时不裁剪
-	if got2 := trimToBudget(Options{ContextLength: 1000000, MaxTokens: 4096}, msgs); len(got2) != len(msgs) {
+	if got2 := trimToBudget(Options{ContextLength: 1000000, MaxTokens: 4096}, msgs, nil); len(got2) != len(msgs) {
 		t.Errorf("should not trim under budget, got %d/%d", len(got2), len(msgs))
 	}
 }
