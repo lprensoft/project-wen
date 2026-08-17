@@ -29,6 +29,8 @@ type Provider struct {
 	Type    string  `json:"type"` // openai_compat / anthropic
 	BaseURL string  `json:"base_url"`
 	APIKey  string  `json:"api_key"`
+	// Dialect 是思考参数方言（openai_compat 专用），空串等同 deepseek。
+	Dialect string  `json:"thinking_dialect,omitempty"`
 	Models  []Model `json:"models"`
 	// Source 仅出现在响应中："config" 表示该条目来自 config.yaml、尚未被界面接管。
 	Source string `json:"source,omitempty"`
@@ -55,6 +57,7 @@ type Resolved struct {
 	Type          string
 	BaseURL       string
 	APIKey        string
+	Dialect       string // 思考参数方言
 	ModelID       string
 	Temperature   float64
 	MaxTokens     int
@@ -118,7 +121,8 @@ func baseProviders(cfg *config.Config) []Provider {
 	out := make([]Provider, 0, len(names))
 	for _, name := range names {
 		pc := cfg.Providers[name]
-		p := Provider{Name: name, Type: pc.Type, BaseURL: pc.BaseURL, APIKey: pc.APIKey, Models: []Model{}}
+		p := Provider{Name: name, Type: pc.Type, BaseURL: pc.BaseURL, APIKey: pc.APIKey,
+			Dialect: pc.ThinkingDialect, Models: []Model{}}
 		if name == cfg.Model.Provider && cfg.Model.Name != "" {
 			p.Models = append(p.Models, Model{ID: cfg.Model.Name})
 		}
@@ -171,6 +175,7 @@ func resolve(f File, def config.ModelConfig) (Resolved, error) {
 		Type:          p.Type,
 		BaseURL:       p.BaseURL,
 		APIKey:        p.APIKey,
+		Dialect:       p.Dialect,
 		ModelID:       m.ID,
 		Temperature:   def.Temperature,
 		MaxTokens:     def.MaxTokens,
@@ -324,6 +329,15 @@ func TypeOptions() []map[string]string {
 			"label":            llm.TypeLabel(t),
 			"default_base_url": llm.DefaultBaseURL(t),
 		})
+	}
+	return out
+}
+
+// DialectOptions 返回界面下拉需要的思考参数方言候选。
+func DialectOptions() []map[string]string {
+	out := make([]map[string]string, 0, len(llm.KnownDialects))
+	for _, d := range llm.KnownDialects {
+		out = append(out, map[string]string{"value": d, "label": llm.DialectLabel(d)})
 	}
 	return out
 }

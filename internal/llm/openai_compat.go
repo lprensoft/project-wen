@@ -13,19 +13,21 @@ import (
 	"time"
 )
 
-// OpenAICompat 通过 OpenAI 兼容协议对接后端（DeepSeek 等）。
-// 自实现请求与 SSE 解析，以支持 thinking / reasoning_effort / reasoning_content
-// 等 DeepSeek 扩展字段的完整往返。
+// OpenAICompat 通过 OpenAI 兼容协议对接后端（DeepSeek、MiniMax、Qwen 等）。
+// 自实现请求与 SSE 解析，以支持各家思考扩展字段的完整往返；
+// 思考参数按 dialect（思考参数方言）分派，见 dialect.go。
 type OpenAICompat struct {
 	baseURL string
 	apiKey  string
+	dialect string
 	client  *http.Client
 }
 
-func NewOpenAICompat(baseURL, apiKey string) *OpenAICompat {
+func NewOpenAICompat(baseURL, apiKey, dialect string) *OpenAICompat {
 	return &OpenAICompat{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
+		dialect: dialect,
 		// 总超时不设上限（长思考+长输出），连接阶段单独限时
 		client: &http.Client{Transport: &http.Transport{
 			ResponseHeaderTimeout: 60 * time.Second,
@@ -49,6 +51,8 @@ type wireRequest struct {
 	StreamOptions   *wireStreamOptions `json:"stream_options,omitempty"`
 	Thinking        *wireThinking      `json:"thinking,omitempty"`
 	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
+	ReasoningSplit  bool               `json:"reasoning_split,omitempty"`  // MiniMax：思考走独立字段而非 <think> 内联
+	EnableThinking  *bool              `json:"enable_thinking,omitempty"` // Qwen：思考开关
 }
 
 type wireStreamOptions struct {
@@ -98,23 +102,14 @@ type wireChunk struct {
 	Usage *Usage `json:"usage"` // 最后一个 chunk 携带（需 stream_options.include_usage）
 }
 
-func buildRequest(req ChatRequest) wireRequest {
+func buildRequest(req ChatRequest, dialect string) wireRequest {
 	wr := wireRequest{
 		Model:         req.Model,
 		MaxTokens:     req.MaxTokens,
 		Stream:        true,
 		StreamOptions: &wireStreamOptions{IncludeUsage: true},
 	}
-	switch req.Thinking {
-	case "", "off":
-		wr.Thinking = &wireThinking{Type: "disabled"}
-		t := req.Temperature
-		wr.Temperature = &t
-	default:
-		wr.Thinking = &wireThinking{Type: "enabled"}
-		wr.ReasoningEffort = req.Thinking
-		// 思考模式不支持 temperature 等采样参数，不发送
-	}
+	applyThinking(&wr, req, dialect)
 	for _, m := range req.Messages {
 		wm := wireMessage{
 			Role:             m.Role,
@@ -147,10 +142,50 @@ func buildRequest(req ChatRequest) wireRequest {
 	return wr
 }
 
+// applyThinking 按方言拼思考参数。
+// DeepSeek 在思考模式下拒绝 temperature 等采样参数，这是它特有的限制；
+// MiniMax 反而推荐思考时照常发 temperature，不能全局套用。
+func applyThinking(wr *wireRequest, req ChatRequest, dialect string) {
+	off := req.Thinking == "" || req.Thinking == "off"
+	temp := req.Temperature
+	switch dialect {
+	case "", DialectDeepSeek:
+		if off {
+			wr.Thinking = &wireThinking{Type: "disabled"}
+			wr.Temperature = &temp
+		} else {
+			wr.Thinking = &wireThinking{Type: "enabled"}
+			wr.ReasoningEffort = req.Thinking
+		}
+	case DialectMiniMax:
+		if off {
+			// 注意 M2.x 系列并不真正关闭思考（平台接受 disabled 但无效）
+			wr.Thinking = &wireThinking{Type: "disabled"}
+		} else {
+			wr.Thinking = &wireThinking{Type: "adaptive"}
+			wr.ReasoningSplit = true // 不带的话思考会以 <think> 内联进正文
+		}
+		wr.Temperature = &temp
+	case DialectQwen:
+		et := !off
+		wr.EnableThinking = &et
+		wr.Temperature = &temp
+	case DialectEffort:
+		if off {
+			wr.Temperature = &temp
+		} else {
+			wr.ReasoningEffort = req.Thinking
+			// OpenAI 系推理模型拒绝采样参数，不发送
+		}
+	case DialectNone:
+		wr.Temperature = &temp
+	}
+}
+
 // ---------- 流式调用 ----------
 
 func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	body, err := json.Marshal(buildRequest(req))
+	body, err := json.Marshal(buildRequest(req, p.dialect))
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +223,23 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 		}
 
 		acc := map[int]*partialCall{}
+		// MiniMax 兜底：即便 reasoning_split 没生效（历史模型/网关差异），
+		// 也把 <think>…</think> 从正文剥出来按思考下发
+		var tf *thinkFilter
+		if p.dialect == DialectMiniMax {
+			tf = &thinkFilter{}
+		}
 		finish := func() {
+			if tf != nil {
+				if c, r := tf.flush(); c != "" || r != "" {
+					if r != "" {
+						emit(StreamEvent{Type: EventReasoningDelta, Content: r})
+					}
+					if c != "" {
+						emit(StreamEvent{Type: EventContentDelta, Content: c})
+					}
+				}
+			}
 			if len(acc) > 0 {
 				emit(StreamEvent{Type: EventToolCalls, ToolCalls: assembleCalls(acc)})
 			}
@@ -226,8 +277,19 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 				}
 			}
 			if delta.Content != "" {
-				if !emit(StreamEvent{Type: EventContentDelta, Content: delta.Content}) {
-					return
+				out, think := delta.Content, ""
+				if tf != nil {
+					out, think = tf.feed(delta.Content)
+				}
+				if think != "" {
+					if !emit(StreamEvent{Type: EventReasoningDelta, Content: think}) {
+						return
+					}
+				}
+				if out != "" {
+					if !emit(StreamEvent{Type: EventContentDelta, Content: out}) {
+						return
+					}
 				}
 			}
 			for _, tc := range delta.ToolCalls {

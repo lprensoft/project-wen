@@ -60,6 +60,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		Type     string `json:"type"`
 		BaseURL  string `json:"base_url"`
 		APIKey   string `json:"api_key"`
+		Dialect  string `json:"thinking_dialect"`
 		Model    string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -81,7 +82,7 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, err := llm.New(req.Type, req.BaseURL, req.APIKey)
+	provider, err := llm.New(req.Type, req.BaseURL, req.APIKey, req.Dialect)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -124,7 +125,7 @@ func (s *Server) applyCurrentModel() error {
 	if err != nil {
 		return err
 	}
-	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey)
+	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey, cur.Dialect)
 	if err != nil {
 		return err
 	}
@@ -150,19 +151,21 @@ func (s *Server) modelsView() map[string]any {
 			models = []modelcfg.Model{}
 		}
 		providers = append(providers, map[string]any{
-			"name":           p.Name,
-			"type":           p.Type,
-			"base_url":       p.BaseURL,
-			"api_key_masked": modelcfg.MaskKey(p.APIKey),
-			"has_api_key":    p.APIKey != "",
-			"source":         p.Source,
-			"models":         models,
+			"name":             p.Name,
+			"type":             p.Type,
+			"base_url":         p.BaseURL,
+			"api_key_masked":   modelcfg.MaskKey(p.APIKey),
+			"has_api_key":      p.APIKey != "",
+			"thinking_dialect": p.Dialect,
+			"source":           p.Source,
+			"models":           models,
 		})
 	}
 	return map[string]any{
 		"providers": providers,
 		"current":   view.Current,
 		"types":     modelcfg.TypeOptions(),
+		"dialects":  modelcfg.DialectOptions(),
 		"defaults": map[string]any{
 			"temperature":    def.Temperature,
 			"max_tokens":     def.MaxTokens,

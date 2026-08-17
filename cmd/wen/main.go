@@ -133,7 +133,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("模型配置无效: %v", err)
 	}
-	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey)
+	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey, cur.Dialect)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}

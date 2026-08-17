@@ -45,6 +45,9 @@ type ProviderConfig struct {
 	Type    string `yaml:"type"`
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
+	// ThinkingDialect 是思考参数方言（openai_compat 模式专用）：
+	// deepseek（默认）/ minimax / qwen / effort / none。
+	ThinkingDialect string `yaml:"thinking_dialect"`
 }
 
 type AgentConfig struct {
