@@ -260,7 +260,7 @@ func (p *Plugin) cmdCompact(ctx context.Context, msg inbound) {
 }
 
 // thinkingLine / toolsLine 的措辞与 Web UI 的过程展示保持一致（🧠 思考过程 / 🔧 调用工具）。
-// 行内代码标记经 send 的纯文本转换后呈现为「工具名」。
+// 工具名带行内代码标记：markdown 模式由微信渲染成代码样式，纯文本模式转换为「工具名」。
 func thinkingLine(text string) string {
 	return "🧠 思考过程\n" + strings.TrimSpace(text)
 }
