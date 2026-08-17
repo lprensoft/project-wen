@@ -1,6 +1,6 @@
 // Package mdtext 提供把模型输出的 markdown 转成可读纯文本、以及按消息上限
 // 分段的纯函数，供不渲染（或只部分渲染）markdown 的远程 IM 通道共用
-//（QQ 的纯文本降级路径、微信等）。
+// （QQ 的纯文本降级路径、微信等）。
 package mdtext
 
 import (
