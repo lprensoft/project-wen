@@ -7,6 +7,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"wen/internal/llm"
 )
 
 // Tool 是模型可调用的工具，由插件提供。
@@ -20,6 +22,25 @@ type Tool interface {
 // InitContext 是核心传给插件的运行环境。
 type InitContext struct {
 	Workdir string // agent 工作目录
+	// StateDir 是该插件专属的持久化目录（由 Manager 按插件名生成，可能不存在，需自行创建）。
+	// 为空表示当前没有可用的持久化位置，需要落盘的插件应在 Init 中返回错误拒绝启用，
+	// 不要退化到写进程当前目录。
+	StateDir string
+}
+
+// CompactEvent 描述一次会话历史压缩。
+type CompactEvent struct {
+	SessionID string
+	History   []llm.Message // 即将被摘要替换掉的完整历史
+	Summary   string        // 已生成的摘要正文
+}
+
+// Lifecycle 是插件的可选能力：接收会话生命周期事件。
+// 未实现该接口的插件不会收到任何通知。
+type Lifecycle interface {
+	// OnCompact 在会话历史被摘要替换之前调用，此时 History 尚未被删除。
+	// 返回的非空注记会追加到摘要消息末尾；返回 error 只记录日志，不阻断压缩。
+	OnCompact(ctx context.Context, ev CompactEvent) (string, error)
 }
 
 // Plugin 是系统插件的最小协议。

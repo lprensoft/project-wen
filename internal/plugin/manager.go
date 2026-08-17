@@ -1,12 +1,14 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 )
 
@@ -62,6 +64,19 @@ func NewManager(ictx InitContext, statePath string) *Manager {
 	return &Manager{ictx: ictx, statePath: statePath, entries: map[string]*entry{}}
 }
 
+// validName 限定插件名的取值，因为它会被用来拼持久化目录。
+var validName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// initCtxFor 返回该插件专属的运行环境：在公共 InitContext 上补一个按插件名隔离的持久化目录。
+// 未配置状态文件时 StateDir 留空，由插件自行决定是否拒绝启用。
+func (m *Manager) initCtxFor(name string) InitContext {
+	ictx := m.ictx
+	if m.statePath != "" {
+		ictx.StateDir = filepath.Join(filepath.Dir(m.statePath), "plugins", name)
+	}
+	return ictx
+}
+
 // Register 注册插件并按配置与持久化状态决定是否启用。
 // 工具名与已注册插件冲突时拒绝注册。
 func (m *Manager) Register(p Plugin, cfg PluginConfig) error {
@@ -69,6 +84,9 @@ func (m *Manager) Register(p Plugin, cfg PluginConfig) error {
 	defer m.mu.Unlock()
 
 	name := p.Name()
+	if !validName.MatchString(name) {
+		return fmt.Errorf("插件名 %q 非法（只允许小写字母开头的小写字母、数字与下划线）", name)
+	}
 	if _, exists := m.entries[name]; exists {
 		return fmt.Errorf("插件 %q 重复注册", name)
 	}
@@ -102,7 +120,7 @@ func (m *Manager) Register(p Plugin, cfg PluginConfig) error {
 		e.applyCfg()
 	}
 	if e.enabled {
-		if err := p.Init(m.ictx, e.cfg); err != nil {
+		if err := p.Init(m.initCtxFor(name), e.cfg); err != nil {
 			e.enabled = false
 			log.Printf("插件 %q 初始化失败，保持禁用: %v", name, err)
 		} else {
@@ -122,7 +140,7 @@ func (m *Manager) SetEnabled(name string, on bool) error {
 		return fmt.Errorf("插件 %q 不存在", name)
 	}
 	if on && !e.inited {
-		if err := e.plugin.Init(m.ictx, e.cfg); err != nil {
+		if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
 			return fmt.Errorf("插件 %q 初始化失败: %w", name, err)
 		}
 		e.inited = true
@@ -155,9 +173,9 @@ func (m *Manager) SetConfig(name string, cfg map[string]any) error {
 	e.userCfg = next
 	e.applyCfg()
 	if e.inited {
-		if err := e.plugin.Init(m.ictx, e.cfg); err != nil {
+		if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
 			e.userCfg, e.cfg = oldUser, oldCfg
-			_ = e.plugin.Init(m.ictx, oldCfg) // 尽力恢复旧配置下的状态
+			_ = e.plugin.Init(m.initCtxFor(name), oldCfg) // 尽力恢复旧配置下的状态
 			return fmt.Errorf("插件 %q 应用配置失败: %w", name, err)
 		}
 	}
@@ -245,6 +263,34 @@ func (m *Manager) SystemPrompts() []string {
 		}
 	}
 	return out
+}
+
+// NotifyCompact 在会话历史被替换前广播压缩事件，返回各插件的注记（按注册顺序，已滤掉空串）。
+// 插件返回的错误只记录日志，不阻断压缩——压缩是上下文溢出时的保底手段，不能被插件卡住。
+func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var notes []string
+	for _, name := range m.order {
+		e := m.entries[name]
+		if !e.enabled {
+			continue
+		}
+		lc, ok := e.plugin.(Lifecycle)
+		if !ok {
+			continue
+		}
+		note, err := lc.OnCompact(ctx, ev)
+		if err != nil {
+			log.Printf("插件 %q 处理压缩事件失败: %v", name, err)
+			continue
+		}
+		if note != "" {
+			notes = append(notes, note)
+		}
+	}
+	return notes
 }
 
 // ---------- 状态持久化（plugins.state.json） ----------
