@@ -48,6 +48,8 @@ func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) Name() string { return "scheduler" }
 
+func (p *Plugin) Category() string { return plugin.CategoryBackground }
+
 func (p *Plugin) Description() string {
 	return "对话中创建定时任务（一次性/周期/每日），到点后台执行并把结果写进最近活跃的会话"
 }

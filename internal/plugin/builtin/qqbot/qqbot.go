@@ -83,6 +83,8 @@ func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) Name() string { return "qq_bot" }
 
+func (p *Plugin) Category() string { return plugin.CategoryChannel }
+
 func (p *Plugin) Description() string {
 	return "接入 QQ 官方机器人实现私聊远程会话，支持 /new /status /compact /help 命令与危险操作远程确认"
 }

@@ -41,6 +41,8 @@ func New() *Plugin {
 }
 
 func (p *Plugin) Name() string { return "scene" }
+
+func (p *Plugin) Category() string { return plugin.CategoryPersona }
 func (p *Plugin) Description() string {
 	return "场景感知：注入场景与环境设定作为演绎舞台，并把对话中出现的场景与地点记成场景记忆"
 }

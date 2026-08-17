@@ -10,6 +10,7 @@ import (
 	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
+	"wen/internal/version"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -132,6 +133,7 @@ func startSSE(w http.ResponseWriter) (func(agent.Event), func(string, any), bool
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	provider, model, thinking, contextLength := s.models.Status()
 	resp := map[string]any{
+		"version":        version.Version,
 		"provider":       provider,
 		"model":          model,
 		"thinking":       thinking,

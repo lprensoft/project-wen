@@ -72,6 +72,8 @@ func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) Name() string { return "heartbeat" }
 
+func (p *Plugin) Category() string { return plugin.CategoryBackground }
+
 func (p *Plugin) Description() string {
 	return "定时唤醒模型在最近活跃的会话上执行心跳提示词，节奏可随聊天热度动态调整"
 }

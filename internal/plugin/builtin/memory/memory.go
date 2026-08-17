@@ -76,6 +76,8 @@ func New() *Plugin {
 }
 
 func (p *Plugin) Name() string { return "memory" }
+
+func (p *Plugin) Category() string { return plugin.CategoryMemory }
 func (p *Plugin) Description() string {
 	return "跨会话的长期记忆，索引随对话注入，可按需读取全文"
 }

@@ -31,6 +31,7 @@ import (
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/server"
 	"wen/internal/session"
+	"wen/internal/version"
 )
 
 func main() {
@@ -96,6 +97,7 @@ func main() {
 			}
 			provider, model, thinking, contextLength := models.Status()
 			info := plugin.StatusInfo{
+				Version:  version.Version,
 				Provider: provider, Model: model, Thinking: thinking,
 				ContextLength: contextLength, MeasuredTokens: -1,
 			}
@@ -163,7 +165,7 @@ func main() {
 		}
 		log.Printf("插件: %-12s [%s] %s", st.Name, state, st.Description)
 	}
-	log.Printf("Wen Agent 已启动: http://%s", addr)
+	log.Printf("Wen Agent %s 已启动: http://%s", version.Version, addr)
 
 	httpServer := &http.Server{
 		Addr:              addr,

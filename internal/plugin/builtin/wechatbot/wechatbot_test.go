@@ -180,6 +180,7 @@ func testICtx(t *testing.T, store *session.Store, sessDir string, runTurn plugin
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 		Status: func(sessionID string) (plugin.StatusInfo, error) {
 			return plugin.StatusInfo{
+				Version:  "v9.9.9",
 				Provider: "testprov", Model: "m1", Thinking: "off", ContextLength: 131072,
 				HasSession: sessionID != "", MessageCount: 2, MeasuredTokens: 1234, EstTokens: 999,
 			}, nil
@@ -417,7 +418,7 @@ func TestCommands(t *testing.T) {
 
 	f.pushText(binderID, "/status")
 	m = f.expectSend(t)
-	for _, want := range []string{"📊 Agent 状态", "testprov / m1", "131,072", "1,234", "0.94"} {
+	for _, want := range []string{"📊 Wen Agent v9.9.9", "testprov / m1", "131,072", "1,234", "0.94"} {
 		if !strings.Contains(m.text, want) {
 			t.Fatalf("/status 缺少 %q:\n%s", want, m.text)
 		}

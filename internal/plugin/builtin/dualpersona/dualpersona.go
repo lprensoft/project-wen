@@ -53,6 +53,8 @@ func New() *Plugin { return &Plugin{matchMode: defaultMatch} }
 
 func (p *Plugin) Name() string { return "dual_persona" }
 
+func (p *Plugin) Category() string { return plugin.CategoryPersona }
+
 func (p *Plugin) Description() string {
 	return "表里两套人格：里人格的对话与记忆对表人格不可见，由触发词在两者之间切换"
 }
