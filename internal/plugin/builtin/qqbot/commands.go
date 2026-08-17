@@ -160,35 +160,70 @@ func (p *Plugin) cmdNew(ctx context.Context, msg inbound) {
 	p.send(ctx, msg.openid, "✨ 已新建会话（"+sid+"），接下来的消息将进入新会话。", msg.msgID)
 }
 
+// cmdStatus 的输出与 Web UI 的 /status 命令保持一致（同源数据，同样的措辞与格式）。
 func (p *Plugin) cmdStatus(ctx context.Context, msg inbound) {
 	p.mu.Lock()
-	sessions := p.sessions
+	status := p.status
 	p.mu.Unlock()
 
+	if status == nil {
+		p.send(ctx, msg.openid, "当前环境不支持状态查询。", msg.msgID)
+		return
+	}
 	sid, err := p.sessionFor(msg.openid)
 	if err != nil {
 		p.send(ctx, msg.openid, "会话初始化失败："+err.Error(), msg.msgID)
 		return
 	}
-	meta, msgs, err := sessions.Get(sid)
+	info, err := status(sid)
 	if err != nil {
-		p.send(ctx, msg.openid, "读取会话失败："+err.Error(), msg.msgID)
+		p.send(ctx, msg.openid, "获取状态失败："+err.Error(), msg.msgID)
 		return
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "📋 当前会话：%s\n", sid)
-	if meta.Title != "" {
-		fmt.Fprintf(&b, "标题：%s\n", meta.Title)
+
+	lines := []string{
+		"📊 Agent 状态",
+		"模型：" + info.Provider + " / " + info.Model,
+		"思考深度：" + info.Thinking,
+		"上下文窗口：" + comma(info.ContextLength) + " tokens",
 	}
-	fmt.Fprintf(&b, "消息数：%d\n", len(msgs))
-	if meta.LastUsage != nil {
-		fmt.Fprintf(&b, "最近一轮用量：输入 %d + 输出 %d tokens\n",
-			meta.LastUsage.PromptTokens, meta.LastUsage.CompletionTokens)
+	if info.HasSession {
+		if info.MeasuredTokens >= 0 {
+			lines = append(lines, fmt.Sprintf("当前会话：%d 条消息，实测 %s tokens（占用 %s%%）",
+				info.MessageCount, comma(info.MeasuredTokens), pct(info.MeasuredTokens, info.ContextLength)))
+		} else {
+			lines = append(lines, fmt.Sprintf("当前会话：%d 条消息，约 %s tokens（估算，占用 %s%%）",
+				info.MessageCount, comma(info.EstTokens), pct(info.EstTokens, info.ContextLength)))
+		}
+		lines = append(lines, "会话 ID："+sid)
+	} else {
+		lines = append(lines, "当前会话：无")
 	}
-	if meta.LastActiveAt != nil {
-		fmt.Fprintf(&b, "最近活跃：%s", meta.LastActiveAt.Format("2006-01-02 15:04"))
+	p.send(ctx, msg.openid, strings.Join(lines, "\n"), msg.msgID)
+}
+
+// comma 加千位分隔符，与 Web UI 的 toLocaleString 显示一致。
+func comma(n int) string {
+	s := fmt.Sprintf("%d", n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
 	}
-	p.send(ctx, msg.openid, strings.TrimRight(b.String(), "\n"), msg.msgID)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
+// pct 与 Web UI 相同的两位小数百分比。
+func pct(used, total int) string {
+	if total <= 0 {
+		return "0.00"
+	}
+	return fmt.Sprintf("%.2f", float64(used)/float64(total)*100)
 }
 
 func (p *Plugin) cmdCompact(ctx context.Context, msg inbound) {

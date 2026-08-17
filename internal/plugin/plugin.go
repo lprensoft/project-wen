@@ -41,7 +41,26 @@ type InitContext struct {
 	NewSession NewSessionFunc
 	// Compact 压缩指定会话的历史。会话忙时返回 ErrSessionBusy。为 nil 表示不可用。
 	Compact CompactFunc
+	// Status 取当前模型配置与（可选的）会话用量快照，供插件向远端界面展示状态，
+	// 与 Web UI 的状态命令同源。为 nil 表示不可用。
+	Status StatusFunc
 }
+
+// StatusInfo 是当前模型配置与会话用量的快照。
+type StatusInfo struct {
+	Provider      string
+	Model         string
+	Thinking      string
+	ContextLength int
+	// 会话部分：HasSession 为 false 时以下字段无意义（sessionID 为空或会话不存在）。
+	HasSession     bool
+	MessageCount   int
+	MeasuredTokens int // 最近一轮实测上下文用量；<0 表示无实测值，退用 EstTokens
+	EstTokens      int // 全量历史估算
+}
+
+// StatusFunc 见 InitContext.Status。sessionID 可为空（只要模型配置部分）。
+type StatusFunc func(sessionID string) (StatusInfo, error)
 
 // CompleteFunc 见 InitContext.Complete。
 type CompleteFunc func(ctx context.Context, prompt string) (string, error)
