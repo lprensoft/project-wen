@@ -8,9 +8,22 @@
 
 ## 插件架构约定
 
-核心（agent / session / server / llm）不包含具体工具；工具能力一律通过 `internal/plugin` 的 `Plugin` 接口以插件形式提供，内置插件放 `internal/plugin/builtin/<name>/`，在 `cmd/wen/main.go` 的 `buildPlugins` 注册。插件名限小写字母、数字与下划线（`Register` 强制校验，因为它会被用来拼持久化目录）。`Register` 注册的插件来源为 `builtin`，`RegisterExternal` 为 `external`，界面上以「内置 / 外源」标签区分。插件可通过 `SystemPrompt()` 注入提示词片段（可返回空串不注入），注入位置在环境块之后、用户配置提示词之前。插件可选实现 `Configurable`（`ConfigFields() []ConfigField`）声明可配置项，Web UI 设置页据此在插件卡片上显示齿轮按钮并生成配置表单；保存时由 `Manager.SetConfig` 校验、重新 `Init` 使其立即生效。运行时开关状态与界面上改过的配置存 `<配置目录>/plugins.state.json`（优先于 config.yaml，不回写 config.yaml）。
+核心（agent / session / server / llm）不包含具体工具；工具能力一律通过 `internal/plugin` 的 `Plugin` 接口以插件形式提供，内置插件放 `internal/plugin/builtin/<name>/`，在 `cmd/wen/main.go` 的 `buildPlugins` 注册。插件名限小写字母、数字与下划线（`Register` 强制校验，因为它会被用来拼持久化目录）。`Register` 注册的插件来源为 `builtin`，`RegisterExternal` 为 `external`，界面上以「内置 / 外源」标签区分。插件可通过 `SystemPrompt()` 注入提示词片段（可返回空串不注入），注入位置在环境块之后、用户配置提示词之前。插件可选实现 `Configurable`（`ConfigFields() []ConfigField`）声明可配置项，Web UI 设置页据此在插件卡片上显示齿轮按钮并生成配置表单；字段类型有 `int` / `bool` / `string` / `select` / `text`（多行，渲染成 textarea）；保存时由 `Manager.SetConfig` 校验、重新 `Init` 使其立即生效。运行时开关状态与界面上改过的配置存 `<配置目录>/plugins.state.json`（0600，因为里面含插件配置；优先于 config.yaml，不回写 config.yaml）。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有四处按此标准放行——`InitContext` 的 `StateDir`（插件专属持久化目录）、`SessionDir`（会话目录，只读用）、`Complete`（辅助模型调用）与 `Lifecycle`（会话生命周期通知），任何插件都能用，核心不知道"记忆"或"检索"这回事。
+`NormalizeConfig` 的空串语义按类型区分：数值/开关/单选的空输入表示「用默认值」（界面对清空的 number input 提交的就是空串），而 `string` / `text` 的空串是合法取值——否则用户清空文本框后保存会看到默认值又长回来，字段永远清不掉。
+
+插件可选声明 `Dependent`（`Requires() []string`）与 `Conflicting`（`Conflicts() []string`）。依赖是硬性的：依赖未满足时拒绝启用（校验放在 `Init` **之前**，避免产生副作用），被依赖的插件也无法在依赖方仍启用时关闭——拒绝而非级联关闭，因为界面没有确认或提示通道，级联只会表现为「另一个开关自己变灰了」。冲突只告警不阻止。依赖校验必须在**全部 `Register` 之后**由 `Manager.Resolve()` 统一做（register 是逐个进行的，依赖方可能先注册），且要显式检出依赖环。被强制关闭的插件记在 `entry.forcedOff` 而不是直接改 `enabled`：状态文件是全量重写的，直接改会把强制关闭固化成用户意图，依赖恢复后也回不来。
+
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有六处按此标准放行：
+
+1. `InitContext.StateDir` —— 插件专属持久化目录；
+2. `InitContext.SessionDir` —— 会话目录，只读用；
+3. `InitContext.Complete` —— 辅助模型调用；
+4. `Lifecycle` —— 会话生命周期通知；
+5. **可见域**（`Scope` / `ScopeDecider` / `TurnPrompter`，见下节）；
+6. `Requires` / `Conflicts` —— 插件间的依赖与互斥声明。
+
+任何插件都能用，核心不知道「记忆」「检索」或「人格」这回事。
 
 ## 插件持久化与生命周期约定
 
@@ -18,13 +31,32 @@
 
 `InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。
 
-`Lifecycle.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史——这是绕开 `SystemPrompt()` 拿不到 sessionID 的办法。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。
+`Lifecycle.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，`roleplay` 借此保住最后一处场景演绎，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。历史带可见域标签时按标签分组，每组一次事件，`CompactEvent.Scope` 给出本组的标签。
 
 压缩这个时机上要做的事必须**当场做完**，不能靠提示模型"稍后自己处理"：自动压缩无人值守触发、历史随即被物理删除，而"稍后"可能永远不会到来（会话可能就此结束）。
 
 注意 `Init` 可能在运行时被反复调用（`SetConfig` 会重新 `Init`），此时可能有 in-flight 的 `Execute` 正在读插件字段——有状态的插件必须自己加锁，不要照抄现有几个内置插件在 `Init` 里裸写字段的写法。
 
 插件向 system 消息注入的内容会随**每一轮** LLM 调用重复发送（`trimToBudget` 永不裁 `msgs[0]`），且计入自动压缩的判据。因此体量会增长的注入内容必须有硬上限，超限时降级要保住"存在性"信息而不是整条丢弃。
+
+## 可见域约定
+
+同一会话内的消息可以分区，使一部分内容对某些轮次不可见（`internal/plugin/scope.go`）。**标签的语义完全由插件定义**，核心只做三件事：给消息打标签、按标签过滤历史、按标签分组压缩——它不知道"人格"这回事。约定 **空标签始终对所有域可见**：升级前无标签的历史因此继续可用，"共享"也不需要任何插件参与就成立。
+
+分两阶段：`ScopeDecider.DecideScope` 先定域，`TurnPrompter.TurnPrompt` 再按已定的域注入一次性提示词（不落盘）。之所以分开，是因为 `memory` 要按可读域过滤记忆索引，而域由 `dual_persona` 裁决，单阶段广播里两者无序。可见域是**单所有者**机制：按注册顺序第一个返回非零 `Scope` 的插件胜出，不做多插件合并（`Write` 来自一个插件而 `Read` 来自另一个是无法推理的组合）。
+
+**不要改 `SystemPrompt()` 的签名**：它的契约是廉价、无副作用、随时可调（`Manager.List` 会对**禁用**的插件也调用它），需要会话上下文的内容一律走 `TurnPrompt`。`memory` 的记忆索引就是按这条从 `SystemPrompt` 挪走的。
+
+几条实现上必须守住的规则：
+
+- **可见域一轮只裁决一次**，随后全程从 `ctx` 取（`plugin.ScopeFrom`）。若在工具执行阶段再裁一次，同一轮的 assistant 与 tool 结果可能落到不同标签，`tool_use` / `tool_result` 会被永久拆散。
+- **标签按整轮统一分配**，过滤因此是整轮粒度的，工具调用与其结果同去同留。`agent.sanitizeSequence` 兜住不变量被破坏的情况（外部改过 jsonl、进程中途被杀）。
+- `Scope.Write` 会被插件拿去拼持久化目录，故按插件名的字符集校验，不合规的裁决整条作废降级为零值。按域分目录用 `plugin.DomainDir` / `plugin.ReadDomains`（空标签用基准目录本身，其余用同级的 `<base>-<tag>`），两个插件各写一套迟早漂移。
+- **计数与报错也会泄漏存在性**：条数、"另有 N 条"、"已存在同名记忆 X" 这类输出必须按可读域算，否则内容藏住了、"存在什么"还是露了出来。会话标题同理（它取自首条用户消息，故 `session.Meta` 也带 `Tag`）。
+- 压缩必须**按域分组**，每组一条带该组标签的摘要，否则不可读域的内容会经无标签的摘要泄漏出去。组序按标签**最后一次出现**排，使压缩不反转"最后一条带标签消息"所指向的域。
+- 自动压缩判据取「实测用量」与「全量历史估算」的较大者：实测用量只反映本轮实际发出的、已过滤的上下文，只看它会让上下文很小的可见域永不触发压缩，而其它域的历史仍在无限增长。
+
+**可见域是上下文隔离，不是沙箱。** `read_file` 与 `exec_command` 是通用的文件与命令通道，能直接读到会话文件、记忆目录与插件状态文件，绕过一切提示词与工具层过滤。`dual_persona` 把它们声明为 `Conflicts` 告警，但不阻止——这是产品前提，不是待修的漏洞。
 
 ## 模型配置约定
 
