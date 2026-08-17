@@ -9,8 +9,18 @@ import (
 	"strings"
 	"time"
 
+	"wen/internal/plugin"
 	"wen/internal/session"
 )
+
+// visibleTitle 返回可以示人的会话标题。标题取自首条用户消息，属于生成它的那一轮
+// 的可见域；不加这道判断，标题就成了绕过可见域的旁路。
+func visibleTitle(meta session.Meta, sc plugin.Scope) string {
+	if meta.Title == "" || !sc.CanRead(meta.Tag) {
+		return "(无标题)"
+	}
+	return meta.Title
+}
 
 var errNotReady = fmt.Errorf("会话检索尚未就绪")
 
@@ -38,7 +48,7 @@ func (t *searchTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *searchTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *searchTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Keyword string `json:"keyword"`
 		From    string `json:"from"`
@@ -79,6 +89,7 @@ func (t *searchTool) Execute(_ context.Context, args json.RawMessage) (string, e
 		scanned, truncatedScan = scanned[:s.maxScanSessions], true
 	}
 
+	sc := plugin.ScopeFrom(ctx)
 	kw := strings.ToLower(strings.TrimSpace(a.Keyword))
 	var b strings.Builder
 	hits := 0
@@ -92,6 +103,9 @@ func (t *searchTool) Execute(_ context.Context, args json.RawMessage) (string, e
 		}
 		var matched []session.StoredMessage
 		for _, m := range msgs {
+			if !sc.CanRead(m.Tag) {
+				continue
+			}
 			if !inRange(m.TS, from, to) {
 				continue
 			}
@@ -105,11 +119,7 @@ func (t *searchTool) Execute(_ context.Context, args json.RawMessage) (string, e
 		}
 		hits++
 
-		title := meta.Title
-		if title == "" {
-			title = "(无标题)"
-		}
-		fmt.Fprintf(&b, "## %s ｜ %s ｜ 命中 %d 条\n", title, c.id, len(matched))
+		fmt.Fprintf(&b, "## %s ｜ %s ｜ 命中 %d 条\n", visibleTitle(meta, sc), c.id, len(matched))
 		shown := matched
 		if len(shown) > s.maxSnippets {
 			shown = shown[:s.maxSnippets]
@@ -128,7 +138,7 @@ func (t *searchTool) Execute(_ context.Context, args json.RawMessage) (string, e
 	}
 
 	// 被压缩过的会话只剩一条摘要，其原文在归档里——这部分不查就是盲区
-	archives, err := searchArchives(s.archiveDir, a.Keyword, from, to, s.maxSnippets)
+	archives, err := searchArchives(s.archiveDir, sc, a.Keyword, from, to, s.maxSnippets)
 	if err == nil && len(archives) > 0 {
 		b.WriteString("## 压缩归档\n")
 		for _, h := range archives {
@@ -174,7 +184,7 @@ func (t *archiveTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *archiveTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *archiveTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name    string `json:"name"`
 		Keyword string `json:"keyword"`
@@ -188,9 +198,10 @@ func (t *archiveTool) Execute(_ context.Context, args json.RawMessage) (string, 
 	if s.archiveDir == "" {
 		return "", fmt.Errorf("当前没有启用压缩归档")
 	}
+	sc := plugin.ScopeFrom(ctx)
 
 	if strings.TrimSpace(a.Name) == "" {
-		all, err := searchArchives(s.archiveDir, "", time.Time{}, time.Time{}, 0)
+		all, err := searchArchives(s.archiveDir, sc, "", time.Time{}, time.Time{}, 0)
 		if err != nil {
 			return "", err
 		}
@@ -205,12 +216,16 @@ func (t *archiveTool) Execute(_ context.Context, args json.RawMessage) (string, 
 		return clip(strings.TrimRight(b.String(), "\n"), s.maxBytes), nil
 	}
 
-	// 归档名来自本插件自己的输出，仍要确认它没有指向目录外
-	name := filepath.Base(strings.TrimSpace(a.Name))
-	if !strings.HasSuffix(name, ".md") {
-		name += ".md"
+	// 按名读取是最直接的越权入口：必须先确认这个名字既不指向目录外，
+	// 也不落在本轮读不到的可见域里
+	tag, name, err := parseArchiveRef(a.Name)
+	if err != nil {
+		return "", err
 	}
-	raw, err := os.ReadFile(filepath.Join(s.archiveDir, name))
+	if !sc.CanRead(tag) {
+		return "", fmt.Errorf("没有名为 %q 的归档", a.Name)
+	}
+	raw, err := os.ReadFile(filepath.Join(plugin.DomainDir(s.archiveDir, tag), name))
 	if err != nil {
 		return "", fmt.Errorf("没有名为 %q 的归档", a.Name)
 	}
@@ -254,7 +269,7 @@ func (t *readTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *readTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *readTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		ID      string `json:"id"`
 		Keyword string `json:"keyword"`
@@ -288,17 +303,25 @@ func (t *readTool) Execute(_ context.Context, args json.RawMessage) (string, err
 		return "", err
 	}
 
+	// 可读条数而不是全部条数：条数本身也会泄漏「这个会话里还有别的内容」
+	sc := plugin.ScopeFrom(ctx)
+	readable := 0
+	for _, m := range msgs {
+		if sc.CanRead(m.Tag) {
+			readable++
+		}
+	}
+
 	kw := strings.ToLower(strings.TrimSpace(a.Keyword))
 	var b strings.Builder
-	title := meta.Title
-	if title == "" {
-		title = "(无标题)"
-	}
 	fmt.Fprintf(&b, "# %s ｜ %s ｜ 创建于 %s ｜ 共 %d 条消息\n\n",
-		title, a.ID, meta.CreatedAt.Format("2006-01-02 15:04"), len(msgs))
+		visibleTitle(meta, sc), a.ID, meta.CreatedAt.Format("2006-01-02 15:04"), readable)
 
 	shown := 0
 	for _, m := range msgs {
+		if !sc.CanRead(m.Tag) {
+			continue
+		}
 		if !inRange(m.TS, from, to) {
 			continue
 		}
@@ -320,7 +343,7 @@ func (t *readTool) Execute(_ context.Context, args json.RawMessage) (string, err
 		}
 	}
 	if shown == 0 {
-		return fmt.Sprintf("会话 %s 共 %d 条消息，没有符合条件的。", a.ID, len(msgs)), nil
+		return fmt.Sprintf("会话 %s 共 %d 条消息，没有符合条件的。", a.ID, readable), nil
 	}
 	return clip(strings.TrimRight(b.String(), "\n"), s.maxBytes), nil
 }

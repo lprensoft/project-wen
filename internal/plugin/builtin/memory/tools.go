@@ -33,7 +33,7 @@ func (t *listTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *listTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *listTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Keyword string `json:"keyword"`
 		Type    string `json:"type"`
@@ -47,7 +47,8 @@ func (t *listTool) Execute(_ context.Context, args json.RawMessage) (string, err
 	if s.store == nil {
 		return "", errNotReady
 	}
-	entries, err := s.store.List()
+	// 只数、只列本轮可读的记忆：条数本身也会泄漏「存在什么」
+	entries, err := t.p.visibleEntries(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -132,7 +133,7 @@ func (t *saveTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *saveTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -146,12 +147,17 @@ func (t *saveTool) Execute(_ context.Context, args json.RawMessage) (string, err
 	if strings.TrimSpace(a.Content) == "" {
 		return "", fmt.Errorf("记忆内容不能为空")
 	}
-	s := t.p.snapshot()
-	if s.store == nil {
+	if t.p.snapshot().store == nil {
+		return "", errNotReady
+	}
+	// 写入本轮的可见域。同名检查也只在这个库内进行——若跨域检查，
+	// 「已存在同名记忆」这条报错就会把不可读域的记忆标题吐出来。
+	store := t.p.writeStore(ctx)
+	if store == nil {
 		return "", errNotReady
 	}
 
-	e, err := s.store.Save(Entry{
+	e, err := store.Save(Entry{
 		Name:        a.Name,
 		Description: a.Description,
 		Type:        a.Type,
@@ -190,18 +196,22 @@ func (t *deleteTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *deleteTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *deleteTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("参数格式错误: %w", err)
 	}
-	s := t.p.snapshot()
-	if s.store == nil {
+	if t.p.snapshot().store == nil {
 		return "", errNotReady
 	}
-	e, err := s.store.Delete(a.Name)
+	// 先在可读范围内定位，再删回它所在的库：不可读域的记忆连删都不该删得动
+	found, store, err := t.p.findVisible(ctx, a.Name)
+	if err != nil {
+		return "", err
+	}
+	e, err := store.Delete(found.Name)
 	if err != nil {
 		return "", err
 	}
@@ -228,7 +238,7 @@ func (t *recallTool) Schema() json.RawMessage {
 	}`)
 }
 
-func (t *recallTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *recallTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name string `json:"name"`
 	}
@@ -242,7 +252,7 @@ func (t *recallTool) Execute(_ context.Context, args json.RawMessage) (string, e
 	if s.store == nil {
 		return "", errNotReady
 	}
-	e, err := s.store.Get(a.Name)
+	e, _, err := t.p.findVisible(ctx, a.Name)
 	if err != nil {
 		return "", err
 	}

@@ -43,7 +43,13 @@ type extracted struct {
 // extractMemories 用一次独立的模型调用从历史中提炼记忆并保存，返回实际新增的条目。
 // 已存在同名记忆时跳过而不是覆盖：压缩摘要里的内容可能已经是残缺副本，覆盖会让原文退化。
 func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugin.CompleteFunc, history []llm.Message) ([]Entry, error) {
-	existing, err := s.store.List()
+	store := p.writeStore(ctx)
+	if store == nil {
+		return nil, errNotReady
+	}
+	// 已存在的标题只取本轮可读范围：跨域取的话，不可读域的标题会莫名压掉
+	// 本域一条合法的保存
+	existing, err := p.visibleEntries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +82,7 @@ func (p *Plugin) extractMemories(ctx context.Context, s settings, complete plugi
 		if _, ok := findEntry(existing, it.Name); ok {
 			continue // 已有同名记忆，不覆盖
 		}
-		e, err := s.store.Save(Entry{
+		e, err := store.Save(Entry{
 			Name:        it.Name,
 			Description: it.Description,
 			Type:        it.Type,

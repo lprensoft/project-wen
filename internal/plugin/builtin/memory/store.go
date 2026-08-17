@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +47,9 @@ type Entry struct {
 	Created     time.Time
 	Updated     time.Time
 	Content     string // 正文
+	// Domain 是这条记忆所属的可见域标签，不落盘：它由所在的库决定，
+	// 在跨库合并后用于把 recall / delete 送回正确的库。
+	Domain string
 }
 
 // Store 管理记忆目录。目录内容可被用户在进程外直接修改，因此每次读取都会
@@ -99,13 +101,7 @@ func (s *Store) listLocked() ([]Entry, error) {
 		}
 		entries = append(entries, e)
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		ri, rj := typeRank(entries[i].Type), typeRank(entries[j].Type)
-		if ri != rj {
-			return ri < rj
-		}
-		return entries[i].Name < entries[j].Name
-	})
+	sortEntries(entries)
 
 	s.cache, s.cacheKey, s.dirty = entries, key, false
 	return entries, nil
