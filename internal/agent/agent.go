@@ -103,6 +103,35 @@ func (a *Agent) Options() Options {
 	return a.opts
 }
 
+// Complete 用当前模型做一次一问一答的辅助调用：不带工具、不启用思考、不写入任何会话。
+// 供插件完成提炼、归类这类内部工作，与用户对话相互独立。
+func (a *Agent) Complete(ctx context.Context, prompt string) (string, error) {
+	provider, opts := a.snapshot()
+	events, err := provider.ChatStream(ctx, llm.ChatRequest{
+		Model:       opts.Model,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt}},
+		Temperature: opts.Temperature,
+		MaxTokens:   opts.MaxTokens,
+		Thinking:    "off",
+	})
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	for ev := range events {
+		switch ev.Type {
+		case llm.EventContentDelta:
+			out.WriteString(ev.Content)
+		case llm.EventError:
+			return "", ev.Err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
 const titleMaxRunes = 30
 
 // Run 处理一条用户消息：写入 session、驱动工具循环、通过 emit 实时发布事件。

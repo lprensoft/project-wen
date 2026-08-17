@@ -48,6 +48,54 @@ func TestInitRequiresStateDir(t *testing.T) {
 	}
 }
 
+func TestScopeDecidesMemoryDir(t *testing.T) {
+	state, work := t.TempDir(), t.TempDir()
+	ictx := plugin.InitContext{StateDir: state, Workdir: work}
+
+	global := New()
+	if err := global.Init(ictx, map[string]any{"scope": "global"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := global.snapshot().store.Dir(), filepath.Join(state, "memories"); got != want {
+		t.Errorf("全局库目录 = %q, want %q", got, want)
+	}
+
+	proj := New()
+	if err := proj.Init(ictx, map[string]any{"scope": "project"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := proj.snapshot().store.Dir(), filepath.Join(work, ".wen", "memories"); got != want {
+		t.Errorf("项目库目录 = %q, want %q", got, want)
+	}
+
+	// 两个范围互不可见
+	global.snapshot().store.Save(Entry{Name: "全局条目", Type: "事实", Content: "c"}, false)
+	proj.snapshot().store.Save(Entry{Name: "项目条目", Type: "事实", Content: "c"}, false)
+	if s := global.SystemPrompt(); !strings.Contains(s, "全局条目") || strings.Contains(s, "项目条目") {
+		t.Errorf("全局库不应看到项目记忆:\n%s", s)
+	}
+	if s := proj.SystemPrompt(); !strings.Contains(s, "项目条目") || strings.Contains(s, "全局条目") {
+		t.Errorf("项目库不应看到全局记忆:\n%s", s)
+	}
+}
+
+func TestScopeProjectRequiresWorkdir(t *testing.T) {
+	p := New()
+	err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"scope": "project"})
+	if err == nil {
+		t.Fatal("按项目分库但没有工作目录时应拒绝启用")
+	}
+	if !strings.Contains(err.Error(), "工作目录") {
+		t.Errorf("错误信息应说明原因: %v", err)
+	}
+
+	// 反过来：没有 StateDir 时项目范围仍可用（记忆落在工作目录下）
+	q := New()
+	if err := q.Init(plugin.InitContext{Workdir: t.TempDir()}, map[string]any{"scope": "project"}); err != nil {
+		t.Errorf("项目范围不应依赖 StateDir: %v", err)
+	}
+}
+
 func TestSystemPromptEmptyWithoutMemories(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	if got := p.SystemPrompt(); got != "" {

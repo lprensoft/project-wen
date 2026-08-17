@@ -432,6 +432,37 @@ func TestCompactNotifiesPluginsBeforeReplace(t *testing.T) {
 	}
 }
 
+func TestComplete(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	provider := &mockProvider{turns: []mockTurn{{content: "提炼结果"}}}
+	ag := New(provider, newTestManager(t, echoPlugin{}), store,
+		Options{Model: "test", Thinking: "high", MaxTokens: 4096})
+
+	got, err := ag.Complete(context.Background(), "请提炼")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "提炼结果" {
+		t.Errorf("Complete = %q", got)
+	}
+
+	// 辅助调用不带工具、不启用思考，也不写入任何会话
+	req := provider.reqs[0]
+	if len(req.Tools) != 0 {
+		t.Errorf("辅助调用不应带工具: %v", req.Tools)
+	}
+	if req.Thinking != "off" {
+		t.Errorf("thinking = %q, want off", req.Thinking)
+	}
+	if len(req.Messages) != 1 || req.Messages[0].Role != llm.RoleUser {
+		t.Errorf("应只发一条 user 消息: %+v", req.Messages)
+	}
+	if _, msgs, _ := store.Get(meta.ID); len(msgs) != 0 {
+		t.Errorf("辅助调用不应写入会话，实际 %d 条", len(msgs))
+	}
+}
+
 func TestPluginPromptInjectionOrder(t *testing.T) {
 	store, _ := session.NewStore(t.TempDir())
 	meta, _ := store.Create()

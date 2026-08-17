@@ -26,7 +26,16 @@ type InitContext struct {
 	// 为空表示当前没有可用的持久化位置，需要落盘的插件应在 Init 中返回错误拒绝启用，
 	// 不要退化到写进程当前目录。
 	StateDir string
+	// SessionDir 是会话存储目录。仅供需要读取会话数据的插件使用，写入请走 StateDir。
+	SessionDir string
+	// Complete 用当前模型做一次一问一答的辅助调用（不带工具、不启用思考、不写入会话），
+	// 供插件完成提炼、归类这类内部工作。为 nil 表示当前不可用，插件应据此降级而不是报错。
+	// 注意每次调用都产生真实的模型开销，不要放在高频路径上。
+	Complete CompleteFunc
 }
+
+// CompleteFunc 见 InitContext.Complete。
+type CompleteFunc func(ctx context.Context, prompt string) (string, error)
 
 // CompactEvent 描述一次会话历史压缩。
 type CompactEvent struct {
@@ -210,6 +219,22 @@ func CfgInt(cfg map[string]any, key string, def int) int {
 func CfgString(cfg map[string]any, key, def string) string {
 	if v, ok := cfg[key].(string); ok && v != "" {
 		return v
+	}
+	return def
+}
+
+// CfgBool 从插件配置中取布尔值，缺失时返回默认值。
+// 注意不能用「零值即缺失」判断：false 是合法取值。
+func CfgBool(cfg map[string]any, key string, def bool) bool {
+	if v, ok := cfg[key]; ok {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			if parsed, err := strconv.ParseBool(b); err == nil {
+				return parsed
+			}
+		}
 	}
 	return def
 }

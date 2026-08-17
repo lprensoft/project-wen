@@ -10,13 +10,17 @@
 
 核心（agent / session / server / llm）不包含具体工具；工具能力一律通过 `internal/plugin` 的 `Plugin` 接口以插件形式提供，内置插件放 `internal/plugin/builtin/<name>/`，在 `cmd/wen/main.go` 的 `buildPlugins` 注册。插件名限小写字母、数字与下划线（`Register` 强制校验，因为它会被用来拼持久化目录）。`Register` 注册的插件来源为 `builtin`，`RegisterExternal` 为 `external`，界面上以「内置 / 外源」标签区分。插件可通过 `SystemPrompt()` 注入提示词片段（可返回空串不注入），注入位置在环境块之后、用户配置提示词之前。插件可选实现 `Configurable`（`ConfigFields() []ConfigField`）声明可配置项，Web UI 设置页据此在插件卡片上显示齿轮按钮并生成配置表单；保存时由 `Manager.SetConfig` 校验、重新 `Init` 使其立即生效。运行时开关状态与界面上改过的配置存 `<配置目录>/plugins.state.json`（优先于 config.yaml，不回写 config.yaml）。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有两处按此标准放行——`InitContext.StateDir`（插件专属持久化目录）与 `Lifecycle`（会话生命周期通知），任何插件都能用，核心不知道"记忆"这回事。
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有四处按此标准放行——`InitContext` 的 `StateDir`（插件专属持久化目录）、`SessionDir`（会话目录，只读用）、`Complete`（辅助模型调用）与 `Lifecycle`（会话生命周期通知），任何插件都能用，核心不知道"记忆"或"检索"这回事。
 
 ## 插件持久化与生命周期约定
 
-需要落盘的插件用 `InitContext.StateDir` = `<配置目录>/plugins/<插件名>/`（由 `Manager.initCtxFor` 从 `statePath` 推导，目录可能不存在需自行创建）。该字段为空表示没有可用的持久化位置，插件应在 `Init` 中返回错误拒绝启用，**不要**退化到写进程当前目录。`plugins/` 已在 `.gitignore` 中。
+需要落盘的插件用 `InitContext.StateDir` = `<配置目录>/plugins/<插件名>/`（由 `Manager.initCtxFor` 从 `statePath` 推导，目录可能不存在需自行创建）。该字段为空表示没有可用的持久化位置，插件应在 `Init` 中返回错误拒绝启用，**不要**退化到写进程当前目录。`plugins/` 已在 `.gitignore` 中。要读会话数据用 `SessionDir`（只读；写入一律走 `StateDir`）。
 
-`Lifecycle.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` 广播（自动与手动压缩共用一个调用点）。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史——这是绕开 `SystemPrompt()` 拿不到 sessionID 的办法。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。
+`InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。
+
+`Lifecycle.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史——这是绕开 `SystemPrompt()` 拿不到 sessionID 的办法。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。
+
+压缩这个时机上要做的事必须**当场做完**，不能靠提示模型"稍后自己处理"：自动压缩无人值守触发、历史随即被物理删除，而"稍后"可能永远不会到来（会话可能就此结束）。
 
 注意 `Init` 可能在运行时被反复调用（`SetConfig` 会重新 `Init`），此时可能有 in-flight 的 `Execute` 正在读插件字段——有状态的插件必须自己加锁，不要照抄现有几个内置插件在 `Init` 里裸写字段的写法。
 

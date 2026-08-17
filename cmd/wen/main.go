@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/readfile"
+	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/server"
 	"wen/internal/session"
@@ -43,7 +45,14 @@ func main() {
 		workdir, _ = os.Getwd()
 	}
 
-	plugins := buildPlugins(cfg, workdir)
+	// Agent 与插件互相需要：插件在 Agent 之前构造，故辅助调用用闭包延迟到实际使用时取值
+	var ag *agent.Agent
+	plugins := buildPlugins(cfg, workdir, func(ctx context.Context, prompt string) (string, error) {
+		if ag == nil {
+			return "", fmt.Errorf("模型尚未就绪")
+		}
+		return ag.Complete(ctx, prompt)
+	})
 
 	store, err := session.NewStore(cfg.SessionDir())
 	if err != nil {
@@ -64,7 +73,7 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 
-	ag := agent.New(provider, plugins, store, agent.Options{
+	ag = agent.New(provider, plugins, store, agent.Options{
 		Model:         cur.ModelID,
 		Temperature:   cur.Temperature,
 		MaxTokens:     cur.MaxTokens,
@@ -100,12 +109,16 @@ func main() {
 }
 
 // buildPlugins 注册全部内置系统插件，配置缺省时默认启用。
-func buildPlugins(cfg *config.Config, workdir string) *plugin.Manager {
+// complete 供插件发起辅助模型调用；它在 Agent 建好之前就要传进来，故用闭包延迟取值。
+func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFunc) *plugin.Manager {
 	m := plugin.NewManager(
-		plugin.InitContext{Workdir: workdir},
+		plugin.InitContext{Workdir: workdir, SessionDir: cfg.SessionDir(), Complete: complete},
 		filepath.Join(cfg.BaseDir, "plugins.state.json"),
 	)
-	for _, p := range []plugin.Plugin{readfile.New(), execcmd.New(), webfetch.New(), memory.New()} {
+	builtins := []plugin.Plugin{
+		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
+	}
+	for _, p := range builtins {
 		pc, ok := cfg.Plugins[p.Name()]
 		if !ok {
 			pc = plugin.PluginConfig{Enabled: true}

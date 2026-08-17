@@ -83,10 +83,11 @@ func Default() *Config {
 		},
 		// 系统插件默认全部启用；config.yaml 的 plugins 段可覆盖（yaml 按 key 合并）
 		Plugins: map[string]plugin.PluginConfig{
-			"read_file":    {Enabled: true},
-			"exec_command": {Enabled: true},
-			"web_fetch":    {Enabled: true},
-			"memory":       {Enabled: true},
+			"read_file":      {Enabled: true},
+			"exec_command":   {Enabled: true},
+			"web_fetch":      {Enabled: true},
+			"memory":         {Enabled: true},
+			"session_search": {Enabled: true},
 		},
 	}
 }
