@@ -716,7 +716,7 @@ function openPluginConfig(p) {
     configFormEl.appendChild(buildConfigField(f, values[f.key]));
   }
   configModal.classList.remove("hidden");
-  const first = configFormEl.querySelector("input, select");
+  const first = configFormEl.querySelector("input, select, textarea");
   if (first) first.focus();
 }
 
@@ -755,6 +755,11 @@ function buildConfigField(f, value) {
       opt.textContent = o.label || o.value;
       el.appendChild(opt);
     }
+    wrap.append(label, el);
+  } else if (f.type === "text") {
+    el = document.createElement("textarea");
+    el.rows = 8;
+    el.spellcheck = false;
     wrap.append(label, el);
   } else {
     el = document.createElement("input");
@@ -795,13 +800,16 @@ function setFieldValue(f, el, v) {
   else el.value = v === undefined || v === null ? "" : String(v);
 }
 
-// readConfigValues 收集表单值；数值以字符串提交，由服务端统一校验并给出中文提示
+// readConfigValues 收集表单值；数值以字符串提交，由服务端统一校验并给出中文提示。
+// 多行文本不做 trim：首尾的空行也是用户排版的一部分，服务端只统一换行符。
 function readConfigValues() {
   const out = {};
   for (const f of configPlugin.config_fields || []) {
     const el = configInputs.get(f.key);
     if (!el) continue;
-    out[f.key] = f.type === "bool" ? el.checked : el.value.trim();
+    if (f.type === "bool") out[f.key] = el.checked;
+    else if (f.type === "text") out[f.key] = el.value;
+    else out[f.key] = el.value.trim();
   }
   return out;
 }
