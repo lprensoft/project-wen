@@ -610,7 +610,11 @@ body {
 }
 .plugin-card-blocked .plugin-card-name,
 .plugin-card-blocked .plugin-card-desc { opacity: 0.6; }
-.plugin-card-blocked .switch { opacity: 0.5; cursor: not-allowed; }
+/* 依赖未满足是「不能点」而不是「正在忙」，指针要落在 .slider 上——
+   鼠标实际悬停的是它，只写在 .switch 上会被下面那条 :disabled 规则盖掉 */
+.plugin-card-blocked .switch,
+.plugin-card-blocked .switch .slider,
+.plugin-card-blocked .switch input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
 
 /* 说明文字撑开剩余高度，等高拉伸后的空白留在卡片底部而不是标签与说明之间 */
 .plugin-card-desc { font-size: 12.5px; color: var(--text-dim); flex: 1; }
@@ -640,7 +644,8 @@ body {
 }
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
-.switch input:disabled + .slider { opacity: 0.5; cursor: wait; }
+/* 切换请求进行中（几十毫秒）：这时确实是在忙 */
+.switch input:disabled + .slider { opacity: 0.5; cursor: progress; }
 
 /* ---------- 模型配置 ---------- */
 .models-toolbar {
@@ -814,10 +819,11 @@ body {
 }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
 
-/* 多行文本：只允许纵向拉伸，横向拉伸会撑破弹窗布局 */
+/* 多行文本：只允许纵向拉伸，横向拉伸会撑破弹窗布局。
+   min-height 要低于 rows 给出的高度，否则用户拉不小它。 */
 .field textarea {
   resize: vertical;
-  min-height: 120px;
+  min-height: 64px;
   line-height: 1.6;
   white-space: pre-wrap;
 }

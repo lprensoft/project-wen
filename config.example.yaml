@@ -34,86 +34,10 @@ agent:
   max_turns: 20              # 单次用户请求内工具循环上限
   workdir: ""                # 工作目录（插件与环境块共用），空 = 进程当前目录
 
-# 系统插件：enabled 与 config 为初始值；运行时的开关（/plugins 或 API）与在
-# 设置页里改过的插件配置持久化在 <配置目录>/plugins.state.json，
-# 优先于这里的初始值，不会回写本文件。
+# 插件的开关与配置不在这里配：它们由设置页维护，存于 <配置目录>/plugins.state.json。
+# 首次运行时按各插件声明的默认参数启用；必须先配置才有意义的插件（roleplay、
+# dual_persona）默认关闭，配好再打开。
 # 插件自身的数据落在 <配置目录>/plugins/<插件名>/（已在 .gitignore 中）。
-plugins:
-  read_file:
-    enabled: true
-    config: {}               # 可选 max_bytes，默认 65536
-  exec_command:
-    enabled: true
-    config:
-      guard: dangerous       # dangerous = 删除、覆盖、改写提交历史、改动系统配置等操作先由你确认（默认）
-                             # all       = 除只读命令外一律确认
-                             # off       = 不拦截
-                             # 注意这是按命令文本判断的，挡的是误操作，挡不住刻意混淆
-                             #（base64、变量拼接、自己写个脚本再执行）——只有 all 这一档是完整的。
-                             # 个别极高危命令（整盘格式化、删除系统根目录、销毁备份等）一律直接拒绝，不询问。
-      timeout_seconds: 60    # 单条命令的最长执行时间
-      confirm_timeout_seconds: 300   # 等待确认的上限，超时按拒绝处理
-  web_fetch:
-    enabled: true
-    config:
-      timeout_seconds: 20
-      max_bytes: 65536
-  # 长期记忆
-  memory:
-    enabled: true
-    config:
-      scope: global            # global = <配置目录>/plugins/memory/memories/（所有工作目录共享）
-                               # project = <工作目录>/.wen/memories/（按项目分库，建议加进项目的 .gitignore）
-                               # 切换后原位置的记忆不会自动迁移
-      max_index_entries: 200   # 索引最多列出条数
-      max_index_bytes: 16384   # 索引字节上限（约 170 条带摘要；实测一条约 31 token）
-                               # 注意：索引在每一轮对话中都会重复发送，且计入自动压缩的判据
-      max_entry_bytes: 8192    # 读取单条记忆的返回上限
-      auto_extract: true       # 压缩前自动从历史里提炼长期记忆（每次压缩多一次模型调用）
-      max_extract: 5           # 单次压缩最多提炼条数
-  # 历史检索：回查原始对话，范围含现存会话与压缩前的完整归档
-  session_search:
-    enabled: true
-    config:
-      max_scan_sessions: 300   # 单次最多读取的会话数（按时间从新到旧，超出会在结果里注明）
-      max_snippets: 3          # 每个会话最多返回的摘录数
-      max_bytes: 8192          # 单次返回上限
-      max_archives: 20         # 保留的压缩归档数，0 = 不归档（被压缩过的会话将只剩摘要可查）
-                               # 按可见域各留这么多份（见 dual_persona）
-  # 角色扮演：默认关闭，它会显著改变模型的行为方式，应由你主动打开。
-  # 依赖 memory 与 session_search——一个有连续性的角色需要记得住跨会话的事、
-  # 查得到之前说过的原话，这两个插件关掉时本插件无法启用。
-  roleplay:
-    enabled: false
-    config:
-      persona: ""              # 角色设定：扮演谁、什么性格、什么处境、怎么说话
-                               # 作为最高优先级提示词每轮注入；留空则只保留下面几项规则
-      user_profile: ""         # 对方的基本情况，作为初始已知信息
-                               # 可以留空，改在对话中告知，由 memory 插件记下来
-      interaction: true        # 每次回复先以【】写场景、动作与表情再说话；一轮中可多次出现
-                               # 角色设定与对方信息都给出身高时，动作描写会按身高差写
-      humanize: true           # 抑制三段式、否定对举、过渡套话、客套收尾等让中文显得机械的表达
-      time_rules: true         # 涉及时间的表述必须与环境块里的当前时间一致；
-                               # 并把操作系统、工作目录这些运行环境信息排除在角色的自我认知之外
-      max_text_bytes: 8192     # 上面两段自由文本的合计上限，超出截断（角色设定优先）
-                               # 它们每轮全额重发、不参与预算裁剪，且计入自动压缩判据
-  # 表里两套人格：默认关闭。表人格用 roleplay 的设定，里人格另设一套；
-  # 里人格的对话、记忆与归档对表人格不可见，里人格看得到全部。
-  #
-  # 注意：这是上下文隔离，不是沙箱。read_file 与 exec_command 是通用的文件与命令通道，
-  # 能直接读到会话文件、记忆目录与本插件的状态文件，绕过这里的一切过滤。
-  # 同时启用时界面上会给出告警，但不阻止——代价由你自己权衡。
-  dual_persona:
-    enabled: false
-    config:
-      inner_persona: ""        # 里人格设定，只在里人格激活时注入，优先于 roleplay 的角色设定
-      to_inner: ""             # 切到里人格的触发词，一行一个，命中任一即切换
-      to_outer: ""             # 切回表人格的触发词，一行一个
-                               # 切换对当轮即时生效，因此这个词会留在表人格能读到的历史里，
-                               # 建议选一个在表人格语境下也说得通的说法
-      match_mode: contains     # contains = 消息里出现该词即命中
-                               # equals   = 整条消息就是该词才命中，更不容易误触发
-                               # 命中的那条消息照常发给模型，由新人格作答，界面上不做任何提示
 
 session:
   dir: ""                    # session 存储目录，空 = <配置目录>/sessions

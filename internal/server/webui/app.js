@@ -842,7 +842,7 @@ function buildConfigField(f, value) {
     wrap.append(label, el);
   } else if (f.type === "text") {
     el = document.createElement("textarea");
-    el.rows = 8;
+    el.rows = 5; // 够看清几行就行，太高会把配置弹窗撑得要滚动
     el.spellcheck = false;
     wrap.append(label, el);
   } else {
