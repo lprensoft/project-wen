@@ -25,6 +25,7 @@ import (
 	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/plugin/builtin/readfile"
 	"wen/internal/plugin/builtin/roleplay"
+	"wen/internal/plugin/builtin/scene"
 	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/webfetch"
@@ -195,6 +196,8 @@ func main() {
 var needsSetupPlugins = map[string]bool{
 	"roleplay":     true,
 	"dual_persona": true,
+	"scene":        true, // 不配置也能工作，但它依赖默认关闭的 roleplay，默认启用只会在启动时被强制关闭
+
 	"heartbeat":    true,
 	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
 	"wechat_bot":   true, // 不扫码绑定没法工作
@@ -210,8 +213,8 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
 	builtins := []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
-		// 后者才能形成追加与覆盖的语义
-		roleplay.New(), dualpersona.New(),
+		// 后者才能形成追加与覆盖的语义；scene 的舞台设定排在人格设定之后——先立角色，再立舞台
+		roleplay.New(), dualpersona.New(), scene.New(),
 		heartbeat.New(), scheduler.New(), qqbot.New(), wechatbot.New(),
 	}
 	for _, p := range builtins {
