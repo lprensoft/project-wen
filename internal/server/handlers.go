@@ -94,6 +94,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	// 工具要请求用户确认时经这条 SSE 流问、经 /api/confirmations/{id} 收答复。
 	// 按请求注入而不是放进 InitContext：确认必须回到发起这轮对话的那个界面。
 	ctx := plugin.WithConfirmer(r.Context(), s.confirmerFor(emitRaw))
+	// 前台界面的轮次有真人在交互：更新会话活跃时间，供后台功能判定「最近活跃会话」
+	ctx = plugin.WithInteractive(ctx)
 	s.agent.Run(ctx, req.SessionID, req.Message, emit)
 }
 

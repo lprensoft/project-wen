@@ -32,6 +32,15 @@ type InitContext struct {
 	// 供插件完成提炼、归类这类内部工作。为 nil 表示当前不可用，插件应据此降级而不是报错。
 	// 注意每次调用都产生真实的模型开销，不要放在高频路径上。
 	Complete CompleteFunc
+	// RunTurn 以插件身份在指定会话上跑一轮完整对话（写入会话、带工具、注入 system 提示词）。
+	// Manager 交给插件前会自动注入发起方标记；会话忙时返回 ErrSessionBusy 不排队。
+	// 不注入确认通道时，需要用户确认的危险操作会按拒绝处理——这是无人值守场景想要的默认。
+	// 为 nil 表示当前不可用，插件应降级。每次调用都是一轮真实的模型对话开销。
+	RunTurn RunTurnFunc
+	// NewSession 新建一个会话并返回其 ID。为 nil 表示不可用。
+	NewSession NewSessionFunc
+	// Compact 压缩指定会话的历史。会话忙时返回 ErrSessionBusy。为 nil 表示不可用。
+	Compact CompactFunc
 }
 
 // CompleteFunc 见 InitContext.Complete。

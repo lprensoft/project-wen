@@ -48,13 +48,29 @@ const groupSeparator = "\n\n———\n\n"
 
 // Compact 将 session 历史压缩为摘要消息。
 // 摘要生成过程通过 emit 以 delta 事件流式发布，结束时发布 done 或 error。
+// 与对话轮次共用轮次锁：压缩的 Replace 与并发轮次的 Append 竞态会丢消息。
 func (a *Agent) Compact(ctx context.Context, sessionID string, emit func(Event)) {
+	l := a.turnLock(sessionID)
+	l.Lock()
+	defer l.Unlock()
 	provider, opts := a.snapshot()
 	if err := a.compact(ctx, provider, opts, sessionID, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
 	emit(Event{Type: EventDone})
+}
+
+// CompactTurn 供插件以编程方式压缩会话（经 InitContext.Compact 暴露）。
+// 与 RunTurn 相同的不排队语义：会话忙时立即返回 plugin.ErrSessionBusy。
+func (a *Agent) CompactTurn(ctx context.Context, sessionID string) error {
+	l := a.turnLock(sessionID)
+	if !l.TryLock() {
+		return plugin.ErrSessionBusy
+	}
+	defer l.Unlock()
+	provider, opts := a.snapshot()
+	return a.compact(ctx, provider, opts, sessionID, func(Event) {})
 }
 
 // scopeGroup 是历史中属于同一可见域的一段消息。

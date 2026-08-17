@@ -96,10 +96,16 @@ var validName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // initCtxFor 返回该插件专属的运行环境：在公共 InitContext 上补一个按插件名隔离的持久化目录。
 // 未配置状态文件时 StateDir 留空，由插件自行决定是否拒绝启用。
+// RunTurn 被包一层自动注入发起方标记——发起方由 Manager 裁定，插件无法伪装成前台。
 func (m *Manager) initCtxFor(name string) InitContext {
 	ictx := m.ictx
 	if m.statePath != "" {
 		ictx.StateDir = filepath.Join(filepath.Dir(m.statePath), "plugins", name)
+	}
+	if base := m.ictx.RunTurn; base != nil {
+		ictx.RunTurn = func(ctx context.Context, sessionID, input string) (string, error) {
+			return base(WithTurnOrigin(ctx, name), sessionID, input)
+		}
 	}
 	return ictx
 }
@@ -169,50 +175,80 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 
 // SetEnabled 运行时启用/禁用插件并持久化状态。启用时执行 Init，失败保持禁用。
 // 依赖校验在 Init 之前完成：依赖不满足时不该产生任何副作用。
+// 禁用有后台活动的插件时调用其 Stop——必须在锁外：插件的后台 goroutine 可能正阻塞在
+// Manager 的读锁上（如 SystemPrompts），锁内等待会死锁。
 func (m *Manager) SetEnabled(name string, on bool) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var toStop Stoppable
 
 	e, ok := m.entries[name]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("插件 %q 不存在", name)
 	}
 	if on {
 		if err := m.checkEnableLocked(name); err != nil {
+			m.mu.Unlock()
 			return err
 		}
 		if !e.inited {
 			if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
+				m.mu.Unlock()
 				return fmt.Errorf("插件 %q 初始化失败: %w", name, err)
 			}
 			e.inited = true
 		}
-	} else if err := m.checkDisableLocked(name); err != nil {
-		return err
+	} else {
+		if err := m.checkDisableLocked(name); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		if s, ok := e.plugin.(Stoppable); ok && e.inited {
+			// 停止后插件的内部状态已拆除，重新启用时必须重新 Init
+			toStop = s
+			e.inited = false
+		}
 	}
 	e.enabled = on
 	e.forcedOff = false // 用户显式操作过，此后以他的意图为准
 	m.saveStateLocked()
+	m.mu.Unlock()
+
+	if toStop != nil {
+		toStop.Stop()
+	}
 	return nil
 }
 
 // SetConfig 保存插件配置并持久化。已初始化的插件会以新配置重新 Init，
 // 失败时回滚到旧配置。配置中未声明的键被忽略，缺失的键取默认值。
+//
+// 有后台活动的插件在重新 Init 前先在锁外 Stop（锁内调用可能与插件 goroutine 持有的
+// 读锁死锁）。解锁窗口内其它请求可能穿插进来，代价是短暂读到「已停止但未重配」的状态，
+// 可容忍；有状态插件本就要求 Init 可重入、自行加锁。
 func (m *Manager) SetConfig(name string, cfg map[string]any) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	e, ok := m.entries[name]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("插件 %q 不存在", name)
 	}
 	fields := ConfigFieldsOf(e.plugin)
 	if len(fields) == 0 {
+		m.mu.Unlock()
 		return fmt.Errorf("插件 %q 没有可配置项", name)
 	}
 	next, err := NormalizeConfig(fields, cfg)
 	if err != nil {
+		m.mu.Unlock()
 		return err
+	}
+
+	if s, ok := e.plugin.(Stoppable); ok && e.inited {
+		m.mu.Unlock()
+		s.Stop()
+		m.mu.Lock()
 	}
 
 	oldUser, oldCfg := e.userCfg, e.cfg
@@ -222,11 +258,33 @@ func (m *Manager) SetConfig(name string, cfg map[string]any) error {
 		if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
 			e.userCfg, e.cfg = oldUser, oldCfg
 			_ = e.plugin.Init(m.initCtxFor(name), oldCfg) // 尽力恢复旧配置下的状态
+			m.mu.Unlock()
 			return fmt.Errorf("插件 %q 应用配置失败: %w", name, err)
 		}
 	}
 	m.saveStateLocked()
+	m.mu.Unlock()
 	return nil
+}
+
+// StopAll 停止所有有后台活动的已初始化插件，供进程退出时调用。
+// 与 SetEnabled 相同的理由，Stop 在锁外进行。
+func (m *Manager) StopAll() {
+	m.mu.RLock()
+	var stops []Stoppable
+	for _, name := range m.order {
+		e := m.entries[name]
+		if !e.inited {
+			continue
+		}
+		if s, ok := e.plugin.(Stoppable); ok {
+			stops = append(stops, s)
+		}
+	}
+	m.mu.RUnlock()
+	for _, s := range stops {
+		s.Stop()
+	}
 }
 
 // List 返回全部插件状态（按注册顺序）。
@@ -411,6 +469,32 @@ func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
 		}
 	}
 	return notes
+}
+
+// NotifyTurnEnd 在一轮对话成功结束后广播给所有实现 TurnObserver 的启用插件。
+// 广播发生在轮次收尾的同步路径上：逐个 recover，单个插件的 panic 不能连累整轮对话。
+func (m *Manager) NotifyTurnEnd(ctx context.Context, ev TurnEndEvent) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, name := range m.order {
+		e := m.entries[name]
+		if !e.enabled {
+			continue
+		}
+		ob, ok := e.plugin.(TurnObserver)
+		if !ok {
+			continue
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("插件 %q 处理轮次结束事件时 panic: %v", name, r)
+				}
+			}()
+			ob.OnTurnEnd(ctx, ev)
+		}()
+	}
 }
 
 // ---------- 状态持久化（plugins.state.json） ----------

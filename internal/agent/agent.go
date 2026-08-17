@@ -67,13 +67,30 @@ type Agent struct {
 	plugins  *plugin.Manager
 	store    *session.Store
 	opts     Options
+
+	// 每会话一把轮次锁：同一会话的对话轮次与压缩互斥，防止交错写历史，
+	// 以及压缩的 Replace 覆盖并发轮次刚 Append 的消息。
+	lockMu    sync.Mutex
+	turnLocks map[string]*sync.Mutex
 }
 
 func New(provider llm.Provider, plugins *plugin.Manager, store *session.Store, opts Options) *Agent {
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 20
 	}
-	return &Agent{provider: provider, plugins: plugins, store: store, opts: opts}
+	return &Agent{provider: provider, plugins: plugins, store: store, opts: opts, turnLocks: map[string]*sync.Mutex{}}
+}
+
+// turnLock 返回该会话的轮次锁（惰性创建）。
+func (a *Agent) turnLock(sessionID string) *sync.Mutex {
+	a.lockMu.Lock()
+	defer a.lockMu.Unlock()
+	l, ok := a.turnLocks[sessionID]
+	if !ok {
+		l = &sync.Mutex{}
+		a.turnLocks[sessionID] = l
+	}
+	return l
 }
 
 // snapshot 取一份当前 provider 与配置。一轮请求全程使用同一份快照，
@@ -136,20 +153,37 @@ const titleMaxRunes = 30
 
 // Run 处理一条用户消息：写入 session、驱动工具循环、通过 emit 实时发布事件。
 // 返回前一定会 emit 一个 done 或 error 事件。
+// 前台轮次排队等锁：用户在等着，报忙不如稍等（同会话并发本就是双开页面这类边缘情况）。
 func (a *Agent) Run(ctx context.Context, sessionID, userInput string, emit func(Event)) {
-	if err := a.run(ctx, sessionID, userInput, emit); err != nil {
+	l := a.turnLock(sessionID)
+	l.Lock()
+	defer l.Unlock()
+	if _, err := a.run(ctx, sessionID, userInput, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
 	emit(Event{Type: EventDone})
 }
 
-func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(Event)) error {
+// RunTurn 供插件以编程方式发起一轮完整对话（经 InitContext.RunTurn 暴露），返回助手的最终文本。
+// 后台轮次不排队：会话忙时立即返回 plugin.ErrSessionBusy，由发起方决定跳过或重试——
+// 后台任务堆在锁上排队只会在解锁瞬间连环轰炸会话。
+func (a *Agent) RunTurn(ctx context.Context, sessionID, input string) (string, error) {
+	l := a.turnLock(sessionID)
+	if !l.TryLock() {
+		return "", plugin.ErrSessionBusy
+	}
+	defer l.Unlock()
+	return a.run(ctx, sessionID, input, func(Event) {})
+}
+
+func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(Event)) (string, error) {
+	startedAt := time.Now()
 	provider, opts := a.snapshot()
 
 	meta, history, err := a.store.Get(sessionID)
 	if err != nil {
-		return fmt.Errorf("load session: %w", err)
+		return "", fmt.Errorf("load session: %w", err)
 	}
 
 	// 裁决本轮可见域。一轮只裁一次并全程从 ctx 取：若在工具执行阶段再裁一次，
@@ -168,9 +202,15 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		_ = a.store.SetTitleTagged(sessionID, string(title), scope.Write)
 	}
 
+	origin := plugin.TurnOriginFrom(ctx)
 	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput}
-	if err := a.append(sessionID, userMsg, scope.Write); err != nil {
-		return err
+	if err := a.append(sessionID, userMsg, scope.Write, origin); err != nil {
+		return "", err
+	}
+	// 只有真人交互的轮次才算「活跃」：机器自发的轮次若也计入，
+	// 以最近活跃会话为落点的后台功能会不断自我续命。
+	if plugin.IsInteractive(ctx) {
+		_ = a.store.SetLastActive(sessionID, startedAt)
 	}
 
 	// 组装上下文：system（环境块 + 启用插件的提示词片段 + 本轮片段 + 可选配置提示词）+ 历史 + 本条
@@ -194,7 +234,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	for turn := 0; turn < opts.MaxTurns; turn++ {
 		r, err := a.stream(ctx, provider, opts, msgs, pinned, emit)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if r.usage != nil {
 			// 记录实测用量（供 /status 展示与自动压缩判断）
@@ -213,15 +253,25 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			ReasoningBlocks: r.blocks,
 			ToolCalls:       r.toolCalls,
 		}
-		if err := a.append(sessionID, assistant, scope.Write); err != nil {
-			return err
+		if err := a.append(sessionID, assistant, scope.Write, origin); err != nil {
+			return "", err
 		}
 		msgs = append(msgs, assistant)
 		pinned = append(pinned, false)
 
 		if len(r.toolCalls) == 0 {
+			// 无工具调用，本轮结束
 			a.maybeAutoCompact(ctx, provider, opts, sessionID, r.usage, emit)
-			return nil // 无工具调用，本轮结束
+			a.plugins.NotifyTurnEnd(ctx, plugin.TurnEndEvent{
+				SessionID:   sessionID,
+				Origin:      origin,
+				Interactive: plugin.IsInteractive(ctx),
+				UserInput:   userInput,
+				FinalText:   r.content,
+				StartedAt:   startedAt,
+				EndedAt:     time.Now(),
+			})
+			return r.content, nil
 		}
 
 		for _, call := range r.toolCalls {
@@ -230,14 +280,14 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
 
 			toolMsg := llm.Message{Role: llm.RoleTool, Content: result, ToolCallID: call.ID}
-			if err := a.append(sessionID, toolMsg, scope.Write); err != nil {
-				return err
+			if err := a.append(sessionID, toolMsg, scope.Write, origin); err != nil {
+				return "", err
 			}
 			msgs = append(msgs, toolMsg)
 			pinned = append(pinned, false)
 		}
 	}
-	return fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)
+	return "", fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)
 }
 
 // turnResult 是一次 LLM 调用的完整产出。
@@ -433,6 +483,7 @@ func (a *Agent) execute(ctx context.Context, call llm.ToolCall) string {
 
 // append 落盘一条消息。tag 是本轮的可见域标签，一轮内的 user / assistant / tool
 // 消息必须使用同一个值，否则 tool_use 与 tool_result 会被过滤拆散。
-func (a *Agent) append(sessionID string, msg llm.Message, tag string) error {
-	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Tag: tag, TS: time.Now()})
+// origin 是本轮的发起方（同样整轮一致），空串 = 前台界面。
+func (a *Agent) append(sessionID string, msg llm.Message, tag, origin string) error {
+	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Tag: tag, Origin: origin, TS: time.Now()})
 }

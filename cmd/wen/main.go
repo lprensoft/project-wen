@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"wen/internal/agent"
@@ -47,16 +49,44 @@ func main() {
 		workdir, _ = os.Getwd()
 	}
 
-	// Agent 与插件互相需要：插件在 Agent 之前构造，故辅助调用用闭包延迟到实际使用时取值
-	var ag *agent.Agent
-	plugins := buildPlugins(cfg, workdir, func(ctx context.Context, prompt string) (string, error) {
-		if ag == nil {
-			return "", fmt.Errorf("模型尚未就绪")
-		}
-		return ag.Complete(ctx, prompt)
-	})
+	// Agent 与插件互相需要：插件在 Agent 之前构造，故各能力都用闭包延迟到实际使用时取值。
+	// store 也在其后创建，但必须与 Agent 复用同一个实例——两个 Store 的会话锁互不相识。
+	var (
+		ag    *agent.Agent
+		store *session.Store
+	)
+	ictx := plugin.InitContext{
+		Workdir:    workdir,
+		SessionDir: cfg.SessionDir(),
+		Complete: func(ctx context.Context, prompt string) (string, error) {
+			if ag == nil {
+				return "", fmt.Errorf("模型尚未就绪")
+			}
+			return ag.Complete(ctx, prompt)
+		},
+		RunTurn: func(ctx context.Context, sessionID, input string) (string, error) {
+			if ag == nil {
+				return "", fmt.Errorf("模型尚未就绪")
+			}
+			return ag.RunTurn(ctx, sessionID, input)
+		},
+		NewSession: func() (string, error) {
+			if store == nil {
+				return "", fmt.Errorf("会话存储尚未就绪")
+			}
+			m, err := store.Create()
+			return m.ID, err
+		},
+		Compact: func(ctx context.Context, sessionID string) error {
+			if ag == nil {
+				return fmt.Errorf("模型尚未就绪")
+			}
+			return ag.CompactTurn(ctx, sessionID)
+		},
+	}
+	plugins := buildPlugins(cfg, ictx)
 
-	store, err := session.NewStore(cfg.SessionDir())
+	store, err = session.NewStore(cfg.SessionDir())
 	if err != nil {
 		log.Fatalf("初始化 session 存储失败: %v", err)
 	}
@@ -105,9 +135,21 @@ func main() {
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	if err := httpServer.ListenAndServe(); err != nil {
-		log.Fatal(err)
-	}
+
+	// 优雅退出：收到中断信号后先关 HTTP，再停掉插件的后台活动（定时器、长连接）
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+	<-rootCtx.Done()
+	log.Printf("收到退出信号，正在关闭…")
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutCtx)
+	plugins.StopAll()
 }
 
 // needsSetupPlugins 是默认不启用的插件：它们不配置就没法工作——roleplay 没有角色设定
@@ -124,12 +166,9 @@ var needsSetupPlugins = map[string]bool{
 //
 // 开关与配置的唯一来源是 <配置目录>/plugins.state.json（由设置页维护）；这里给出的只是
 // 首次安装、状态文件还不存在时的初值。
-// complete 供插件发起辅助模型调用；它在 Agent 建好之前就要传进来，故用闭包延迟取值。
-func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFunc) *plugin.Manager {
-	m := plugin.NewManager(
-		plugin.InitContext{Workdir: workdir, SessionDir: cfg.SessionDir(), Complete: complete},
-		filepath.Join(cfg.BaseDir, "plugins.state.json"),
-	)
+// ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
+func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
+	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"))
 	builtins := []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
