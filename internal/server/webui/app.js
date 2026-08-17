@@ -368,6 +368,10 @@ function renderHistory(messages) {
   for (const m of messages) {
     if (m.kind === "summary") {
       addSummaryBlock(m.content);
+    } else if (m.role === "user" && (m.kind === "ephemeral" || m.origin === "heartbeat")) {
+      // 机器注入的一次性输入：不渲染成用户气泡，只留一行来源提示。
+      // origin=heartbeat 的兜底覆盖标记机制上线前落盘的旧心跳。
+      addSysBlock(m.origin === "heartbeat" ? "💓 心跳唤醒" : "⏱ 后台唤醒（" + (m.origin || "系统") + "）");
     } else if (m.role === "user") {
       addBubble("user", m.content);
     } else if (m.role === "assistant") {

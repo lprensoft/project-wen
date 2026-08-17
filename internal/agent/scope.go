@@ -32,6 +32,11 @@ func visibleHistory(stored []session.StoredMessage, sc plugin.Scope) []session.S
 		if !sc.CanRead(m.Tag) {
 			continue
 		}
+		// 一次性输入（心跳提示词等）只属于它自己那一轮，不进入后续上下文；
+		// 它触发的助手回复照常保留（Anthropic 侧连续 assistant 会被合并，安全）
+		if m.Kind == session.KindEphemeral {
+			continue
+		}
 		out = append(out, m)
 	}
 	return sanitizeSequence(out)

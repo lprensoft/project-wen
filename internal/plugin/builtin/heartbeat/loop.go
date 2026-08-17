@@ -53,6 +53,8 @@ func (p *Plugin) beat(ctx context.Context) {
 	}
 	tctx, cancel := context.WithTimeout(ctx, beatTimeout)
 	defer cancel()
+	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
+	tctx = plugin.WithEphemeralInput(tctx)
 	if _, err := runTurn(tctx, sid, prompt); err != nil {
 		if errors.Is(err, plugin.ErrSessionBusy) {
 			log.Printf("heartbeat: 会话 %s 忙，本次心跳跳过", sid)

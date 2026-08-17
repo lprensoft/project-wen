@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,57 @@ func TestInteractiveAndOrigin(t *testing.T) {
 	last := msgs[len(msgs)-1]
 	if last.Origin != "" {
 		t.Fatalf("前台消息 Origin 应为空，得到 %q", last.Origin)
+	}
+}
+
+// 一次性输入：只在自己那一轮发给模型，落盘带标记、不参与标题、不进后续上下文；
+// 它触发的助手回复照常保留。
+func TestEphemeralInput(t *testing.T) {
+	store, id := newTestSession(t)
+	mp := &mockProvider{turns: []mockTurn{{content: "回答一"}, {content: "心跳回复"}, {content: "回答三"}}}
+	ag := New(mp, newTestManager(t), store, Options{Model: "m"})
+
+	ag.Run(plugin.WithInteractive(context.Background()), id, "你好", func(Event) {})
+
+	hbCtx := plugin.WithEphemeralInput(plugin.WithTurnOrigin(context.Background(), "hb_test"))
+	if _, err := ag.RunTurn(hbCtx, id, "【心跳】模板提示词"); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, msgs, err := store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "你好" {
+		t.Fatalf("标题应来自真实用户消息，得到 %q", meta.Title)
+	}
+	var found bool
+	for _, m := range msgs {
+		if m.Content == "【心跳】模板提示词" {
+			found = true
+			if m.Kind != session.KindEphemeral {
+				t.Fatalf("一次性输入落盘应带标记，得到 kind=%q", m.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("一次性输入应留在磁盘上（审计与界面提示用）")
+	}
+
+	// 第三轮：上下文包含两轮助手回复，但不包含心跳提示词
+	ag.Run(plugin.WithInteractive(context.Background()), id, "再见", func(Event) {})
+	req := mp.reqs[len(mp.reqs)-1]
+	var all string
+	for _, m := range req.Messages {
+		all += m.Content + "\n"
+	}
+	if strings.Contains(all, "【心跳】模板提示词") {
+		t.Fatal("心跳提示词泄漏进了后续上下文")
+	}
+	for _, want := range []string{"你好", "回答一", "心跳回复", "再见"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("后续上下文缺少 %q", want)
+		}
 	}
 }
 
