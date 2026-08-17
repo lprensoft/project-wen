@@ -18,6 +18,7 @@ import (
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/readfile"
+	"wen/internal/plugin/builtin/roleplay"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/server"
@@ -108,7 +109,14 @@ func main() {
 	}
 }
 
-// buildPlugins 注册全部内置系统插件，配置缺省时默认启用。
+// defaultOffPlugins 是默认不启用的插件：它们会显著改变模型的行为方式，
+// 应当由用户主动打开，而不是装上就生效。
+var defaultOffPlugins = map[string]bool{
+	roleplay.New().Name(): true,
+}
+
+// buildPlugins 注册全部内置系统插件，配置缺省时默认启用（defaultOffPlugins 除外）。
+// 注册顺序即提示词拼接顺序。
 // complete 供插件发起辅助模型调用；它在 Agent 建好之前就要传进来，故用闭包延迟取值。
 func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFunc) *plugin.Manager {
 	m := plugin.NewManager(
@@ -117,11 +125,12 @@ func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFu
 	)
 	builtins := []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
+		roleplay.New(),
 	}
 	for _, p := range builtins {
 		pc, ok := cfg.Plugins[p.Name()]
 		if !ok {
-			pc = plugin.PluginConfig{Enabled: true}
+			pc = plugin.PluginConfig{Enabled: !defaultOffPlugins[p.Name()]}
 		}
 		if err := m.Register(p, pc); err != nil {
 			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)

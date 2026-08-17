@@ -81,13 +81,15 @@ func Default() *Config {
 			SystemPrompt: "",
 			MaxTurns:     20,
 		},
-		// 系统插件默认全部启用；config.yaml 的 plugins 段可覆盖（yaml 按 key 合并）
+		// 系统插件默认启用；config.yaml 的 plugins 段可覆盖（yaml 按 key 合并）。
+		// 会显著改变模型行为方式的插件（roleplay）默认关闭，由用户主动打开。
 		Plugins: map[string]plugin.PluginConfig{
 			"read_file":      {Enabled: true},
 			"exec_command":   {Enabled: true},
 			"web_fetch":      {Enabled: true},
 			"memory":         {Enabled: true},
 			"session_search": {Enabled: true},
+			"roleplay":       {Enabled: false},
 		},
 	}
 }

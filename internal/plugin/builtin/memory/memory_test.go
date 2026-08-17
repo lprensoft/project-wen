@@ -21,6 +21,17 @@ func newTestPlugin(t *testing.T, cfg map[string]any) *Plugin {
 	return p
 }
 
+// indexPrompt 返回本轮注入的记忆索引。
+// 索引由 TurnPrompt 注入而不是 SystemPrompt：它的内容取决于本轮的可见域。
+func indexPrompt(t *testing.T, p *Plugin) string {
+	t.Helper()
+	s, err := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 // seed 写入 n 条记忆，标题按序号补零保证排序稳定。
 func seed(t *testing.T, p *Plugin, n int) {
 	t.Helper()
@@ -43,8 +54,8 @@ func TestInitRequiresStateDir(t *testing.T) {
 	if err := p.Init(plugin.InitContext{Workdir: "/w"}, nil); err == nil {
 		t.Fatal("没有持久化目录时应拒绝启用，而不是退化到进程当前目录")
 	}
-	if p.SystemPrompt() != "" {
-		t.Error("未初始化时不应注入提示词")
+	if indexPrompt(t, p) != "" {
+		t.Error("未初始化时不应注入索引，也不应产生磁盘访问")
 	}
 }
 
@@ -71,10 +82,10 @@ func TestScopeDecidesMemoryDir(t *testing.T) {
 	// 两个范围互不可见
 	global.snapshot().store.Save(Entry{Name: "全局条目", Type: "事实", Content: "c"}, false)
 	proj.snapshot().store.Save(Entry{Name: "项目条目", Type: "事实", Content: "c"}, false)
-	if s := global.SystemPrompt(); !strings.Contains(s, "全局条目") || strings.Contains(s, "项目条目") {
+	if s := indexPrompt(t, global); !strings.Contains(s, "全局条目") || strings.Contains(s, "项目条目") {
 		t.Errorf("全局库不应看到项目记忆:\n%s", s)
 	}
-	if s := proj.SystemPrompt(); !strings.Contains(s, "项目条目") || strings.Contains(s, "全局条目") {
+	if s := indexPrompt(t, proj); !strings.Contains(s, "项目条目") || strings.Contains(s, "全局条目") {
 		t.Errorf("项目库不应看到全局记忆:\n%s", s)
 	}
 }
@@ -98,19 +109,23 @@ func TestScopeProjectRequiresWorkdir(t *testing.T) {
 
 func TestSystemPromptGuideOnlyWithoutMemories(t *testing.T) {
 	p := newTestPlugin(t, nil)
-	got := p.SystemPrompt()
-	// 判据是引导保存第一条记忆的东西，空库时最需要它
-	if !strings.Contains(got, "save_memory") {
+	// 判据是引导保存第一条记忆的东西，空库时最需要它，因此它是静态注入的
+	if got := p.SystemPrompt(); !strings.Contains(got, "save_memory") {
 		t.Errorf("空记忆库仍应注入保存判据:\n%s", got)
 	}
 	// 但不应出现空的索引标题
-	if strings.Contains(got, "[长期记忆]") {
+	if got := indexPrompt(t, p); got != "" {
 		t.Errorf("空记忆库不应注入索引部分:\n%s", got)
 	}
+}
 
-	// 未初始化（如插件被禁用）时一概不注入，且不产生磁盘访问
-	if got := New().SystemPrompt(); got != "" {
-		t.Errorf("未初始化时不应注入:\n%s", got)
+func TestSystemPromptStaysDiskFree(t *testing.T) {
+	// 列表接口会对禁用的插件也调用 SystemPrompt()，它必须廉价且无副作用。
+	// 索引改道 TurnPrompt 之后这一点是白拿的，用测试把它固定住。
+	p := newTestPlugin(t, nil)
+	seed(t, p, 3)
+	if got := p.SystemPrompt(); strings.Contains(got, "条目000") {
+		t.Errorf("SystemPrompt 不应再读取记忆库:\n%s", got)
 	}
 }
 
@@ -118,9 +133,9 @@ func TestSystemPromptListsAllEntriesWithinBudget(t *testing.T) {
 	p := newTestPlugin(t, nil)
 	seed(t, p, 100)
 
-	got := p.SystemPrompt()
-	if !strings.Contains(got, "[长期记忆]") || !strings.Contains(got, "save_memory") {
-		t.Fatalf("提示词缺少索引头或保存判据:\n%s", got)
+	got := indexPrompt(t, p)
+	if !strings.Contains(got, "[长期记忆]") {
+		t.Fatalf("提示词缺少索引头:\n%s", got)
 	}
 	// 100 条是本方案的目标规模：必须全部带摘要出现，且不触发任何降级
 	for _, i := range []int{0, 1, 42, 99} {
@@ -295,7 +310,7 @@ func TestSetConfigTakesEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.snapshot().store.Save(Entry{Name: "一条", Description: "钩子", Type: "事实", Content: "正文"}, false)
-	if !strings.Contains(p.SystemPrompt(), "一条") {
+	if !strings.Contains(indexPrompt(t, p), "一条") {
 		t.Fatal("初始状态应能注入索引")
 	}
 
@@ -308,7 +323,7 @@ func TestSetConfigTakesEffect(t *testing.T) {
 	if s := p.snapshot(); s.store == nil {
 		t.Fatal("重新 Init 后记忆目录不应丢失")
 	}
-	if !strings.Contains(p.SystemPrompt(), "一条") {
+	if !strings.Contains(indexPrompt(t, p), "一条") {
 		t.Error("改配置后仍应能读到原有记忆")
 	}
 }
@@ -328,7 +343,7 @@ func TestSaveMemoryTool(t *testing.T) {
 	if !strings.Contains(out, "约定/提交信息用中文") || !strings.Contains(out, "说明做了什么和为什么") {
 		t.Errorf("保存结果应回显条目: %q", out)
 	}
-	if !strings.Contains(p.SystemPrompt(), "提交信息用中文") {
+	if !strings.Contains(indexPrompt(t, p), "提交信息用中文") {
 		t.Error("保存后应出现在索引里")
 	}
 
@@ -373,7 +388,7 @@ func TestDeleteMemoryTool(t *testing.T) {
 	if !strings.Contains(out, "约定/临时约定") {
 		t.Errorf("删除结果 = %q", out)
 	}
-	if strings.Contains(p.SystemPrompt(), "临时约定") {
+	if strings.Contains(indexPrompt(t, p), "临时约定") {
 		t.Error("删除后索引里不应再有该条目")
 	}
 	if _, err := del.Execute(context.Background(), json.RawMessage(`{"name":"临时约定"}`)); err == nil {
@@ -397,8 +412,8 @@ func TestSaveDeleteVisibleAcrossPluginInstances(t *testing.T) {
 	if err := p2.Init(plugin.InitContext{StateDir: dir}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(p2.SystemPrompt(), "跨会话") {
-		t.Errorf("新实例应看到已保存的记忆:\n%s", p2.SystemPrompt())
+	if got := indexPrompt(t, p2); !strings.Contains(got, "跨会话") {
+		t.Errorf("新实例应看到已保存的记忆:\n%s", got)
 	}
 }
 

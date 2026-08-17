@@ -631,7 +631,7 @@ function renderSettingsPlugins(list) {
     if (unmet.length > 0) {
       addTag("需先启用 " + unmet.join("、"), "tag-blocked");
       input.disabled = true;
-      label.title = "该插件依赖 " + unmet.join("、") + "，请先启用它们";
+      label.title = "该插件依赖 " + unmet.join("、") + "，需要先启用后才能打开";
       card.classList.add("plugin-card-blocked");
     } else if ((p.requires || []).length > 0) {
       addTag("依赖 " + p.requires.join("、"));
