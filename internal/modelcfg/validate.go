@@ -38,6 +38,10 @@ func validateDoc(f File) error {
 			return fmt.Errorf("提供商 %q 的 API 模式 %q 不支持（可选：%s）",
 				name, p.Type, strings.Join(llm.KnownTypes, " / "))
 		}
+		if !llm.IsKnownDialect(p.Dialect) {
+			return fmt.Errorf("提供商 %q 的思考参数方言 %q 不支持（可选：%s）",
+				name, p.Dialect, strings.Join(llm.KnownDialects, " / "))
+		}
 		if err := validateBaseURL(p.BaseURL); err != nil {
 			return fmt.Errorf("提供商 %q 的 %w", name, err)
 		}

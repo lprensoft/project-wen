@@ -1041,6 +1041,7 @@ function payloadFromDoc() {
       type: p.type,
       base_url: p.base_url,
       api_key: "",
+      thinking_dialect: p.thinking_dialect || "",
       models: p.models,
     })),
     current: modelsDoc.current,
@@ -1252,21 +1253,40 @@ function openProviderModal(name) {
   keyInput.type = "password";
   keyInput.placeholder = p && p.has_api_key ? "留空表示不修改（当前 " + p.api_key_masked + "）" : "";
 
+  // 思考参数方言：OpenAI 兼容协议里各家的思考扩展互不兼容，按提供商选择
+  const dialectSelect = document.createElement("select");
+  for (const d of modelsDoc.dialects || []) {
+    const opt = document.createElement("option");
+    opt.value = d.value;
+    opt.textContent = d.label;
+    dialectSelect.appendChild(opt);
+  }
+  dialectSelect.value = (p && p.thinking_dialect) || "deepseek";
+  const dialectField = fieldEl("思考参数方言", dialectSelect,
+    "各家 OpenAI 兼容接口的思考/推理参数写法不同：DeepSeek 用 thinking+reasoning_effort，MiniMax 用 adaptive+reasoning_split，Qwen 用 enable_thinking。选错会被对方 API 以 400 拒绝或思考内容混入正文。");
+
+  const syncDialectVisible = () => {
+    dialectField.classList.toggle("hidden", typeSelect.value !== "openai_compat");
+  };
+
   // 切换 API 模式时，若地址还是另一模式的默认值就跟着换
   typeSelect.addEventListener("change", () => {
     const defaults = (modelsDoc.types || []).map((t) => t.default_base_url);
     if (!urlInput.value.trim() || defaults.includes(urlInput.value.trim())) {
       urlInput.value = defaultBaseURL(typeSelect.value);
     }
+    syncDialectVisible();
   });
 
   providerForm.append(
     fieldEl("名称", nameInput, "列表中显示的名字，需唯一。"),
     fieldEl("API 模式", typeSelect, "Anthropic 模式使用 Messages API；OpenAI 兼容适用于 DeepSeek 等服务。"),
+    dialectField,
     fieldEl("Base URL", urlInput, "服务地址，需以 http:// 或 https:// 开头。"),
     fieldEl("API Key", keyInput, "保存在本机 models.json 中，不会提交到仓库。"),
   );
-  providerInputs = { name: nameInput, type: typeSelect, base_url: urlInput, api_key: keyInput };
+  syncDialectVisible();
+  providerInputs = { name: nameInput, type: typeSelect, dialect: dialectSelect, base_url: urlInput, api_key: keyInput };
 
   providerModal.classList.remove("hidden");
   nameInput.focus();
@@ -1296,6 +1316,8 @@ async function saveProvider() {
     type: providerInputs.type.value,
     base_url: providerInputs.base_url.value.trim(),
     api_key: providerInputs.api_key.value.trim(),
+    // 方言只对 OpenAI 兼容模式有意义，Anthropic 模式一律留空
+    thinking_dialect: providerInputs.type.value === "openai_compat" ? providerInputs.dialect.value : "",
   };
   const payload = payloadFromDoc();
   if (providerEditing) {
@@ -1332,6 +1354,7 @@ async function testProvider() {
         type: providerInputs.type.value,
         base_url: providerInputs.base_url.value.trim(),
         api_key: providerInputs.api_key.value.trim(),
+        thinking_dialect: providerInputs.type.value === "openai_compat" ? providerInputs.dialect.value : "",
         model: model.id,
       }),
     });

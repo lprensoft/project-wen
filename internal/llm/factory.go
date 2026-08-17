@@ -39,11 +39,15 @@ func DefaultBaseURL(typ string) string {
 
 func IsKnownType(typ string) bool { return slices.Contains(KnownTypes, typ) }
 
-// New 按 API 模式创建 Provider。
-func New(typ, baseURL, apiKey string) (Provider, error) {
+// New 按 API 模式创建 Provider。dialect 是思考参数方言（见 dialect.go），
+// 仅 openai_compat 使用；空串等同 DeepSeek 方言。
+func New(typ, baseURL, apiKey, dialect string) (Provider, error) {
+	if !IsKnownDialect(dialect) {
+		return nil, fmt.Errorf("不支持的思考参数方言 %q（可选：%s）", dialect, strings.Join(KnownDialects, " / "))
+	}
 	switch typ {
 	case TypeOpenAICompat:
-		return NewOpenAICompat(baseURL, apiKey), nil
+		return NewOpenAICompat(baseURL, apiKey, dialect), nil
 	case TypeAnthropic:
 		return NewAnthropic(baseURL, apiKey), nil
 	}
