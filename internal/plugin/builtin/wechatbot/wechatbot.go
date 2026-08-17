@@ -38,6 +38,14 @@ const (
 	expiredPause = time.Hour
 )
 
+// 消息格式。协议层的 text_item 只有纯文本字段，但微信的 ClawBot 聊天界面会
+// 渲染 Bot 文本里的 markdown（加粗、引用、代码块等），因此默认直发 markdown；
+// 遇到不渲染的客户端版本时可切回纯文本（转换降级见 wen/internal/mdtext）。
+const (
+	formatMarkdown = "markdown"
+	formatPlain    = "plain"
+)
+
 // Plugin 是微信 ClawBot 插件。有状态：Init 可重入（先停旧循环），字段由 mu 保护。
 type Plugin struct {
 	mu sync.Mutex
@@ -46,8 +54,9 @@ type Plugin struct {
 	apiBase        string // 扫码入口用的公共基址；绑定后改用服务端下发的专属 baseurl
 	whitelist      map[string]bool
 	confirmTimeout time.Duration
-	showThinking   bool // 把每轮思考链推送到微信
-	showTools      bool // 把工具调用（仅名字）推送到微信
+	format         string // 消息格式：markdown 直发 / plain 转纯文本
+	showThinking   bool   // 把每轮思考链推送到微信
+	showTools      bool   // 把工具调用（仅名字）推送到微信
 
 	// 凭证（扫码绑定后持久化到 StateDir/credentials.json）
 	creds    credentials
@@ -116,6 +125,15 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
 		},
 		{
+			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
+			Options: []plugin.ConfigOption{
+				{Value: formatMarkdown, Label: "markdown（推荐）"},
+				{Value: formatPlain, Label: "纯文本"},
+			},
+			Description: "markdown：原样发送，由微信的 ClawBot 界面渲染加粗、引用等格式；" +
+				"纯文本：发送前转成可读纯文本（剥标记、引用换｜前缀），供不渲染 markdown 的客户端使用",
+		},
+		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
 			Description: "开启后把每轮的完整思考链推送到微信；关闭（默认）只发最终回复",
 		},
@@ -165,6 +183,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
 	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second
+	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
 	p.showThinking = plugin.CfgBool(cfg, "show_thinking", false)
 	p.showTools = plugin.CfgBool(cfg, "show_tools", false)
 	p.creds = creds

@@ -303,7 +303,7 @@ func TestBindQRRefresh(t *testing.T) {
 
 // ---------- 消息链路 ----------
 
-// 消息进来 → 跑一轮对话（带交互标记）→ 回复回带 context_token、纯文本、FINISH。
+// 消息进来 → 跑一轮对话（带交互标记）→ 回复回带 context_token、markdown 原样、FINISH。
 func TestChatRoundTrip(t *testing.T) {
 	runTurn := func(ctx context.Context, sid, input string) (string, error) {
 		if !plugin.IsInteractive(ctx) {
@@ -321,8 +321,8 @@ func TestChatRoundTrip(t *testing.T) {
 	if m.msgType != msgTypeBot || m.msgState != stateFinish {
 		t.Fatalf("消息类型/状态不符: %+v", m)
 	}
-	if strings.Contains(m.text, "**") || !strings.Contains(m.text, "加粗回复：你好") {
-		t.Fatalf("应转成纯文本: %q", m.text)
+	if m.text != "**加粗**回复：你好" {
+		t.Fatalf("默认应原样发 markdown: %q", m.text)
 	}
 }
 
@@ -488,8 +488,8 @@ func TestBackgroundTurnPush(t *testing.T) {
 	if m.to != binderID || m.contextToken != "CTX-"+binderID {
 		t.Fatalf("推送应用最近入站的 context_token: %+v", m)
 	}
-	if strings.Contains(m.text, "**") || !strings.Contains(m.text, "心跳问候") {
-		t.Fatalf("推送应转纯文本: %q", m.text)
+	if m.text != "**心跳**问候" {
+		t.Fatalf("推送应原样发 markdown: %q", m.text)
 	}
 
 	// token 已持久化：重启后仍可推送
@@ -507,7 +507,7 @@ func TestBackgroundTurnPush(t *testing.T) {
 	f.expectNoSend(t, 500*time.Millisecond)
 }
 
-// 展示开关：默认不装通知回调；开启后思考与工具调用按序推送、转纯文本。
+// 展示开关：默认不装通知回调；开启后思考与工具调用按序推送。
 func TestShowProcess(t *testing.T) {
 	// 默认关闭：轮次 ctx 里不应有通知回调
 	sawNotes := false
@@ -522,7 +522,7 @@ func TestShowProcess(t *testing.T) {
 		t.Fatal("默认配置下不应安装过程通知回调")
 	}
 
-	// 都开启：思考 → 工具 → 最终回复，三条按序；工具名经纯文本转换为「」
+	// 都开启：思考 → 工具 → 最终回复，三条按序；工具名保留行内代码标记（由微信渲染）
 	notesTurn := func(ctx context.Context, _, _ string) (string, error) {
 		if fn := plugin.TurnNotesFrom(ctx); fn != nil {
 			fn(plugin.TurnNote{Kind: plugin.NoteThinking, Text: "让我想想"})
@@ -538,8 +538,8 @@ func TestShowProcess(t *testing.T) {
 		t.Fatalf("第一条应是思考链: %q", m.text)
 	}
 	m = f2.expectSend(t)
-	if !strings.Contains(m.text, "🔧 调用工具") || !strings.Contains(m.text, "「exec_command」") {
-		t.Fatalf("第二条应是工具名列表（纯文本格式）: %q", m.text)
+	if !strings.Contains(m.text, "🔧 调用工具") || !strings.Contains(m.text, "`exec_command`") {
+		t.Fatalf("第二条应是工具名列表: %q", m.text)
 	}
 	if m = f2.expectSend(t); !strings.Contains(m.text, "最终回复") {
 		t.Fatalf("第三条应是最终回复: %q", m.text)
@@ -609,4 +609,32 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("超时：" + what)
+}
+
+// ---------- 消息格式 ----------
+
+// 默认按 markdown 原样发送，标记不被剥掉（渲染交给微信的 ClawBot 界面）。
+func TestSendMarkdownByDefault(t *testing.T) {
+	md := func(ctx context.Context, _, _ string) (string, error) {
+		return "**加粗** 与\n\n> 引用", nil
+	}
+	_, f, _, _ := newBound(t, md, "user1")
+	f.pushText("user1", "hi")
+	m := f.expectSend(t)
+	if m.text != "**加粗** 与\n\n> 引用" {
+		t.Fatalf("markdown 模式应原样发送: %q", m.text)
+	}
+}
+
+// 配置为纯文本时剥掉 markdown 标记。
+func TestSendPlainWhenConfigured(t *testing.T) {
+	md := func(ctx context.Context, _, _ string) (string, error) {
+		return "**加粗** 与\n\n> 引用", nil
+	}
+	_, f, _, _ := newBoundCfg(t, md, "user1", map[string]any{"format": "plain"})
+	f.pushText("user1", "hi")
+	m := f.expectSend(t)
+	if strings.Contains(m.text, "**") || !strings.Contains(m.text, "｜ 引用") {
+		t.Fatalf("纯文本模式应剥掉标记并转换引用: %q", m.text)
+	}
 }
