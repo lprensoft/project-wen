@@ -1202,6 +1202,7 @@ function renderModels(doc) {
 function buildProviderCard(p) {
   const card = document.createElement("div");
   card.className = "provider-card";
+  if (modelsDoc.current.provider === p.name) card.classList.add("active");
 
   const head = document.createElement("div");
   head.className = "provider-head";
@@ -1215,7 +1216,7 @@ function buildProviderCard(p) {
   actions.className = "provider-actions";
   actions.append(
     iconButton(gearIconSVG, "编辑提供商", () => openProviderModal(p.name)),
-    iconButton(trashIconSVG, "删除提供商", () => deleteProvider(p.name)),
+    iconButton(trashIconSVG, "删除提供商", () => deleteProvider(p.name), "btn-icon-danger"),
   );
   head.appendChild(actions);
   card.appendChild(head);
@@ -1268,7 +1269,7 @@ function buildModelRow(p, m) {
   actions.className = "model-row-actions";
   actions.append(
     iconButton(pencilIconSVG, "编辑模型", (e) => { e.stopPropagation(); openModelModal(p.name, m.id); }),
-    iconButton(trashIconSVG, "删除模型", (e) => { e.stopPropagation(); deleteModel(p.name, m.id); }),
+    iconButton(trashIconSVG, "删除模型", (e) => { e.stopPropagation(); deleteModel(p.name, m.id); }, "btn-icon-danger"),
   );
   row.appendChild(actions);
 
@@ -1283,10 +1284,10 @@ function tagEl(text) {
   return el;
 }
 
-function iconButton(svg, title, onClick) {
+function iconButton(svg, title, onClick, extraClass) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "btn-icon btn-square btn-gear";
+  btn.className = "btn-icon btn-square btn-gear" + (extraClass ? " " + extraClass : "");
   btn.title = title;
   btn.innerHTML = svg;
   btn.addEventListener("click", onClick);

@@ -83,6 +83,9 @@ body {
   cursor: pointer;
 }
 .btn-icon:hover { background: var(--bg); }
+/* 危险操作（删除）的图标按钮：常态即着色，与确认弹窗的危险色一致 */
+.btn-icon.btn-icon-danger { color: var(--danger); }
+.btn-icon.btn-icon-danger:hover { background: var(--danger-bg); }
 
 /* 正方形图标按钮（SVG 图标随 currentColor 适配明暗主题） */
 .btn-square {
@@ -693,6 +696,8 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+/* 当前使用中的提供商：边框着色标出，切换模型后随重渲染移动 */
+.provider-card.active { border-color: var(--accent); }
 .provider-head { display: flex; align-items: center; gap: 8px; }
 .provider-name { font-size: 13.5px; font-weight: 600; }
 .provider-head .tag {
