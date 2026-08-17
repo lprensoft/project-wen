@@ -609,7 +609,7 @@ async function runStatus() {
     const q = currentSession ? "?session_id=" + encodeURIComponent(currentSession) : "";
     const st = await fetch("/api/status" + q).then((r) => r.json());
     const lines = [
-      "📊 Agent 状态",
+      st.version ? "📊 Wen Agent " + st.version : "📊 Agent 状态",
       "模型：" + st.provider + " / " + st.model,
       "思考深度：" + st.thinking,
       "上下文窗口：" + st.context_length.toLocaleString() + " tokens",
@@ -730,105 +730,127 @@ function closeSettings() {
 // 与 internal/plugin 的 SourceBuiltin / SourceExternal 对应
 const SOURCE_LABELS = { builtin: "内置", external: "外源" };
 
+// 按功能分组分节展示：组间与组内都保持注册顺序（分组名随每个插件由后端给出），
+// 未声明分组的插件（如外源插件）由后端归入「其他」，自然落在最后。
 function renderSettingsPlugins(list) {
   settingsPluginsEl.textContent = "";
+  const order = [];
+  const byCat = new Map();
   for (const p of list) {
-    const card = document.createElement("div");
-    card.className = "plugin-card";
-
-    const head = document.createElement("div");
-    head.className = "plugin-card-head";
-    const name = document.createElement("span");
-    name.className = "plugin-card-name";
-    name.textContent = p.name;
-
-    const label = document.createElement("label");
-    label.className = "switch";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = p.enabled;
-    const slider = document.createElement("span");
-    slider.className = "slider";
-    label.append(input, slider);
-
-    const actions = document.createElement("div");
-    actions.className = "plugin-card-actions";
-    // 操作入口（如扫码绑定）也走齿轮：入口统一在配置弹窗里，卡片上不单独摆按钮
-    if ((p.config_fields || []).length > 0 || (p.actions || []).length > 0) {
-      const gear = document.createElement("button");
-      gear.type = "button";
-      gear.className = "btn-icon btn-square btn-gear";
-      gear.title = "配置";
-      gear.innerHTML = gearIconSVG;
-      gear.addEventListener("click", () => openPluginConfig(p));
-      actions.appendChild(gear);
+    const cat = p.category || "其他";
+    if (!byCat.has(cat)) {
+      byCat.set(cat, []);
+      order.push(cat);
     }
-    actions.appendChild(label);
-    head.append(name, actions);
-    card.appendChild(head);
-
-    const tags = document.createElement("div");
-    tags.className = "plugin-card-tags";
-    const addTag = (text, extraClass) => {
-      const tag = document.createElement("span");
-      tag.className = extraClass ? "tag " + extraClass : "tag";
-      tag.textContent = text;
-      tags.appendChild(tag);
-    };
-    addTag(SOURCE_LABELS[p.source] || p.source || "内置", "tag-source");
-    if (p.has_prompt) addTag("注入提示词");
-
-    // 依赖未满足时不让开：后端也会拒绝，这里只是别让用户白点一次
-    const unmet = p.unmet || [];
-    if (unmet.length > 0) {
-      addTag("需先启用 " + unmet.join("、"), "tag-blocked");
-      input.disabled = true;
-      label.title = "该插件依赖 " + unmet.join("、") + "，需要先启用后才能打开";
-      card.classList.add("plugin-card-blocked");
-    } else if ((p.requires || []).length > 0) {
-      addTag("依赖 " + p.requires.join("、"));
-    }
-    // 冲突只告警不阻止：能力相抵的代价由用户自己权衡
-    const conflicting = p.conflicting || [];
-    if (p.enabled && conflicting.length > 0) {
-      addTag("与 " + conflicting.join("、") + " 能力相抵", "tag-warn");
-    }
-    card.appendChild(tags);
-
-    // 工具名不再逐个占一个标签（数量多时会把版面撑乱），改为悬停查看
-    const tools = p.tool_names || [];
-    if (tools.length > 0) {
-      card.title = "工具：" + tools.join("、");
-    }
-
-    const desc = document.createElement("div");
-    desc.className = "plugin-card-desc";
-    desc.textContent = p.description;
-    card.appendChild(desc);
-
-    input.addEventListener("change", async () => {
-      const want = input.checked;
-      input.disabled = true;
-      try {
-        const res = await fetch("/api/plugins/" + encodeURIComponent(p.name), {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: want }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || "HTTP " + res.status);
-        }
-        renderSettingsPlugins(await res.json());
-      } catch (e) {
-        input.checked = !want; // 失败回滚开关状态
-        input.disabled = false;
-        addError("切换插件失败：" + e.message);
-      }
-    });
-
-    settingsPluginsEl.appendChild(card);
+    byCat.get(cat).push(p);
   }
+  for (const cat of order) {
+    const title = document.createElement("div");
+    title.className = "plugin-group-title";
+    title.textContent = cat;
+    const grid = document.createElement("div");
+    grid.className = "plugin-grid";
+    for (const p of byCat.get(cat)) grid.appendChild(buildPluginCard(p));
+    settingsPluginsEl.append(title, grid);
+  }
+}
+
+function buildPluginCard(p) {
+  const card = document.createElement("div");
+  card.className = "plugin-card";
+
+  const head = document.createElement("div");
+  head.className = "plugin-card-head";
+  const name = document.createElement("span");
+  name.className = "plugin-card-name";
+  name.textContent = p.name;
+
+  const label = document.createElement("label");
+  label.className = "switch";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = p.enabled;
+  const slider = document.createElement("span");
+  slider.className = "slider";
+  label.append(input, slider);
+
+  const actions = document.createElement("div");
+  actions.className = "plugin-card-actions";
+  // 操作入口（如扫码绑定）也走齿轮：入口统一在配置弹窗里，卡片上不单独摆按钮
+  if ((p.config_fields || []).length > 0 || (p.actions || []).length > 0) {
+    const gear = document.createElement("button");
+    gear.type = "button";
+    gear.className = "btn-icon btn-square btn-gear";
+    gear.title = "配置";
+    gear.innerHTML = gearIconSVG;
+    gear.addEventListener("click", () => openPluginConfig(p));
+    actions.appendChild(gear);
+  }
+  actions.appendChild(label);
+  head.append(name, actions);
+  card.appendChild(head);
+
+  const tags = document.createElement("div");
+  tags.className = "plugin-card-tags";
+  const addTag = (text, extraClass) => {
+    const tag = document.createElement("span");
+    tag.className = extraClass ? "tag " + extraClass : "tag";
+    tag.textContent = text;
+    tags.appendChild(tag);
+  };
+  addTag(SOURCE_LABELS[p.source] || p.source || "内置", "tag-source");
+  if (p.has_prompt) addTag("注入提示词");
+
+  // 依赖未满足时不让开：后端也会拒绝，这里只是别让用户白点一次
+  const unmet = p.unmet || [];
+  if (unmet.length > 0) {
+    addTag("需先启用 " + unmet.join("、"), "tag-blocked");
+    input.disabled = true;
+    label.title = "该插件依赖 " + unmet.join("、") + "，需要先启用后才能打开";
+    card.classList.add("plugin-card-blocked");
+  } else if ((p.requires || []).length > 0) {
+    addTag("依赖 " + p.requires.join("、"));
+  }
+  // 冲突只告警不阻止：能力相抵的代价由用户自己权衡
+  const conflicting = p.conflicting || [];
+  if (p.enabled && conflicting.length > 0) {
+    addTag("与 " + conflicting.join("、") + " 能力相抵", "tag-warn");
+  }
+  card.appendChild(tags);
+
+  // 工具名不再逐个占一个标签（数量多时会把版面撑乱），改为悬停查看
+  const tools = p.tool_names || [];
+  if (tools.length > 0) {
+    card.title = "工具：" + tools.join("、");
+  }
+
+  const desc = document.createElement("div");
+  desc.className = "plugin-card-desc";
+  desc.textContent = p.description;
+  card.appendChild(desc);
+
+  input.addEventListener("change", async () => {
+    const want = input.checked;
+    input.disabled = true;
+    try {
+      const res = await fetch("/api/plugins/" + encodeURIComponent(p.name), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: want }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "HTTP " + res.status);
+      }
+      renderSettingsPlugins(await res.json());
+    } catch (e) {
+      input.checked = !want; // 失败回滚开关状态
+      input.disabled = false;
+      addError("切换插件失败：" + e.message);
+    }
+  });
+
+  return card;
 }
 
 $("#btn-settings").addEventListener("click", openSettings);
@@ -1746,6 +1768,17 @@ $("#chat-form").addEventListener("submit", (e) => {
 $("#btn-new").addEventListener("click", newSession);
 
 loadSessions();
+
+// 左下角的版本号：取自 /api/status，取不到就不显示，不影响使用
+fetch("/api/status")
+  .then((r) => r.json())
+  .then((st) => {
+    if (!st.version) return;
+    const el = $("#version-label");
+    el.textContent = st.version;
+    el.title = "Wen Agent " + st.version;
+  })
+  .catch(() => {});
 
 // 侧栏定期刷新：QQ 远程会话、心跳与定时任务产生的新会话及标题变化自动出现。
 // 只刷列表不动消息区，对话进行中（busy）跳过，避免打扰。

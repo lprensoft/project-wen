@@ -50,6 +50,8 @@ func New() *Plugin {
 
 func (p *Plugin) Name() string { return "session_search" }
 
+func (p *Plugin) Category() string { return plugin.CategoryMemory }
+
 func (p *Plugin) Description() string {
 	return "在历史会话中按关键词与日期检索原始对话"
 }

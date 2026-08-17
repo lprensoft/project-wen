@@ -101,6 +101,8 @@ func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) Name() string { return "wechat_bot" }
 
+func (p *Plugin) Category() string { return plugin.CategoryChannel }
+
 func (p *Plugin) Description() string {
 	return "接入微信官方 ClawBot 插件实现个人微信私聊远程会话（设置页扫码绑定），支持 /new /status /compact /help 命令与危险操作远程确认"
 }

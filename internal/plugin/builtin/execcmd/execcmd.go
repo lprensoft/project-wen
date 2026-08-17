@@ -39,6 +39,8 @@ func New() *Plugin {
 }
 
 func (p *Plugin) Name() string { return "exec_command" }
+
+func (p *Plugin) Category() string { return plugin.CategoryTools }
 func (p *Plugin) Description() string {
 	return "在工作目录下执行 shell 命令，危险操作先由用户确认"
 }

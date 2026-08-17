@@ -34,6 +34,7 @@ type Status struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Source      string   `json:"source"`
+	Category    string   `json:"category"` // 功能分组（设置页分节展示用）
 	Enabled     bool     `json:"enabled"`
 	ToolNames   []string `json:"tool_names"`
 	HasPrompt   bool     `json:"has_prompt"`
@@ -342,6 +343,7 @@ func (m *Manager) List() []Status {
 			Name:        name,
 			Description: e.plugin.Description(),
 			Source:      e.source,
+			Category:    CategoryOf(e.plugin),
 			Enabled:     e.enabled,
 			ToolNames:   names,
 			HasPrompt:   e.plugin.SystemPrompt() != "",

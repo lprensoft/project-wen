@@ -52,6 +52,8 @@ func New() *Plugin {
 }
 
 func (p *Plugin) Name() string { return "roleplay" }
+
+func (p *Plugin) Category() string { return plugin.CategoryPersona }
 func (p *Plugin) Description() string {
 	return "按设定扮演角色：注入角色设定与我的信息，以【】演绎场景动作，约束表达方式与时间一致性"
 }

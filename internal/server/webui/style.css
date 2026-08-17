@@ -108,6 +108,14 @@ body {
   justify-content: space-between;
 }
 
+/* 底栏左侧：设置齿轮 + 版本号；主题滑块单独靠右 */
+.footer-left { display: flex; align-items: center; gap: 8px; }
+.version-label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
 /* 三段式主题滑块：跟随系统 / 浅色 / 深色 */
 .theme-seg {
   position: relative;
@@ -556,6 +564,15 @@ body {
 .settings-section.hidden { display: none; }
 .settings-section h3 { font-size: 15px; margin-bottom: 4px; }
 .settings-desc { font-size: 12.5px; color: var(--text-dim); margin-bottom: 14px; max-width: 720px; }
+
+/* 插件分组标题：每个功能分组一节，组序与组内顺序都跟随注册顺序 */
+.plugin-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 18px 0 8px;
+}
+.plugin-group-title:first-child { margin-top: 0; }
 
 /* 插件卡片网格：按可用宽度自动换行。
    不设 align-items，用 grid 默认的 stretch 让同一行的卡片自动等高，

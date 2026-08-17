@@ -48,6 +48,7 @@ type InitContext struct {
 
 // StatusInfo 是当前模型配置与会话用量的快照。
 type StatusInfo struct {
+	Version       string // 程序版本号（形如 v0.1.0），远端状态输出的首行展示用
 	Provider      string
 	Model         string
 	Thinking      string

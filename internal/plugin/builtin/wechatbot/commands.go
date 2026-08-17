@@ -215,7 +215,7 @@ func (p *Plugin) cmdStatus(ctx context.Context, msg inbound) {
 	}
 
 	lines := []string{
-		"📊 Agent 状态",
+		statusHeader(info.Version),
 		"模型：" + info.Provider + " / " + info.Model,
 		"思考深度：" + info.Thinking,
 		"上下文窗口：" + comma(info.ContextLength) + " tokens",
@@ -271,6 +271,14 @@ func toolsLine(tools []string) string {
 		quoted = append(quoted, "`"+t+"`")
 	}
 	return "🔧 调用工具 " + strings.Join(quoted, "、")
+}
+
+// statusHeader 是状态输出的首行：带上程序版本号，与 Web UI 的 /status 一致。
+func statusHeader(version string) string {
+	if version == "" {
+		return "📊 Agent 状态"
+	}
+	return "📊 Wen Agent " + version
 }
 
 // comma 加千位分隔符，与 Web UI 的 toLocaleString 显示一致。
