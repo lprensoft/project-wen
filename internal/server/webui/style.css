@@ -461,9 +461,9 @@ body {
 
 .settings-main { flex: 1; display: flex; min-height: 0; }
 
-/* 左侧栏目导航 */
+/* 左侧栏目导航：宽度与聊天页侧边栏一致，切换时不产生位移 */
 .settings-nav {
-  width: 180px;
+  width: 260px;
   flex-shrink: 0;
   background: var(--panel);
   border-right: 1px solid var(--border);
@@ -492,15 +492,16 @@ body {
 
 /* 右侧内容区 */
 .settings-content { flex: 1; overflow-y: auto; padding: 20px 24px; }
-.settings-section { max-width: 1080px; }
+/* 不给栏目设总宽上限，卡片网格才能真正按窗口宽度铺满换行；只给说明文字留可读宽度 */
 .settings-section.hidden { display: none; }
 .settings-section h3 { font-size: 15px; margin-bottom: 4px; }
-.settings-desc { font-size: 12.5px; color: var(--text-dim); margin-bottom: 14px; }
+.settings-desc { font-size: 12.5px; color: var(--text-dim); margin-bottom: 14px; max-width: 720px; }
 
-/* 插件卡片网格：随宽度一行 2~3 个 */
+/* 插件卡片网格：按可用宽度自动换行，高度参差不齐时不互相拉伸 */
 .plugin-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
   gap: 12px;
 }
 .plugin-card {
@@ -579,7 +580,13 @@ body {
 .models-current { font-size: 12.5px; color: var(--text-dim); }
 .models-current b { color: var(--accent); font-weight: 600; }
 
-.provider-list { display: flex; flex-direction: column; gap: 12px; }
+/* 提供商卡片同样按宽度换行；卡片内模型条数不等，align-items 防止被拉成同高 */
+.provider-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  align-items: start;
+  gap: 12px;
+}
 .provider-card {
   background: var(--panel);
   border: 1px solid var(--border);
