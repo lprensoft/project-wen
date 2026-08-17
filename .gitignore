@@ -7,6 +7,9 @@ sessions/
 plugins.state.json
 models.json
 
+# 插件的持久化目录（记忆条目与压缩归档等；锚定根目录，源码在 internal/plugin/ 下不受影响）
+/plugins/
+
 # 构建产物与运行日志（锚定根目录，避免误伤 cmd/wen/）
 /wen
 /wen.exe

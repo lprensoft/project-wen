@@ -105,8 +105,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 func (p *Plugin) Tools() []plugin.Tool {
 	return []plugin.Tool{
-		&listTool{p: p},
+		&saveTool{p: p},
 		&recallTool{p: p},
+		&listTool{p: p},
+		&deleteTool{p: p},
 	}
 }
 

@@ -106,6 +106,108 @@ func filterEntries(entries []Entry, keyword, typ string) []Entry {
 	return out
 }
 
+// ---------- save_memory ----------
+
+type saveTool struct{ p *Plugin }
+
+func (t *saveTool) Name() string { return "save_memory" }
+
+func (t *saveTool) Description() string {
+	return "保存一条长期记忆，之后的每次对话都会看到它的标题与摘要。" +
+		"标题要短且唯一，摘要一句话说清这条记忆讲什么，正文写完整内容。" +
+		"默认不覆盖同名记忆；确实要更新已有记忆时把 mode 设为 replace。"
+}
+
+func (t *saveTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "description": "标题，简短且唯一"},
+			"description": {"type": "string", "description": "一句话摘要，会出现在记忆索引里，过长会被截断"},
+			"type": {"type": "string", "description": "分类", "enum": ["偏好", "约定", "事实", "踩坑"]},
+			"content": {"type": "string", "description": "完整内容"},
+			"mode": {"type": "string", "description": "同名记忆已存在时的处理方式，默认拒绝", "enum": ["create", "replace"]}
+		},
+		"required": ["name", "description", "type", "content"]
+	}`)
+}
+
+func (t *saveTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Type        string `json:"type"`
+		Content     string `json:"content"`
+		Mode        string `json:"mode"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("参数格式错误: %w", err)
+	}
+	if strings.TrimSpace(a.Content) == "" {
+		return "", fmt.Errorf("记忆内容不能为空")
+	}
+	s := t.p.snapshot()
+	if s.store == nil {
+		return "", errNotReady
+	}
+
+	e, err := s.store.Save(Entry{
+		Name:        a.Name,
+		Description: a.Description,
+		Type:        a.Type,
+		Content:     a.Content,
+	}, a.Mode == "replace")
+	if err != nil {
+		return "", err
+	}
+
+	// 本轮的记忆索引在这次对话开始时就已定型，回显条目让新记忆立刻可见，
+	// 避免同一轮里反复保存同一条。
+	out := fmt.Sprintf("已保存记忆：%s/%s", e.Type, e.Name)
+	if e.Description != "" {
+		out += " — " + e.Description
+	}
+	return out, nil
+}
+
+// ---------- delete_memory ----------
+
+type deleteTool struct{ p *Plugin }
+
+func (t *deleteTool) Name() string { return "delete_memory" }
+
+func (t *deleteTool) Description() string {
+	return "删除一条已保存的记忆，用于内容已经失效或不再需要长期保留时。"
+}
+
+func (t *deleteTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "description": "要删除的记忆标题"}
+		},
+		"required": ["name"]
+	}`)
+}
+
+func (t *deleteTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("参数格式错误: %w", err)
+	}
+	s := t.p.snapshot()
+	if s.store == nil {
+		return "", errNotReady
+	}
+	e, err := s.store.Delete(a.Name)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("已删除记忆：%s/%s", e.Type, e.Name), nil
+}
+
 // ---------- recall_memory ----------
 
 type recallTool struct{ p *Plugin }

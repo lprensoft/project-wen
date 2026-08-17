@@ -254,6 +254,95 @@ func TestSetConfigTakesEffect(t *testing.T) {
 	}
 }
 
+func TestSaveMemoryTool(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	save := &saveTool{p: p}
+	run := func(args string) (string, error) {
+		return save.Execute(context.Background(), json.RawMessage(args))
+	}
+
+	out, err := run(`{"name":"提交信息用中文","description":"说明做了什么和为什么","type":"约定","content":"正文"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 本轮索引已定型，回显是新记忆在这一轮里唯一的可见途径
+	if !strings.Contains(out, "约定/提交信息用中文") || !strings.Contains(out, "说明做了什么和为什么") {
+		t.Errorf("保存结果应回显条目: %q", out)
+	}
+	if !strings.Contains(p.SystemPrompt(), "提交信息用中文") {
+		t.Error("保存后应出现在索引里")
+	}
+
+	// 默认拒绝覆盖，且要指明该怎么做
+	_, err = run(`{"name":"提交信息用中文","description":"另一个说明","type":"约定","content":"新正文"}`)
+	if err == nil {
+		t.Fatal("默认不应覆盖同名记忆")
+	}
+	if !strings.Contains(err.Error(), "replace") {
+		t.Errorf("拒绝覆盖时应说明如何覆盖: %v", err)
+	}
+
+	if _, err := run(`{"name":"提交信息用中文","description":"另一个说明","type":"约定","content":"新正文","mode":"replace"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := p.snapshot().store.Get("提交信息用中文")
+	if got.Content != "新正文" {
+		t.Errorf("覆盖后内容 = %q", got.Content)
+	}
+
+	// 非法输入
+	if _, err := run(`{"name":"x","description":"d","type":"约定","content":"  "}`); err == nil {
+		t.Error("空内容应被拒绝")
+	}
+	if _, err := run(`{"name":"x","description":"d","type":"随便","content":"c"}`); err == nil {
+		t.Error("未知分类应被拒绝")
+	}
+	if _, err := run(`不是 JSON`); err == nil {
+		t.Error("非法参数应报错")
+	}
+}
+
+func TestDeleteMemoryTool(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	p.snapshot().store.Save(Entry{Name: "临时约定", Description: "钩子", Type: "约定", Content: "正文"}, false)
+
+	del := &deleteTool{p: p}
+	out, err := del.Execute(context.Background(), json.RawMessage(`{"name":"临时约定"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "约定/临时约定") {
+		t.Errorf("删除结果 = %q", out)
+	}
+	if p.SystemPrompt() != "" {
+		t.Error("删除最后一条后不应再注入索引")
+	}
+	if _, err := del.Execute(context.Background(), json.RawMessage(`{"name":"临时约定"}`)); err == nil {
+		t.Error("重复删除应报错")
+	}
+}
+
+func TestSaveDeleteVisibleAcrossPluginInstances(t *testing.T) {
+	// 记忆的意义在于跨会话可见：换一个插件实例指向同一目录也应读到
+	dir := t.TempDir()
+	p1 := New()
+	if err := p1.Init(plugin.InitContext{StateDir: dir}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&saveTool{p: p1}).Execute(context.Background(),
+		json.RawMessage(`{"name":"跨会话","description":"钩子","type":"事实","content":"正文"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	p2 := New()
+	if err := p2.Init(plugin.InitContext{StateDir: dir}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p2.SystemPrompt(), "跨会话") {
+		t.Errorf("新实例应看到已保存的记忆:\n%s", p2.SystemPrompt())
+	}
+}
+
 func TestToolsRegisterWithoutConflict(t *testing.T) {
 	m := plugin.NewManager(plugin.InitContext{}, filepath.Join(t.TempDir(), "s.json"))
 	if err := m.Register(New(), plugin.PluginConfig{Enabled: true}); err != nil {
@@ -263,7 +352,7 @@ func TestToolsRegisterWithoutConflict(t *testing.T) {
 	for _, tl := range m.EnabledTools() {
 		names = append(names, tl.Name())
 	}
-	want := []string{"list_memories", "recall_memory"}
+	want := []string{"save_memory", "recall_memory", "list_memories", "delete_memory"}
 	if len(names) != len(want) {
 		t.Fatalf("工具列表 = %v", names)
 	}
