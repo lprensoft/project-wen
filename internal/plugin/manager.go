@@ -316,6 +316,75 @@ func (m *Manager) SystemPrompts() []string {
 	return out
 }
 
+// DecideScope 裁决本轮对话的可见域。
+//
+// 单所有者：按注册顺序第一个返回非零 Scope 的插件胜出，其余被忽略并记日志。
+// Write 会被插件用来拼持久化目录，因此按插件名的字符集校验，非法则整条裁决作废
+// 降级为零值——降级成「不限制」比让一个 "../x" 之类的标签流进文件路径安全得多。
+func (m *Manager) DecideScope(ctx context.Context, ev TurnEvent) Scope {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out Scope
+	owner := ""
+	for _, name := range m.order {
+		e := m.entries[name]
+		if !e.enabled {
+			continue
+		}
+		d, ok := e.plugin.(ScopeDecider)
+		if !ok {
+			continue
+		}
+		sc, err := d.DecideScope(ctx, ev)
+		if err != nil {
+			log.Printf("插件 %q 裁决可见域失败，按不限制处理: %v", name, err)
+			continue
+		}
+		if sc.IsZero() {
+			continue
+		}
+		if sc.Write != "" && !validName.MatchString(sc.Write) {
+			log.Printf("插件 %q 返回了非法的可见域标签 %q，已忽略", name, sc.Write)
+			continue
+		}
+		if owner != "" {
+			log.Printf("插件 %q 的可见域裁决被忽略：本轮已由插件 %q 决定", name, owner)
+			continue
+		}
+		out, owner = sc, name
+	}
+	return out
+}
+
+// TurnPrompts 在可见域裁决完成后收集各插件的一次性提示词片段（按注册顺序，已滤空）。
+// 插件返回的错误只记日志：少一段提示词应当降级，不该让整轮对话失败。
+func (m *Manager) TurnPrompts(ctx context.Context, ev TurnEvent) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []string
+	for _, name := range m.order {
+		e := m.entries[name]
+		if !e.enabled {
+			continue
+		}
+		tp, ok := e.plugin.(TurnPrompter)
+		if !ok {
+			continue
+		}
+		s, err := tp.TurnPrompt(ctx, ev)
+		if err != nil {
+			log.Printf("插件 %q 生成本轮提示词失败: %v", name, err)
+			continue
+		}
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // NotifyCompact 在会话历史被替换前广播压缩事件，返回各插件的注记（按注册顺序，已滤掉空串）。
 // 插件返回的错误只记录日志，不阻断压缩——压缩是上下文溢出时的保底手段，不能被插件卡住。
 func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {

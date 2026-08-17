@@ -152,35 +152,47 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		return fmt.Errorf("load session: %w", err)
 	}
 
-	// 首条用户消息生成标题
+	// 裁决本轮可见域。一轮只裁一次并全程从 ctx 取：若在工具执行阶段再裁一次，
+	// 同一轮的 assistant 与 tool 结果可能落到不同标签，tool_use / tool_result 会被永久拆散。
+	ev := plugin.TurnEvent{SessionID: sessionID, UserInput: userInput, History: taggedOf(history)}
+	scope := a.plugins.DecideScope(ctx, ev)
+	ctx = plugin.WithScope(ctx, scope)
+	ev.Scope = scope
+
+	// 首条用户消息生成标题（连同它所属的可见域一起记下）
 	if meta.Title == "" {
 		title := []rune(userInput)
 		if len(title) > titleMaxRunes {
 			title = title[:titleMaxRunes]
 		}
-		_ = a.store.SetTitle(sessionID, string(title))
+		_ = a.store.SetTitleTagged(sessionID, string(title), scope.Write)
 	}
 
 	userMsg := llm.Message{Role: llm.RoleUser, Content: userInput}
-	if err := a.append(sessionID, userMsg); err != nil {
+	if err := a.append(sessionID, userMsg, scope.Write); err != nil {
 		return err
 	}
 
-	// 组装上下文：system（环境块 + 启用插件的提示词片段 + 可选配置提示词）+ 历史 + 本条
+	// 组装上下文：system（环境块 + 启用插件的提示词片段 + 本轮片段 + 可选配置提示词）+ 历史 + 本条
 	msgs := make([]llm.Message, 0, len(history)+2)
 	parts := []string{envContext(opts.Workdir)}
 	parts = append(parts, a.plugins.SystemPrompts()...)
+	parts = append(parts, a.plugins.TurnPrompts(ctx, ev)...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)
 	}
 	msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: strings.Join(parts, "\n\n")})
-	for _, h := range history {
+	// pinned 与 msgs 一一对应，标记预算裁剪时不能丢的消息（system 与压缩摘要）
+	pinned := []bool{true}
+	for _, h := range visibleHistory(history, scope) {
 		msgs = append(msgs, h.Message)
+		pinned = append(pinned, h.Kind == session.KindSummary)
 	}
 	msgs = append(msgs, userMsg)
+	pinned = append(pinned, false)
 
 	for turn := 0; turn < opts.MaxTurns; turn++ {
-		r, err := a.stream(ctx, provider, opts, msgs, emit)
+		r, err := a.stream(ctx, provider, opts, msgs, pinned, emit)
 		if err != nil {
 			return err
 		}
@@ -201,10 +213,11 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			ReasoningBlocks: r.blocks,
 			ToolCalls:       r.toolCalls,
 		}
-		if err := a.append(sessionID, assistant); err != nil {
+		if err := a.append(sessionID, assistant, scope.Write); err != nil {
 			return err
 		}
 		msgs = append(msgs, assistant)
+		pinned = append(pinned, false)
 
 		if len(r.toolCalls) == 0 {
 			a.maybeAutoCompact(ctx, provider, opts, sessionID, r.usage, emit)
@@ -217,10 +230,11 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
 
 			toolMsg := llm.Message{Role: llm.RoleTool, Content: result, ToolCallID: call.ID}
-			if err := a.append(sessionID, toolMsg); err != nil {
+			if err := a.append(sessionID, toolMsg, scope.Write); err != nil {
 				return err
 			}
 			msgs = append(msgs, toolMsg)
+			pinned = append(pinned, false)
 		}
 	}
 	return fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)
@@ -236,11 +250,11 @@ type turnResult struct {
 }
 
 // stream 发起一次 LLM 调用，转发文本与思考增量，返回本轮完整产出。
-func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options, msgs []llm.Message, emit func(Event)) (turnResult, error) {
+func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options, msgs []llm.Message, pinned []bool, emit func(Event)) (turnResult, error) {
 	var r turnResult
 	events, err := provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       opts.Model,
-		Messages:    trimToBudget(opts, msgs),
+		Messages:    trimToBudget(opts, msgs, pinned),
 		Tools:       a.toolSpecs(),
 		Temperature: opts.Temperature,
 		MaxTokens:   opts.MaxTokens,
@@ -274,12 +288,25 @@ func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options,
 	return r, nil
 }
 
-// maybeAutoCompact 在实测上下文占用达到窗口阈值时自动压缩会话。
+// maybeAutoCompact 在上下文占用达到窗口阈值时自动压缩会话。
+//
+// 判据取「实测用量」与「全量历史估算」的较大者。实测用量只反映本轮实际发出的、
+// 已按可见域过滤过的上下文；只看它的话，一个上下文很小的可见域会让整个会话永不触发
+// 压缩，而其它可见域的历史仍在无限增长、记忆提炼也永不发生。偏早压缩无害——压缩本来
+// 就是上下文溢出时的保底手段。
 func (a *Agent) maybeAutoCompact(ctx context.Context, provider llm.Provider, opts Options, sessionID string, usage *llm.Usage, emit func(Event)) {
-	if usage == nil || opts.ContextLength <= 0 {
+	if opts.ContextLength <= 0 {
 		return
 	}
-	used := usage.PromptTokens + usage.CompletionTokens
+	used := 0
+	if usage != nil {
+		used = usage.PromptTokens + usage.CompletionTokens
+	}
+	if _, history, err := a.store.Get(sessionID); err == nil {
+		if est := EstimateHistoryTokens(messagesOf(history)); est > used {
+			used = est
+		}
+	}
 	if float64(used) < float64(opts.ContextLength)*autoCompactThreshold {
 		return
 	}
@@ -308,7 +335,11 @@ func estimateTokens(m llm.Message) int {
 
 // trimToBudget 在超出上下文预算时，从最旧的对话轮次（以 user 消息开头）开始整轮丢弃，
 // 始终保留 system 消息与最近的轮次，保证 tool_calls 与 tool 结果不会被拆散。
-func trimToBudget(opts Options, msgs []llm.Message) []llm.Message {
+//
+// pinned 与 msgs 一一对应，标记不可丢弃的消息；含被钉住消息的轮次会被跳过，继续找
+// 更近的轮次来丢。压缩摘要要钉住：它代表的是一大段已被物理删除的历史，丢掉它等于
+// 永久失忆，代价远高于丢一轮普通对话。pinned 可以为 nil（等同全部不钉）。
+func trimToBudget(opts Options, msgs []llm.Message, pinned []bool) []llm.Message {
 	budget := opts.ContextLength - opts.MaxTokens - 2048 // 预留输出与协议开销
 	if budget <= 0 {
 		return msgs
@@ -317,24 +348,57 @@ func trimToBudget(opts Options, msgs []llm.Message) []llm.Message {
 	for _, m := range msgs {
 		total += estimateTokens(m)
 	}
-	for total > budget && len(msgs) > 2 {
-		// msgs[0] 为 system；找到下一轮的起点（msgs[1] 之后的第一条 user）
-		next := -1
-		for i := 2; i < len(msgs); i++ {
-			if msgs[i].Role == llm.RoleUser {
-				next = i
+	if total <= budget || len(msgs) < 2 {
+		return msgs
+	}
+
+	isPinned := func(i int) bool { return i < len(pinned) && pinned[i] }
+	// msgs[0] 为 system，永不参与裁剪；其后按 user 消息切分轮次
+	turns := turnStarts(msgs)
+
+	drop := make([]bool, len(msgs))
+	// 最后一轮（当前轮）不能丢
+	for ti := 0; ti+1 < len(turns) && total > budget; ti++ {
+		start, end := turns[ti], turns[ti+1]
+		skip := false
+		for i := start; i < end; i++ {
+			if isPinned(i) {
+				skip = true
 				break
 			}
 		}
-		if next == -1 {
-			break // 只剩当前轮，不能再裁
+		if skip {
+			continue
 		}
-		for _, m := range msgs[1:next] {
-			total -= estimateTokens(m)
+		for i := start; i < end; i++ {
+			drop[i] = true
+			total -= estimateTokens(msgs[i])
 		}
-		msgs = append(msgs[:1:1], msgs[next:]...)
 	}
-	return msgs
+
+	out := make([]llm.Message, 0, len(msgs))
+	for i, m := range msgs {
+		if !drop[i] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// turnStarts 返回各轮次在 msgs 中的起始下标，末尾附上 len(msgs) 作为哨兵。
+// 轮次以 user 消息为界；msgs[0] 是 system，不算在内。
+func turnStarts(msgs []llm.Message) []int {
+	var starts []int
+	for i := 1; i < len(msgs); i++ {
+		// 第一条无论角色都作为首轮起点：历史可能以非 user 消息开头
+		if len(starts) == 0 || msgs[i].Role == llm.RoleUser {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) == 0 {
+		return nil
+	}
+	return append(starts, len(msgs))
 }
 
 // toolSpecs 每次请求时从启用插件动态生成工具声明（运行时开关天然生效）。
@@ -367,6 +431,8 @@ func (a *Agent) execute(ctx context.Context, call llm.ToolCall) string {
 	return result
 }
 
-func (a *Agent) append(sessionID string, msg llm.Message) error {
-	return a.store.Append(sessionID, session.StoredMessage{Message: msg, TS: time.Now()})
+// append 落盘一条消息。tag 是本轮的可见域标签，一轮内的 user / assistant / tool
+// 消息必须使用同一个值，否则 tool_use 与 tool_result 会被过滤拆散。
+func (a *Agent) append(sessionID string, msg llm.Message, tag string) error {
+	return a.store.Append(sessionID, session.StoredMessage{Message: msg, Tag: tag, TS: time.Now()})
 }

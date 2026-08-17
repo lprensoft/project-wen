@@ -183,6 +183,15 @@ func (s *Store) SetTitle(id, title string) error {
 	return s.updateMeta(id, func(m *Meta) { m.Title = title })
 }
 
+// SetTitleTagged 更新标题并记下它所属的可见域标签。
+// 标题取自首条用户消息，不带归属的话它会成为绕过可见域的旁路。
+func (s *Store) SetTitleTagged(id, title, tag string) error {
+	return s.updateMeta(id, func(m *Meta) {
+		m.Title = title
+		m.Tag = tag
+	})
+}
+
 // SetUsage 更新 meta 行记录的最近一次实测 token 用量（nil 表示清除）。
 func (s *Store) SetUsage(id string, u *Usage) error {
 	return s.updateMeta(id, func(m *Meta) { m.LastUsage = u })
