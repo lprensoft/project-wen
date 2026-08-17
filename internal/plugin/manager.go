@@ -40,6 +40,11 @@ type Status struct {
 	// ConfigFields 为空表示该插件没有可配置项（界面不显示配置入口）。
 	ConfigFields []ConfigField  `json:"config_fields,omitempty"`
 	Config       map[string]any `json:"config,omitempty"` // 当前生效值（含默认值）
+	// 依赖与冲突。Unmet / Conflicting 由 Manager 算好，界面直接用，不必自己推。
+	Requires    []string `json:"requires,omitempty"`    // 声明的依赖
+	Unmet       []string `json:"unmet,omitempty"`       // 其中未满足的（未注册或未启用）
+	Conflicts   []string `json:"conflicts,omitempty"`   // 声明的冲突项
+	Conflicting []string `json:"conflicting,omitempty"` // 其中当前已启用的
 }
 
 type entry struct {
@@ -50,6 +55,9 @@ type entry struct {
 	cfg     map[string]any // 生效配置 = baseCfg 叠加 userCfg
 	enabled bool
 	inited  bool
+	// forcedOff 表示「用户想开，但依赖没满足所以被强制关掉」。持久化时按想开来写，
+	// 使依赖恢复后插件能自动回来，见 Resolve 的说明。
+	forcedOff bool
 }
 
 // applyCfg 重算生效配置。
@@ -160,6 +168,7 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 }
 
 // SetEnabled 运行时启用/禁用插件并持久化状态。启用时执行 Init，失败保持禁用。
+// 依赖校验在 Init 之前完成：依赖不满足时不该产生任何副作用。
 func (m *Manager) SetEnabled(name string, on bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -168,13 +177,21 @@ func (m *Manager) SetEnabled(name string, on bool) error {
 	if !ok {
 		return fmt.Errorf("插件 %q 不存在", name)
 	}
-	if on && !e.inited {
-		if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
-			return fmt.Errorf("插件 %q 初始化失败: %w", name, err)
+	if on {
+		if err := m.checkEnableLocked(name); err != nil {
+			return err
 		}
-		e.inited = true
+		if !e.inited {
+			if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
+				return fmt.Errorf("插件 %q 初始化失败: %w", name, err)
+			}
+			e.inited = true
+		}
+	} else if err := m.checkDisableLocked(name); err != nil {
+		return err
 	}
 	e.enabled = on
+	e.forcedOff = false // 用户显式操作过，此后以他的意图为准
 	m.saveStateLocked()
 	return nil
 }
@@ -231,6 +248,10 @@ func (m *Manager) List() []Status {
 			Enabled:     e.enabled,
 			ToolNames:   names,
 			HasPrompt:   e.plugin.SystemPrompt() != "",
+			Requires:    RequiresOf(e.plugin),
+			Unmet:       m.unmetLocked(name),
+			Conflicts:   ConflictsOf(e.plugin),
+			Conflicting: m.conflictingLocked(name),
 		}
 		if fields := ConfigFieldsOf(e.plugin); len(fields) > 0 {
 			st.ConfigFields = fields
@@ -365,12 +386,14 @@ func (m *Manager) saveStateLocked() {
 	}
 	state := map[string]persistedEntry{}
 	for name, e := range m.entries {
-		// 只持久化界面上改过的配置，未改动的插件仍跟随配置文件
-		state[name] = persistedEntry{Enabled: e.enabled, Config: e.userCfg}
+		// 只持久化界面上改过的配置，未改动的插件仍跟随配置文件；
+		// 被依赖强制关掉的插件按「用户想开」持久化，依赖恢复后能自动回来
+		state[name] = persistedEntry{Enabled: e.enabled || e.forcedOff, Config: e.userCfg}
 	}
 	raw, _ := json.MarshalIndent(state, "", "  ")
 	_ = os.MkdirAll(filepath.Dir(m.statePath), 0o755)
-	if err := os.WriteFile(m.statePath, raw, 0o644); err != nil {
+	// 0600：插件配置里可能有用户不愿外泄的内容（提示词设定、触发词等），与 models.json 一致
+	if err := os.WriteFile(m.statePath, raw, 0o600); err != nil {
 		log.Printf("保存插件状态失败: %v", err)
 	}
 }
