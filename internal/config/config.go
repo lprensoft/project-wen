@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"wen/internal/llm"
 	"wen/internal/plugin"
 )
 
@@ -136,8 +138,9 @@ func (c *Config) validate() error {
 	if !ok {
 		return fmt.Errorf("model.provider %q not found in providers", c.Model.Provider)
 	}
-	if p.Type != "openai_compat" {
-		return fmt.Errorf("provider %q: unsupported type %q (only openai_compat)", c.Model.Provider, p.Type)
+	if !llm.IsKnownType(p.Type) {
+		return fmt.Errorf("provider %q: unsupported type %q (%s)",
+			c.Model.Provider, p.Type, strings.Join(llm.KnownTypes, "/"))
 	}
 	if p.APIKey == "" {
 		return fmt.Errorf("provider %q: api_key is empty (set it in config.yaml)", c.Model.Provider)

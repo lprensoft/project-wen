@@ -14,11 +14,23 @@ const (
 )
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Reasoning  string     `json:"reasoning_content,omitempty"` // 思考内容；带工具调用时必须回传给 API
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`        // assistant 发起的工具调用
-	ToolCallID string     `json:"tool_call_id,omitempty"`      // role=tool 时对应的调用 ID
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Reasoning string `json:"reasoning_content,omitempty"` // 思考内容；带工具调用时必须回传给 API
+	// ReasoningBlocks 保留 provider 原始的思考块（含签名），跨轮回传时需要。
+	// 仅 Anthropic 使用；OpenAI 兼容模式忽略此字段，只用 Reasoning。
+	ReasoningBlocks []ReasoningBlock `json:"reasoning_blocks,omitempty"`
+	ToolCalls       []ToolCall       `json:"tool_calls,omitempty"`   // assistant 发起的工具调用
+	ToolCallID      string           `json:"tool_call_id,omitempty"` // role=tool 时对应的调用 ID
+}
+
+// ReasoningBlock 是一个原样保留的思考块。Anthropic 要求带签名原样回传，
+// 签名缺失或被改动会被 API 拒绝。
+type ReasoningBlock struct {
+	Type      string `json:"type"`                // thinking / redacted_thinking
+	Text      string `json:"text,omitempty"`      // 思考文本
+	Signature string `json:"signature,omitempty"` // 思考块签名
+	Data      string `json:"data,omitempty"`      // redacted_thinking 的密文
 }
 
 type ToolCall struct {
@@ -51,6 +63,7 @@ const (
 	EventContentDelta   EventType = iota // Content 为文本增量
 	EventReasoningDelta                  // Content 为思考内容增量
 	EventToolCalls                       // ToolCalls 为累积完整的工具调用
+	EventReasoning                       // Reasoning 为累积完整的思考块（含签名）
 	EventUsage                           // Usage 为本次请求的实测 token 用量
 	EventDone
 	EventError
@@ -67,6 +80,7 @@ type StreamEvent struct {
 	Type      EventType
 	Content   string
 	ToolCalls []ToolCall
+	Reasoning []ReasoningBlock
 	Usage     *Usage
 	Err       error
 }
