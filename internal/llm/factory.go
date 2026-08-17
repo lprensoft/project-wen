@@ -21,7 +21,7 @@ func TypeLabel(typ string) string {
 	case TypeOpenAICompat:
 		return "OpenAI 兼容"
 	case TypeAnthropic:
-		return "Anthropic"
+		return "Anthropic 兼容"
 	}
 	return typ
 }
