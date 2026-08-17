@@ -44,7 +44,8 @@ type Plugin struct {
 	runTurn    plugin.RunTurnFunc
 	newSession plugin.NewSessionFunc
 	compact    plugin.CompactFunc
-	sessions   *session.Store // 只读：/status 展示会话信息
+	status     plugin.StatusFunc
+	sessions   *session.Store // 只读：校验绑定的会话是否仍存在
 
 	// 运行组件
 	tokens  *tokenSource
@@ -147,6 +148,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
 	p.compact = ictx.Compact
+	p.status = ictx.Status
 	p.sessions = sessions
 	p.tokens = newTokenSource(appID, appSecret)
 	if p.tokenURLOverride != "" {

@@ -99,6 +99,7 @@ async function newSession() {
   const meta = await res.json();
   currentSession = meta.id;
   clearMessages();
+  renderedFp = historyFp([]);
   await loadSessions();
   inputEl.focus();
   return meta.id;
@@ -111,8 +112,45 @@ async function selectSession(id) {
   if (!res.ok) { await loadSessions(); return; }
   const data = await res.json();
   renderHistory(data.messages);
+  renderedFp = historyFp(data.messages);
   loadSessions();
 }
+
+// ---------- 当前会话的后台同步 ----------
+// QQ 远程对话、心跳、定时任务都会往会话里写消息，而消息区只在选中时渲染一次。
+// 用「条数 + 末条时间戳」做指纹，变了才整体重渲染，避免无谓的闪动。
+
+let renderedFp = ""; // 消息区当前渲染内容对应的指纹
+
+function historyFp(msgs) {
+  const last = msgs[msgs.length - 1];
+  return msgs.length + "|" + (last ? last.ts : "");
+}
+
+async function syncCurrentSession() {
+  if (!currentSession || busy) return;
+  try {
+    const res = await fetch(`/api/sessions/${currentSession}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const fp = historyFp(data.messages);
+    if (fp === renderedFp) return;
+    renderHistory(data.messages);
+    renderedFp = fp;
+    scrollBottom();
+  } catch { /* 网络抖动下次再试 */ }
+}
+
+// 静默校准指纹（内容已经在流式过程中渲染到界面上，不需要重画）
+async function refreshFp() {
+  if (!currentSession) return;
+  try {
+    const res = await fetch(`/api/sessions/${currentSession}`);
+    if (res.ok) renderedFp = historyFp((await res.json()).messages);
+  } catch { /* 忽略 */ }
+}
+
+setInterval(syncCurrentSession, 5000);
 
 // ---------- 消息渲染 ----------
 
@@ -475,6 +513,8 @@ async function sendMessage() {
     } else if (autoCompacted) {
       await selectSession(currentSession); // 重载压缩后的历史
       addSysBlock("✅ 会话已自动压缩");
+    } else {
+      refreshFp(); // 本轮内容已在流式过程中上屏，只校准指纹防止轮询重画
     }
     loadSessions(); // 刷新标题
     inputEl.focus();

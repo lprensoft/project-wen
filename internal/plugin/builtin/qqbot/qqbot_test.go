@@ -155,6 +155,12 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string) (*Plu
 		SessionDir: sessDir,
 		RunTurn:    runTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
+		Status: func(sessionID string) (plugin.StatusInfo, error) {
+			return plugin.StatusInfo{
+				Provider: "testprov", Model: "m1", Thinking: "off", ContextLength: 131072,
+				HasSession: sessionID != "", MessageCount: 2, MeasuredTokens: 1234, EstTokens: 999,
+			}, nil
+		},
 	}
 	cfg := map[string]any{
 		"app_id": "123", "app_secret": "secret",
@@ -234,8 +240,11 @@ func TestCommands(t *testing.T) {
 	}
 
 	f.pushC2C("user1", "/status")
-	if m := f.expectSend(t); !strings.Contains(m.content, "当前会话") {
-		t.Fatalf("/status 回执异常: %s", m.content)
+	if m := f.expectSend(t); !strings.Contains(m.content, "📊 Agent 状态") ||
+		!strings.Contains(m.content, "testprov / m1") ||
+		!strings.Contains(m.content, "上下文窗口：131,072 tokens") ||
+		!strings.Contains(m.content, "实测 1,234 tokens（占用 0.94%）") {
+		t.Fatalf("/status 应与 Web UI 同格式: %s", m.content)
 	}
 
 	f.pushC2C("user1", "/什么鬼")
@@ -366,6 +375,21 @@ func TestReplyLimiter(t *testing.T) {
 	l.entries["m2"] = &replyEntry{count: 1, first: time.Now().Add(-2 * time.Hour)}
 	if ok, _ := l.next("m2"); ok {
 		t.Fatal("超过 60 分钟应降级")
+	}
+}
+
+func TestCommaPct(t *testing.T) {
+	if got := comma(131072); got != "131,072" {
+		t.Fatalf("comma = %s", got)
+	}
+	if got := comma(999); got != "999" {
+		t.Fatalf("comma = %s", got)
+	}
+	if got := pct(1234, 131072); got != "0.94" {
+		t.Fatalf("pct = %s", got)
+	}
+	if got := pct(1, 0); got != "0.00" {
+		t.Fatalf("pct 除零 = %s", got)
 	}
 }
 

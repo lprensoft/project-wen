@@ -16,7 +16,7 @@
 
 插件可选声明 `Dependent`（`Requires() []string`）与 `Conflicting`（`Conflicts() []string`）。依赖是硬性的：依赖未满足时拒绝启用（校验放在 `Init` **之前**，避免产生副作用），被依赖的插件也无法在依赖方仍启用时关闭——拒绝而非级联关闭，因为界面没有确认或提示通道，级联只会表现为「另一个开关自己变灰了」。冲突只告警不阻止。依赖校验必须在**全部 `Register` 之后**由 `Manager.Resolve()` 统一做（register 是逐个进行的，依赖方可能先注册），且要显式检出依赖环。被强制关闭的插件记在 `entry.forcedOff` 而不是直接改 `enabled`：状态文件是全量重写的，直接改会把强制关闭固化成用户意图，依赖恢复后也回不来。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十一处按此标准放行：
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十二处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
 2. `InitContext.SessionDir` —— 会话目录，只读用；
@@ -28,7 +28,8 @@
 8. **插件发起轮次**（`InitContext.RunTurn` / `NewSession` / `Compact`，见「插件发起轮次约定」）；
 9. `Stoppable` —— 插件停止钩子（禁用、重配、进程退出三处由 Manager 在**锁外**调用）；
 10. `TurnObserver` —— 轮次结束观察（`Manager.NotifyTurnEnd` 逐个 recover 广播）；
-11. **交互标记与会话活跃时间**（`WithInteractive` / `Meta.LastActiveAt`，见「插件发起轮次约定」）。
+11. **交互标记与会话活跃时间**（`WithInteractive` / `Meta.LastActiveAt`，见「插件发起轮次约定」）；
+12. `InitContext.Status` —— 模型配置与会话用量快照，与 Web UI 的状态命令同源，远端界面（如 QQ 的 /status）据此保持一致输出。
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「危险命令」「心跳」「定时」或「QQ」这回事。
 

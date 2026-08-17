@@ -55,8 +55,9 @@ func main() {
 	// Agent 与插件互相需要：插件在 Agent 之前构造，故各能力都用闭包延迟到实际使用时取值。
 	// store 也在其后创建，但必须与 Agent 复用同一个实例——两个 Store 的会话锁互不相识。
 	var (
-		ag    *agent.Agent
-		store *session.Store
+		ag     *agent.Agent
+		store  *session.Store
+		models *modelcfg.Store
 	)
 	ictx := plugin.InitContext{
 		Workdir:    workdir,
@@ -86,6 +87,35 @@ func main() {
 			}
 			return ag.CompactTurn(ctx, sessionID)
 		},
+		// 与 server 的 GET /api/status 同源，保证远端界面与 Web UI 的状态输出一致
+		Status: func(sessionID string) (plugin.StatusInfo, error) {
+			if models == nil || store == nil {
+				return plugin.StatusInfo{}, fmt.Errorf("状态尚未就绪")
+			}
+			provider, model, thinking, contextLength := models.Status()
+			info := plugin.StatusInfo{
+				Provider: provider, Model: model, Thinking: thinking,
+				ContextLength: contextLength, MeasuredTokens: -1,
+			}
+			if sessionID == "" {
+				return info, nil
+			}
+			meta, msgs, err := store.Get(sessionID)
+			if err != nil {
+				return info, nil // 会话不存在只影响会话部分
+			}
+			info.HasSession = true
+			info.MessageCount = len(msgs)
+			lms := make([]llm.Message, 0, len(msgs))
+			for _, m := range msgs {
+				lms = append(lms, m.Message)
+			}
+			info.EstTokens = agent.EstimateHistoryTokens(lms)
+			if meta.LastUsage != nil {
+				info.MeasuredTokens = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
+			}
+			return info, nil
+		},
 	}
 	plugins := buildPlugins(cfg, ictx)
 
@@ -95,7 +125,7 @@ func main() {
 	}
 
 	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
-	models, err := modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
+	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
 	if err != nil {
 		log.Fatalf("加载模型配置失败: %v", err)
 	}
