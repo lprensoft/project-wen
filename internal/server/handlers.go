@@ -8,6 +8,7 @@ import (
 
 	"wen/internal/agent"
 	"wen/internal/llm"
+	"wen/internal/plugin"
 	"wen/internal/session"
 )
 
@@ -86,19 +87,24 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emit, ok := startSSE(w)
+	emit, emitRaw, ok := startSSE(w)
 	if !ok {
 		return
 	}
-	s.agent.Run(r.Context(), req.SessionID, req.Message, emit)
+	// 工具要请求用户确认时经这条 SSE 流问、经 /api/confirmations/{id} 收答复。
+	// 按请求注入而不是放进 InitContext：确认必须回到发起这轮对话的那个界面。
+	ctx := plugin.WithConfirmer(r.Context(), s.confirmerFor(emitRaw))
+	s.agent.Run(ctx, req.SessionID, req.Message, emit)
 }
 
-// startSSE 设置 SSE 响应头并返回事件写入函数（Agent 从单 goroutine 调用，无需加锁）。
-func startSSE(w http.ResponseWriter) (func(agent.Event), bool) {
+// startSSE 设置 SSE 响应头，返回 Agent 事件写入函数与一个原始帧写入函数
+// （Agent 与工具执行同在一个 goroutine 上，无需加锁）。
+// 原始帧留给不属于 Agent 事件模型的东西，如工具的确认请求。
+func startSSE(w http.ResponseWriter) (func(agent.Event), func(string, any), bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
-		return nil, false
+		return nil, nil, false
 	}
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -106,14 +112,18 @@ func startSSE(w http.ResponseWriter) (func(agent.Event), bool) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	return func(ev agent.Event) {
-		data, err := json.Marshal(ev)
+	emitRaw := func(name string, v any) {
+		data, err := json.Marshal(v)
 		if err != nil {
 			return
 		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
 		flusher.Flush()
-	}, true
+	}
+	emit := func(ev agent.Event) {
+		emitRaw(string(ev.Type), ev)
+	}
+	return emit, emitRaw, true
 }
 
 // status 返回 Agent 配置与（可选的）当前会话上下文用量。
@@ -190,7 +200,7 @@ func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("session not found: %s", id))
 		return
 	}
-	emit, ok := startSSE(w)
+	emit, _, ok := startSSE(w)
 	if !ok {
 		return
 	}

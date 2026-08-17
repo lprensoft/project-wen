@@ -15,14 +15,15 @@ import (
 var webuiFS embed.FS
 
 type Server struct {
-	agent   *agent.Agent
-	store   *session.Store
-	plugins *plugin.Manager
-	models  *modelcfg.Store
+	agent    *agent.Agent
+	store    *session.Store
+	plugins  *plugin.Manager
+	models   *modelcfg.Store
+	confirms *confirmBroker
 }
 
 func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *modelcfg.Store) *Server {
-	return &Server{agent: a, store: store, plugins: plugins, models: models}
+	return &Server{agent: a, store: store, plugins: plugins, models: models, confirms: newConfirmBroker()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -36,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}", s.getSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.deleteSession)
 	mux.HandleFunc("POST /api/chat", s.chat)
+	mux.HandleFunc("POST /api/confirmations/{id}", s.confirmResolve)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.compact)
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)

@@ -63,6 +63,36 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | `openai_compat` | OpenAI 兼容协议（DeepSeek 等） |
 | `anthropic` | Anthropic Messages API。思考档位映射为 `thinking:{type:"adaptive"}` + `output_config.effort`（`off` 则为 `disabled`）；当前世代 Claude 模型不接受采样参数，故不发送 `temperature`，模型条目里的该项对 Anthropic 无效 |
 
+## 命令执行的安全机制（exec_command 插件）
+
+这个工具把任意字符串交给 `cmd /C` 或 `sh -c`，所以它是整个系统里唯一能造成不可逆损失的地方。这里采取的是**执行前拦截并交人确认**，而不是沙箱。
+
+**为什么不做沙箱**：shell 有 `&&`、`|`、变量展开、`for /f`、base64 解码、UNC 路径、`..\..`——想靠分析命令文本得出「它会碰哪些文件」是做不到的。一个能被轻易绕过的路径约束比不做更糟，因为用户会信它。真正的隔离要靠操作系统层面的机制（容器 / seccomp / AppContainer），而那与「在真实工作目录里跑 build、test、git」这个用途本身冲突——你得把工具链、网络、git 凭据都放进去，放完就不隔离了。真正能挡住误删的是**有人在 `rm -rf` 执行前看了一眼**，而只有人能判断意图。
+
+三档判定：
+
+| 判定 | 处理 | 例子 |
+|---|---|---|
+| 直接拒绝 | 不询问、不执行，把原因回给模型 | 整盘格式化、写裸设备、`rm -rf /`、删除系统根目录、销毁卷影副本、改 `bcdedit`、关机重启、fork 炸弹 |
+| 需要确认 | 阻塞这一轮对话，界面上弹出卡片，等你点「允许执行」或「拒绝」 | 删除文件、镜像同步（会删目标端多余文件）、`git reset --hard` / `--force` / `rebase`、改权限、提权、杀进程、改服务与注册表、装卸软件包、管道进 shell、删容器与数据表 |
+| 放行 | 直接执行 | 其余命令（`dangerous` 档）；只读命令（`all` 档） |
+
+极高危的那一档刻意不询问：把「要格式化磁盘吗？」摆到人面前，本身就是一次误点击的机会。
+
+几个实现细节：
+
+- **串联命令逐段判定，也整条判定**。逐段是为了不漏掉藏在后半段的东西（`go build && rm -rf out`），整条是为了不漏掉本身就跨越 `|` 的模式（`curl … | sh`、fork 炸弹）。命中多个类别时全部列出——一条命令可能既删文件又改写提交历史，只说一样会让人以为自己已经看清了要同意什么。
+- **拿不到答复不等于得到许可**。超时、关掉页面、连接断开，一律按拒绝处理。也刻意没有「无人值守就放行」的开关：确实要在无人值守下跑破坏性命令，请把 `guard` 关掉——那是一个看得见的选择，而不是一个容易被忘记的例外。
+- **模型会被告知这条规则**，否则被拒绝的模型会去改写命令重试，那正是最该避免的行为。提示词里还要求它把破坏性操作单独执行、不要串联，这样你才能只同意其中安全的部分。
+
+**它挡的是误操作，不是攻击**。`dangerous` 档按命令文本判断，刻意混淆（base64、变量拼接、写个脚本再执行）能绕过去。要防那个只有 `all` 一档——除只读白名单外一律确认。
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `guard` | `dangerous` | 拦截档位：`dangerous` / `all` / `off` |
+| `timeout_seconds` | 60 | 单条命令的最长执行时间 |
+| `confirm_timeout_seconds` | 300 | 等待确认的上限，超时按拒绝处理 |
+
 ## 长期记忆（memory 插件）
 
 会话历史不是可靠的记忆：超出上下文预算时最旧的轮次会被裁掉，实测占用达 90% 时整段历史会被**物理替换**成一条摘要。`memory` 插件在会话文件之外维护一层持久事实库。
@@ -147,7 +177,8 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | POST | `/api/sessions` | 新建会话 |
 | GET | `/api/sessions/{id}` | 会话历史消息 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
-| POST | `/api/chat` | `{"session_id","message"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `compact_*` / `done` / `error`） |
+| POST | `/api/chat` | `{"session_id","message"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `confirm_request` / `confirm_done` / `compact_*` / `done` / `error`） |
+| POST | `/api/confirmations/{id}` | `{"approved": bool}` 回答一次操作确认（id 取自 `confirm_request` 帧）。已超时或已回答过时返回 409 |
 | GET | `/api/plugins` | 插件列表与状态（含来源 `source`、可配置项声明 `config_fields` 与当前生效值 `config`） |
 | PUT | `/api/plugins/{name}` | `{"enabled": bool}` 运行时开关插件 |
 | PUT | `/api/plugins/{name}/config` | `{"config": {...}}` 保存插件配置，校验通过后立即生效并持久化 |
@@ -179,6 +210,7 @@ internal/server/         HTTP API + SSE + 内嵌 Web UI
 - `Configurable`（`ConfigFields()`）——声明可配置项，设置页据此生成表单并持久化。字段类型有 `int` / `bool` / `string` / `select` / `text`（多行，渲染成 textarea）。
 - `Lifecycle`（`OnCompact()`）——在会话历史被摘要替换**之前**收到通知，可借此归档或提炼；返回的注记会追加到摘要末尾，从而只落进该会话的历史。事件广播给所有订阅者（`memory` 与 `session_search` 都订阅了它，各做各的事），返回错误只记日志，不阻断压缩。历史带可见域标签时按标签分组，每组一次事件。
 - `ScopeDecider`（`DecideScope()`）与 `TurnPrompter`（`TurnPrompt()`）——见下方「可见域」。
+- 操作确认：用 `plugin.ConfirmerFrom(ctx)` 取确认通道，在执行不可逆操作前问一次。第二个返回值为 false 表示当前没有可交互的用户，**不要当作已获同意**；返回 error 同理，拿不到答复不等于得到许可。
 - `Dependent`（`Requires()`）——声明必须同时启用的插件。依赖未满足时拒绝启用（开关在界面上置灰），被依赖的插件也无法在依赖方仍启用时关闭。
 - `Conflicting`（`Conflicts()`）——声明能力相抵的插件。只告警不阻止。
 

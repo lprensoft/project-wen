@@ -371,6 +371,60 @@ body {
   white-space: pre-wrap;
 }
 
+/* 操作确认块。这一轮对话正阻塞在这里等回答，所以它要显眼、要压住视线，
+   而且不设默认动作——两个按钮都得点出来。 */
+.confirm-block {
+  align-self: stretch;
+  background: var(--panel);
+  border: 1px solid var(--danger);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.confirm-head { font-weight: 600; color: var(--danger); }
+.confirm-reason { color: var(--text-dim); font-size: 12.5px; }
+.confirm-detail {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--tool-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+  color: var(--text);
+}
+.confirm-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.confirm-status { margin-right: auto; color: var(--text-dim); font-size: 12.5px; }
+.confirm-actions button { padding: 6px 14px; font-size: 13px; }
+.btn-danger {
+  border: 1px solid var(--danger);
+  background: var(--danger);
+  color: #fff;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-danger:hover { filter: brightness(1.08); }
+.btn-danger:disabled { opacity: 0.6; cursor: wait; }
+/* 定稿后收敛为一条记录，不再抢注意力 */
+.confirm-block.confirm-allowed, .confirm-block.confirm-denied {
+  border-color: var(--border);
+  border-left-width: 4px;
+}
+.confirm-block.confirm-allowed { border-left-color: var(--accent); }
+.confirm-block.confirm-denied { border-left-color: var(--text-dim); }
+.confirm-block.confirm-allowed .confirm-head,
+.confirm-block.confirm-denied .confirm-head { color: var(--text-dim); font-weight: 500; }
+
 /* ---------- 输入区 ---------- */
 .composer {
   display: flex;
