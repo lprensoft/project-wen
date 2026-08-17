@@ -743,7 +743,7 @@ function buildConfigField(f, value) {
     } else {
       el.type = "text";
     }
-    wrap.append(label, el);
+    wrap.append(label, wrapNumberInput(el));
   }
 
   setFieldValue(f, el, value === undefined ? f.default : value);
@@ -1193,10 +1193,9 @@ function openModelModal(provider, id) {
   const d = modelsDoc.defaults || {};
   const idInput = textInput(m ? m.id : "");
   const nameInput = textInput(m && m.name ? m.name : "");
-  const ctxInput = numberInput(m && m.context_length, `跟随全局（${d.context_length}）`);
-  const maxInput = numberInput(m && m.max_tokens, `跟随全局（${d.max_tokens}）`);
-  const tempInput = numberInput(m && m.temperature, `跟随全局（${d.temperature}）`);
-  tempInput.step = "0.1";
+  const ctxInput = numberInput(m && m.context_length, `跟随全局（${d.context_length}）`, { min: 1 });
+  const maxInput = numberInput(m && m.max_tokens, `跟随全局（${d.max_tokens}）`, { min: 1 });
+  const tempInput = numberInput(m && m.temperature, `跟随全局（${d.temperature}）`, { min: 0, max: 2, step: 0.1 });
 
   const thinkSelect = document.createElement("select");
   const follow = document.createElement("option");
@@ -1275,6 +1274,42 @@ async function saveModel() {
 
 // ---------- 表单小工具 ----------
 
+const chevronUpSVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>';
+const chevronDownSVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+
+// wrapNumberInput 给数字输入配上自定义的上下箭头（系统默认样式已在 CSS 中隐藏）
+function wrapNumberInput(input) {
+  if (!(input instanceof HTMLInputElement) || input.type !== "number") return input;
+
+  const wrap = document.createElement("div");
+  wrap.className = "number-field";
+  const steppers = document.createElement("div");
+  steppers.className = "number-steppers";
+  steppers.append(stepButton(chevronUpSVG, input, 1), stepButton(chevronDownSVG, input, -1));
+  wrap.append(input, steppers);
+  return wrap;
+}
+
+function stepButton(svg, input, dir) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "number-step";
+  btn.tabIndex = -1; // 键盘上下键本来就能调值，按钮不进 Tab 顺序
+  btn.title = dir > 0 ? "增加" : "减少";
+  btn.innerHTML = svg;
+  btn.addEventListener("click", () => {
+    // 空值时从下限（没有下限则从 0）起步，避免浏览器各自的默认行为
+    if (input.value.trim() === "") input.value = input.min !== "" ? input.min : "0";
+    else if (dir > 0) input.stepUp();
+    else input.stepDown();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  });
+  return btn;
+}
+
 function textInput(value) {
   const el = document.createElement("input");
   el.type = "text";
@@ -1282,11 +1317,15 @@ function textInput(value) {
   return el;
 }
 
-function numberInput(value, placeholder) {
+function numberInput(value, placeholder, opts) {
   const el = document.createElement("input");
   el.type = "number";
   el.value = value === undefined || value === null ? "" : String(value);
   el.placeholder = placeholder || "";
+  const o = opts || {};
+  if (o.min !== undefined) el.min = o.min;
+  if (o.max !== undefined) el.max = o.max;
+  if (o.step !== undefined) el.step = o.step;
   return el;
 }
 
@@ -1296,7 +1335,7 @@ function fieldEl(label, input, desc) {
   const lab = document.createElement("span");
   lab.className = "field-label";
   lab.textContent = label;
-  wrap.append(lab, input);
+  wrap.append(lab, wrapNumberInput(input));
   if (desc) {
     const d = document.createElement("div");
     d.className = "field-desc";
