@@ -86,6 +86,38 @@ model:
 	}
 }
 
+func TestValidateAcceptsAnthropicType(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+model:
+  provider: claude
+providers:
+  claude:
+    type: anthropic
+    base_url: https://api.anthropic.com
+    api_key: sk-ant-x
+`), 0o644)
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err != nil {
+		t.Fatalf("anthropic type should be accepted: %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownType(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+model:
+  provider: local
+providers:
+  local:
+    type: ollama
+    base_url: http://127.0.0.1:11434
+    api_key: x
+`), 0o644)
+	if _, err := Load(filepath.Join(dir, "config.yaml")); err == nil {
+		t.Fatal("expected error for unsupported provider type")
+	}
+}
+
 func TestSessionDirDefault(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-x")
 	dir := t.TempDir()

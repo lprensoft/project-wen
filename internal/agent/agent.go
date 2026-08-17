@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"wen/internal/llm"
@@ -51,7 +52,17 @@ type Options struct {
 	ContextLength int    // 模型上下文窗口（token），超出预算时裁剪最旧轮次
 }
 
+// ModelOptions 是可热切换的模型参数（与 SystemPrompt/MaxTurns/Workdir 等进程级配置分开）。
+type ModelOptions struct {
+	Model         string
+	Temperature   float64
+	MaxTokens     int
+	Thinking      string
+	ContextLength int
+}
+
 type Agent struct {
+	mu       sync.RWMutex // 保护 provider 与 opts（模型可运行时切换）
 	provider llm.Provider
 	plugins  *plugin.Manager
 	store    *session.Store
@@ -63,6 +74,33 @@ func New(provider llm.Provider, plugins *plugin.Manager, store *session.Store, o
 		opts.MaxTurns = 20
 	}
 	return &Agent{provider: provider, plugins: plugins, store: store, opts: opts}
+}
+
+// snapshot 取一份当前 provider 与配置。一轮请求全程使用同一份快照，
+// 避免长流中途被切换导致模型与上下文（尤其思考块签名）错配。
+func (a *Agent) snapshot() (llm.Provider, Options) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.provider, a.opts
+}
+
+// SetModel 热切换 provider 与模型参数，下一次请求生效；进行中的请求不受影响。
+func (a *Agent) SetModel(p llm.Provider, m ModelOptions) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.provider = p
+	a.opts.Model = m.Model
+	a.opts.Temperature = m.Temperature
+	a.opts.MaxTokens = m.MaxTokens
+	a.opts.Thinking = m.Thinking
+	a.opts.ContextLength = m.ContextLength
+}
+
+// Options 返回当前生效配置的副本。
+func (a *Agent) Options() Options {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.opts
 }
 
 const titleMaxRunes = 30
@@ -78,6 +116,8 @@ func (a *Agent) Run(ctx context.Context, sessionID, userInput string, emit func(
 }
 
 func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(Event)) error {
+	provider, opts := a.snapshot()
+
 	meta, history, err := a.store.Get(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
@@ -99,10 +139,10 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 
 	// 组装上下文：system（环境块 + 启用插件的提示词片段 + 可选配置提示词）+ 历史 + 本条
 	msgs := make([]llm.Message, 0, len(history)+2)
-	parts := []string{envContext(a.opts.Workdir)}
+	parts := []string{envContext(opts.Workdir)}
 	parts = append(parts, a.plugins.SystemPrompts()...)
-	if a.opts.SystemPrompt != "" {
-		parts = append(parts, a.opts.SystemPrompt)
+	if opts.SystemPrompt != "" {
+		parts = append(parts, opts.SystemPrompt)
 	}
 	msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: strings.Join(parts, "\n\n")})
 	for _, h := range history {
@@ -110,32 +150,39 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	}
 	msgs = append(msgs, userMsg)
 
-	for turn := 0; turn < a.opts.MaxTurns; turn++ {
-		content, reasoning, toolCalls, usage, err := a.stream(ctx, msgs, emit)
+	for turn := 0; turn < opts.MaxTurns; turn++ {
+		r, err := a.stream(ctx, provider, opts, msgs, emit)
 		if err != nil {
 			return err
 		}
-		if usage != nil {
+		if r.usage != nil {
 			// 记录实测用量（供 /status 展示与自动压缩判断）
 			_ = a.store.SetUsage(sessionID, &session.Usage{
-				PromptTokens:     usage.PromptTokens,
-				CompletionTokens: usage.CompletionTokens,
+				PromptTokens:     r.usage.PromptTokens,
+				CompletionTokens: r.usage.CompletionTokens,
 			})
 		}
 
-		// reasoning 一并持久化并留在上下文里：带工具调用时 DeepSeek 要求回传
-		assistant := llm.Message{Role: llm.RoleAssistant, Content: content, Reasoning: reasoning, ToolCalls: toolCalls}
+		// reasoning 一并持久化并留在上下文里：带工具调用时 DeepSeek 要求回传，
+		// Anthropic 则要求原样回传带签名的思考块（reasoningBlocks）
+		assistant := llm.Message{
+			Role:            llm.RoleAssistant,
+			Content:         r.content,
+			Reasoning:       r.reasoning,
+			ReasoningBlocks: r.blocks,
+			ToolCalls:       r.toolCalls,
+		}
 		if err := a.append(sessionID, assistant); err != nil {
 			return err
 		}
 		msgs = append(msgs, assistant)
 
-		if len(toolCalls) == 0 {
-			a.maybeAutoCompact(ctx, sessionID, usage, emit)
+		if len(r.toolCalls) == 0 {
+			a.maybeAutoCompact(ctx, provider, opts, sessionID, r.usage, emit)
 			return nil // 无工具调用，本轮结束
 		}
 
-		for _, call := range toolCalls {
+		for _, call := range r.toolCalls {
 			emit(Event{Type: EventToolStart, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 			result := a.execute(ctx, call)
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
@@ -147,55 +194,64 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			msgs = append(msgs, toolMsg)
 		}
 	}
-	return fmt.Errorf("reached max_turns (%d) without a final answer", a.opts.MaxTurns)
+	return fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)
 }
 
-// stream 发起一次 LLM 调用，转发文本与思考增量，返回完整文本、思考内容、工具调用与实测用量。
-func (a *Agent) stream(ctx context.Context, msgs []llm.Message, emit func(Event)) (string, string, []llm.ToolCall, *llm.Usage, error) {
-	events, err := a.provider.ChatStream(ctx, llm.ChatRequest{
-		Model:       a.opts.Model,
-		Messages:    a.trimToBudget(msgs),
+// turnResult 是一次 LLM 调用的完整产出。
+type turnResult struct {
+	content   string
+	reasoning string
+	blocks    []llm.ReasoningBlock
+	toolCalls []llm.ToolCall
+	usage     *llm.Usage
+}
+
+// stream 发起一次 LLM 调用，转发文本与思考增量，返回本轮完整产出。
+func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options, msgs []llm.Message, emit func(Event)) (turnResult, error) {
+	var r turnResult
+	events, err := provider.ChatStream(ctx, llm.ChatRequest{
+		Model:       opts.Model,
+		Messages:    trimToBudget(opts, msgs),
 		Tools:       a.toolSpecs(),
-		Temperature: a.opts.Temperature,
-		MaxTokens:   a.opts.MaxTokens,
-		Thinking:    a.opts.Thinking,
+		Temperature: opts.Temperature,
+		MaxTokens:   opts.MaxTokens,
+		Thinking:    opts.Thinking,
 	})
 	if err != nil {
-		return "", "", nil, nil, err
+		return turnResult{}, err
 	}
 
-	var content, reasoning string
-	var toolCalls []llm.ToolCall
-	var usage *llm.Usage
 	for ev := range events {
 		switch ev.Type {
 		case llm.EventContentDelta:
-			content += ev.Content
+			r.content += ev.Content
 			emit(Event{Type: EventDelta, Content: ev.Content})
 		case llm.EventReasoningDelta:
-			reasoning += ev.Content
+			r.reasoning += ev.Content
 			emit(Event{Type: EventThinking, Content: ev.Content})
 		case llm.EventToolCalls:
-			toolCalls = ev.ToolCalls
+			r.toolCalls = ev.ToolCalls
+		case llm.EventReasoning:
+			r.blocks = ev.Reasoning
 		case llm.EventUsage:
-			usage = ev.Usage
+			r.usage = ev.Usage
 		case llm.EventError:
-			return "", "", nil, nil, ev.Err
+			return turnResult{}, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", "", nil, nil, err
+		return turnResult{}, err
 	}
-	return content, reasoning, toolCalls, usage, nil
+	return r, nil
 }
 
 // maybeAutoCompact 在实测上下文占用达到窗口阈值时自动压缩会话。
-func (a *Agent) maybeAutoCompact(ctx context.Context, sessionID string, usage *llm.Usage, emit func(Event)) {
-	if usage == nil || a.opts.ContextLength <= 0 {
+func (a *Agent) maybeAutoCompact(ctx context.Context, provider llm.Provider, opts Options, sessionID string, usage *llm.Usage, emit func(Event)) {
+	if usage == nil || opts.ContextLength <= 0 {
 		return
 	}
 	used := usage.PromptTokens + usage.CompletionTokens
-	if float64(used) < float64(a.opts.ContextLength)*autoCompactThreshold {
+	if float64(used) < float64(opts.ContextLength)*autoCompactThreshold {
 		return
 	}
 	emit(Event{Type: EventCompactStart})
@@ -204,7 +260,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, sessionID string, usage *l
 			emit(Event{Type: EventCompactDelta, Content: ev.Content})
 		}
 	}
-	if err := a.compact(ctx, sessionID, wrapped); err != nil {
+	if err := a.compact(ctx, provider, opts, sessionID, wrapped); err != nil {
 		emit(Event{Type: EventCompactDone, Error: err.Error()})
 		return
 	}
@@ -223,8 +279,8 @@ func estimateTokens(m llm.Message) int {
 
 // trimToBudget 在超出上下文预算时，从最旧的对话轮次（以 user 消息开头）开始整轮丢弃，
 // 始终保留 system 消息与最近的轮次，保证 tool_calls 与 tool 结果不会被拆散。
-func (a *Agent) trimToBudget(msgs []llm.Message) []llm.Message {
-	budget := a.opts.ContextLength - a.opts.MaxTokens - 2048 // 预留输出与协议开销
+func trimToBudget(opts Options, msgs []llm.Message) []llm.Message {
+	budget := opts.ContextLength - opts.MaxTokens - 2048 // 预留输出与协议开销
 	if budget <= 0 {
 		return msgs
 	}

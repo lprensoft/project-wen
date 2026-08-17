@@ -12,6 +12,7 @@ import (
 	"wen/internal/agent"
 	"wen/internal/config"
 	"wen/internal/llm"
+	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/readfile"
@@ -36,9 +37,6 @@ func main() {
 		cfg.Server.Port = *port
 	}
 
-	providerCfg := cfg.Providers[cfg.Model.Provider]
-	provider := llm.NewOpenAICompat(providerCfg.BaseURL, providerCfg.APIKey)
-
 	workdir := cfg.Agent.Workdir
 	if workdir == "" {
 		workdir, _ = os.Getwd()
@@ -51,27 +49,36 @@ func main() {
 		log.Fatalf("初始化 session 存储失败: %v", err)
 	}
 
+	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
+	models, err := modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
+	if err != nil {
+		log.Fatalf("加载模型配置失败: %v", err)
+	}
+	cur, err := models.Resolve()
+	if err != nil {
+		log.Fatalf("模型配置无效: %v", err)
+	}
+	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	ag := agent.New(provider, plugins, store, agent.Options{
-		Model:         cfg.Model.Name,
-		Temperature:   cfg.Model.Temperature,
-		MaxTokens:     cfg.Model.MaxTokens,
+		Model:         cur.ModelID,
+		Temperature:   cur.Temperature,
+		MaxTokens:     cur.MaxTokens,
 		SystemPrompt:  cfg.Agent.SystemPrompt,
 		MaxTurns:      cfg.Agent.MaxTurns,
 		Workdir:       workdir,
-		Thinking:      cfg.Model.Thinking,
-		ContextLength: cfg.Model.ContextLength,
+		Thinking:      cur.Thinking,
+		ContextLength: cur.ContextLength,
 	})
 
-	srv := server.New(ag, store, plugins, server.Info{
-		Provider:      cfg.Model.Provider,
-		Model:         cfg.Model.Name,
-		Thinking:      cfg.Model.Thinking,
-		ContextLength: cfg.Model.ContextLength,
-	})
+	srv := server.New(ag, store, plugins, models)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	log.Printf("配置文件: %s", path)
-	log.Printf("模型: %s/%s  会话目录: %s", cfg.Model.Provider, cfg.Model.Name, cfg.SessionDir())
+	log.Printf("模型: %s/%s  会话目录: %s", cur.ProviderName, cur.ModelID, cfg.SessionDir())
 	for _, st := range plugins.List() {
 		state := "禁用"
 		if st.Enabled {

@@ -234,8 +234,7 @@ func TestTrimToBudget(t *testing.T) {
 		{Role: "user", Content: "最新问题"},
 	}
 	// 预算只够最近内容：ContextLength - MaxTokens - 2048 ≈ 4952 token
-	ag := New(&mockProvider{}, newTestManager(t), nil, Options{ContextLength: 8000, MaxTokens: 1000})
-	got := ag.trimToBudget(msgs)
+	got := trimToBudget(Options{ContextLength: 8000, MaxTokens: 1000}, msgs)
 
 	if got[0].Role != "system" {
 		t.Fatal("system message must be kept")
@@ -251,8 +250,7 @@ func TestTrimToBudget(t *testing.T) {
 		t.Error("latest user message must be kept")
 	}
 	// 预算充足时不裁剪
-	ag2 := New(&mockProvider{}, newTestManager(t), nil, Options{ContextLength: 1000000, MaxTokens: 4096})
-	if got2 := ag2.trimToBudget(msgs); len(got2) != len(msgs) {
+	if got2 := trimToBudget(Options{ContextLength: 1000000, MaxTokens: 4096}, msgs); len(got2) != len(msgs) {
 		t.Errorf("should not trim under budget, got %d/%d", len(got2), len(msgs))
 	}
 }
@@ -429,5 +427,77 @@ func TestSystemMessageContainsEnvContext(t *testing.T) {
 	// 环境块在前，配置提示词拼接在后
 	if strings.Index(sys, "[系统环境]") > strings.Index(sys, "自定义提示词") {
 		t.Error("env context should come before the configured system prompt")
+	}
+}
+
+// blockingProvider 在收到请求后阻塞，直到 release 被关闭，用于验证进行中的请求使用旧快照。
+type blockingProvider struct {
+	name    string
+	started chan struct{}
+	release chan struct{}
+	reqs    []llm.ChatRequest
+}
+
+func (p *blockingProvider) ChatStream(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.reqs = append(p.reqs, req)
+	ch := make(chan llm.StreamEvent)
+	go func() {
+		defer close(ch)
+		close(p.started)
+		<-p.release
+		ch <- llm.StreamEvent{Type: llm.EventContentDelta, Content: p.name}
+		ch <- llm.StreamEvent{Type: llm.EventDone}
+	}()
+	return ch, nil
+}
+
+func TestSetModelHotSwap(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+
+	p1 := &mockProvider{turns: []mockTurn{{content: "旧模型"}}}
+	ag := New(p1, newTestManager(t), store, Options{
+		Model: "old", MaxTokens: 1000, ContextLength: 8000,
+		SystemPrompt: "自定义", MaxTurns: 7, Workdir: "/tmp", Thinking: "high",
+	})
+	ag.Run(context.Background(), meta.ID, "问题一", func(Event) {})
+
+	p2 := &mockProvider{turns: []mockTurn{{content: "新模型"}}}
+	ag.SetModel(p2, ModelOptions{Model: "new", MaxTokens: 2000, Thinking: "low", ContextLength: 200000})
+	ag.Run(context.Background(), meta.ID, "问题二", func(Event) {})
+
+	if p1.calls != 1 || p2.calls != 1 {
+		t.Fatalf("calls: p1=%d p2=%d", p1.calls, p2.calls)
+	}
+	if p2.reqs[0].Model != "new" || p2.reqs[0].Thinking != "low" || p2.reqs[0].MaxTokens != 2000 {
+		t.Errorf("new request = %+v", p2.reqs[0])
+	}
+	// 切换模型不应影响进程级配置
+	opts := ag.Options()
+	if opts.SystemPrompt != "自定义" || opts.MaxTurns != 7 || opts.Workdir != "/tmp" {
+		t.Errorf("process options changed: %+v", opts)
+	}
+}
+
+func TestSetModelDuringRunUsesSnapshot(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+
+	old := &blockingProvider{name: "旧", started: make(chan struct{}), release: make(chan struct{})}
+	ag := New(old, newTestManager(t), store, Options{Model: "old", MaxTokens: 1000, ContextLength: 8000})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ag.Run(context.Background(), meta.ID, "问题", func(Event) {})
+	}()
+
+	<-old.started // 请求已发出，此时切换模型
+	ag.SetModel(&mockProvider{turns: []mockTurn{{content: "新"}}}, ModelOptions{Model: "new", MaxTokens: 2000})
+	close(old.release)
+	<-done
+
+	if len(old.reqs) != 1 || old.reqs[0].Model != "old" {
+		t.Errorf("in-flight request must keep the old snapshot: %+v", old.reqs)
 	}
 }

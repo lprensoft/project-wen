@@ -1,0 +1,174 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"wen/internal/agent"
+	"wen/internal/llm"
+	"wen/internal/modelcfg"
+)
+
+// listModels 返回提供商与模型的全量配置（API Key 只给掩码）。
+func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.modelsView())
+}
+
+// saveModels 整档保存配置：校验通过后落盘，并让当前选中的模型立即生效。
+func (s *Server) saveModels(w http.ResponseWriter, r *http.Request) {
+	var req modelcfg.File
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if _, err := s.models.Save(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.applyCurrentModel(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.modelsView())
+}
+
+// setCurrentModel 切换当前使用的提供商与模型。
+func (s *Server) setCurrentModel(w http.ResponseWriter, r *http.Request) {
+	var sel modelcfg.Selection
+	if err := json.NewDecoder(r.Body).Decode(&sel); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if _, err := s.models.SetCurrent(sel); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.applyCurrentModel(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.modelsView())
+}
+
+// testModel 用极小的一次真实请求验证 base_url / API Key / 模型 id 是否可用。
+func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider string `json:"provider"`
+		Type     string `json:"type"`
+		BaseURL  string `json:"base_url"`
+		APIKey   string `json:"api_key"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Model == "" {
+		writeError(w, http.StatusBadRequest, "请先为该提供商添加模型后再测试")
+		return
+	}
+	// 密钥留空表示沿用已保存的值（界面上只拿得到掩码）
+	if req.APIKey == "" {
+		if p, _, ok := s.models.Lookup(req.Provider, req.Model); ok {
+			req.APIKey = p.APIKey
+		}
+	}
+	if req.APIKey == "" {
+		writeError(w, http.StatusBadRequest, "请填写 API Key")
+		return
+	}
+
+	provider, err := llm.New(req.Type, req.BaseURL, req.APIKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := probe(r.Context(), provider, req.Model); err != nil {
+		writeError(w, http.StatusBadRequest, "连接失败："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// probe 发起一次最小请求，收到首个事件即视为连通。
+func probe(ctx context.Context, provider llm.Provider, model string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	events, err := provider.ChatStream(ctx, llm.ChatRequest{
+		Model:     model,
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "ping"}},
+		MaxTokens: 16,
+		Thinking:  "off",
+	})
+	if err != nil {
+		return err
+	}
+	// 收到首个事件即视为连通，随后 cancel 关闭剩余的流
+	ev, ok := <-events
+	if !ok {
+		return fmt.Errorf("模型没有返回任何内容")
+	}
+	if ev.Type == llm.EventError {
+		return ev.Err
+	}
+	return nil
+}
+
+// applyCurrentModel 按当前选中项重建 provider 并热切换到 Agent。
+func (s *Server) applyCurrentModel() error {
+	cur, err := s.models.Resolve()
+	if err != nil {
+		return err
+	}
+	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey)
+	if err != nil {
+		return err
+	}
+	s.agent.SetModel(provider, agent.ModelOptions{
+		Model:         cur.ModelID,
+		Temperature:   cur.Temperature,
+		MaxTokens:     cur.MaxTokens,
+		Thinking:      cur.Thinking,
+		ContextLength: cur.ContextLength,
+	})
+	return nil
+}
+
+// modelsView 组装响应：api_key 一律不出现，只给掩码与「是否已配置」。
+func (s *Server) modelsView() map[string]any {
+	view := s.models.Snapshot()
+	def := s.models.Defaults()
+
+	providers := make([]map[string]any, 0, len(view.Providers))
+	for _, p := range view.Providers {
+		models := p.Models
+		if models == nil {
+			models = []modelcfg.Model{}
+		}
+		providers = append(providers, map[string]any{
+			"name":           p.Name,
+			"type":           p.Type,
+			"base_url":       p.BaseURL,
+			"api_key_masked": modelcfg.MaskKey(p.APIKey),
+			"has_api_key":    p.APIKey != "",
+			"source":         p.Source,
+			"models":         models,
+		})
+	}
+	return map[string]any{
+		"providers": providers,
+		"current":   view.Current,
+		"types":     modelcfg.TypeOptions(),
+		"defaults": map[string]any{
+			"temperature":    def.Temperature,
+			"max_tokens":     def.MaxTokens,
+			"thinking":       def.Thinking,
+			"context_length": def.ContextLength,
+		},
+		"thinking_levels": []string{"off", "low", "medium", "high", "xhigh", "max"},
+	}
+}

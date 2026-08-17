@@ -6,7 +6,9 @@ server:
   host: 127.0.0.1
   port: 8080
 
-# 当前使用的模型（provider 名 + 模型 id）
+# 当前使用的模型（provider 名 + 模型 id）。
+# 这里是初始值：设置页「模型」栏目的改动写入 <配置目录>/models.json 并优先生效，
+# 不会回写本文件；未在界面上改过的条目仍跟随这里。
 model:
   provider: deepseek
   name: deepseek-chat
@@ -18,9 +20,14 @@ model:
 # Provider 注册表 —— 后续接入 OpenAI / Ollama 等只需在此加条目
 providers:
   deepseek:
-    type: openai_compat      # MVP 仅支持 openai_compat
+    type: openai_compat      # openai_compat / anthropic
     base_url: https://api.deepseek.com
     api_key: sk-你的密钥       # 直接填写；也支持 ${VAR} 从进程环境变量读取
+                             # 注意：${VAR} 展开后的值若被界面保存进 models.json 就会固定下来
+  # anthropic:
+  #   type: anthropic
+  #   base_url: https://api.anthropic.com
+  #   api_key: sk-ant-你的密钥
 
 agent:
   system_prompt: ""          # 系统提示词，先留空

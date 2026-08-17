@@ -32,14 +32,15 @@ const summaryPrefix = "以下是之前对话内容的压缩摘要：\n\n"
 // Compact 将 session 历史压缩为一条摘要消息。
 // 摘要生成过程通过 emit 以 delta 事件流式发布，结束时发布 done 或 error。
 func (a *Agent) Compact(ctx context.Context, sessionID string, emit func(Event)) {
-	if err := a.compact(ctx, sessionID, emit); err != nil {
+	provider, opts := a.snapshot()
+	if err := a.compact(ctx, provider, opts, sessionID, emit); err != nil {
 		emit(Event{Type: EventError, Error: err.Error()})
 		return
 	}
 	emit(Event{Type: EventDone})
 }
 
-func (a *Agent) compact(ctx context.Context, sessionID string, emit func(Event)) error {
+func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options, sessionID string, emit func(Event)) error {
 	_, history, err := a.store.Get(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
@@ -48,11 +49,11 @@ func (a *Agent) compact(ctx context.Context, sessionID string, emit func(Event))
 		return fmt.Errorf("会话为空，无需压缩")
 	}
 
-	events, err := a.provider.ChatStream(ctx, llm.ChatRequest{
-		Model:       a.opts.Model,
+	events, err := provider.ChatStream(ctx, llm.ChatRequest{
+		Model:       opts.Model,
 		Messages:    []llm.Message{{Role: llm.RoleUser, Content: compactPrompt + serializeHistory(history)}},
-		Temperature: a.opts.Temperature,
-		MaxTokens:   a.opts.MaxTokens,
+		Temperature: opts.Temperature,
+		MaxTokens:   opts.MaxTokens,
 		Thinking:    "off", // 压缩追求速度，不启用思考
 	})
 	if err != nil {

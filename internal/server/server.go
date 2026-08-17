@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"wen/internal/agent"
+	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -13,23 +14,15 @@ import (
 //go:embed webui
 var webuiFS embed.FS
 
-// Info 是 /api/status 展示的静态配置信息。
-type Info struct {
-	Provider      string `json:"provider"`
-	Model         string `json:"model"`
-	Thinking      string `json:"thinking"`
-	ContextLength int    `json:"context_length"`
-}
-
 type Server struct {
 	agent   *agent.Agent
 	store   *session.Store
 	plugins *plugin.Manager
-	info    Info
+	models  *modelcfg.Store
 }
 
-func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, info Info) *Server {
-	return &Server{agent: a, store: store, plugins: plugins, info: info}
+func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *modelcfg.Store) *Server {
+	return &Server{agent: a, store: store, plugins: plugins, models: models}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -48,6 +41,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)
 	mux.HandleFunc("PUT /api/plugins/{name}", s.setPlugin)
 	mux.HandleFunc("PUT /api/plugins/{name}/config", s.setPluginConfig)
+	mux.HandleFunc("GET /api/models", s.listModels)
+	mux.HandleFunc("PUT /api/models", s.saveModels)
+	mux.HandleFunc("PUT /api/models/current", s.setCurrentModel)
+	mux.HandleFunc("POST /api/models/test", s.testModel)
 
 	return mux
 }

@@ -63,14 +63,25 @@
       <span class="settings-title">设置</span>
     </div>
     <div class="settings-main">
-      <nav class="settings-nav">
+      <nav class="settings-nav" id="settings-nav">
         <button class="settings-nav-item active" data-section="plugins">插件</button>
+        <button class="settings-nav-item" data-section="models">模型</button>
       </nav>
       <div class="settings-content">
         <section class="settings-section" id="section-plugins">
           <h3>插件</h3>
           <p class="settings-desc">开关立即生效并持久化，作用于下一次对话请求。</p>
           <div id="settings-plugins" class="plugin-grid"></div>
+        </section>
+        <section class="settings-section hidden" id="section-models">
+          <h3>模型</h3>
+          <p class="settings-desc">改动写入 &lt;配置目录&gt;/models.json，保存后下一次对话请求即生效。</p>
+          <div id="models-error" class="modal-error hidden"></div>
+          <div class="models-toolbar">
+            <span id="models-current" class="models-current"></span>
+            <button id="btn-add-provider" class="btn-primary" type="button">＋ 新增提供商</button>
+          </div>
+          <div id="settings-models" class="provider-list"></div>
         </section>
       </div>
     </div>
@@ -91,6 +102,43 @@
         <span class="modal-foot-gap"></span>
         <button id="btn-config-cancel" class="btn-ghost" type="button">取消</button>
         <button id="btn-config-save" class="btn-primary" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="provider-modal" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="provider-modal-title">提供商</span>
+        <button id="btn-provider-close" class="btn-icon btn-square" type="button" title="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form id="provider-form" class="modal-body"></form>
+      <div id="provider-error" class="modal-error hidden"></div>
+      <div class="modal-foot">
+        <button id="btn-provider-test" class="btn-ghost" type="button">测试连接</button>
+        <span class="modal-foot-gap"></span>
+        <button id="btn-provider-cancel" class="btn-ghost" type="button">取消</button>
+        <button id="btn-provider-save" class="btn-primary" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="model-modal" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="model-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="model-modal-title">模型</span>
+        <button id="btn-model-close" class="btn-icon btn-square" type="button" title="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form id="model-form" class="modal-body"></form>
+      <div id="model-error" class="modal-error hidden"></div>
+      <div class="modal-foot">
+        <span class="modal-foot-gap"></span>
+        <button id="btn-model-cancel" class="btn-ghost" type="button">取消</button>
+        <button id="btn-model-save" class="btn-primary" type="button">保存</button>
       </div>
     </div>
   </div>

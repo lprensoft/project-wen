@@ -118,11 +118,12 @@ func startSSE(w http.ResponseWriter) (func(agent.Event), bool) {
 
 // status 返回 Agent 配置与（可选的）当前会话上下文用量。
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	provider, model, thinking, contextLength := s.models.Status()
 	resp := map[string]any{
-		"provider":       s.info.Provider,
-		"model":          s.info.Model,
-		"thinking":       s.info.Thinking,
-		"context_length": s.info.ContextLength,
+		"provider":       provider,
+		"model":          model,
+		"thinking":       thinking,
+		"context_length": contextLength,
 	}
 	if sid := r.URL.Query().Get("session_id"); sid != "" {
 		if meta, msgs, err := s.store.Get(sid); err == nil {
