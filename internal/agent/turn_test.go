@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +199,49 @@ func TestTurnEndBroadcast(t *testing.T) {
 	}
 	if ev.EndedAt.Before(ev.StartedAt) {
 		t.Fatalf("EndedAt 早于 StartedAt: %+v", ev)
+	}
+}
+
+// 安装过程通知回调后：每轮的完整思考链、每批工具名按序送达；未安装则零开销。
+func TestTurnNotes(t *testing.T) {
+	store, id := newTestSession(t)
+	mp := &mockProvider{turns: []mockTurn{
+		{reasoning: "先查一下", toolCalls: []llm.ToolCall{
+			{ID: "c1", Name: "echo", Arguments: []byte(`{"text":"敏感参数"}`)},
+		}},
+		{reasoning: "查完了", content: "最终回答"},
+	}}
+	ag := New(mp, newTestManager(t, echoPlugin{}), store, Options{Model: "m", MaxTurns: 5})
+
+	var notes []plugin.TurnNote
+	ctx := plugin.WithTurnNotes(context.Background(), func(n plugin.TurnNote) {
+		notes = append(notes, n)
+	})
+	final, err := ag.RunTurn(ctx, id, "帮我查")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final != "最终回答" {
+		t.Fatalf("最终文本 = %q", final)
+	}
+
+	want := []plugin.TurnNote{
+		{Kind: plugin.NoteThinking, Text: "先查一下"},
+		{Kind: plugin.NoteToolCalls, Tools: []string{"echo"}},
+		{Kind: plugin.NoteThinking, Text: "查完了"},
+	}
+	if len(notes) != len(want) {
+		t.Fatalf("通知数 = %d，期望 %d: %+v", len(notes), len(want), notes)
+	}
+	for i, n := range notes {
+		if n.Kind != want[i].Kind || n.Text != want[i].Text || !slices.Equal(n.Tools, want[i].Tools) {
+			t.Fatalf("通知[%d] = %+v，期望 %+v", i, n, want[i])
+		}
+	}
+	// 工具通知只有名字，不含参数
+	for _, n := range notes {
+		if strings.Contains(n.Text, "敏感参数") {
+			t.Fatal("通知不该携带工具参数")
+		}
 	}
 }

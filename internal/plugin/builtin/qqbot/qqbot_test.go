@@ -160,6 +160,12 @@ func (f *fakeQQ) expectNoSend(t *testing.T, d time.Duration) {
 // newInited 起一个连着假平台的插件。
 func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string) (*Plugin, *fakeQQ, *session.Store) {
 	t.Helper()
+	return newInitedCfg(t, runTurn, whitelist, nil)
+}
+
+// newInitedCfg 同 newInited，extra 覆盖默认配置项。
+func newInitedCfg(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, extra map[string]any) (*Plugin, *fakeQQ, *session.Store) {
+	t.Helper()
 	f := newFakeQQ(t)
 	sessDir := t.TempDir()
 	store, err := session.NewStore(sessDir)
@@ -183,6 +189,9 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string) (*Plu
 	cfg := map[string]any{
 		"app_id": "123", "app_secret": "secret",
 		"api_base": f.srv.URL, "whitelist": whitelist,
+	}
+	for k, v := range extra {
+		cfg[k] = v
 	}
 	if err := p.Init(ictx, cfg); err != nil {
 		t.Fatal(err)
@@ -280,6 +289,60 @@ func TestBackgroundTurnPush(t *testing.T) {
 }
 
 func noopTurn(context.Context, string, string) (string, error) { return "", nil }
+
+// notesTurn 模拟核心在轮次中发出过程通知：一段思考、一批工具、最终文本。
+func notesTurn(ctx context.Context, _, _ string) (string, error) {
+	if fn := plugin.TurnNotesFrom(ctx); fn != nil {
+		fn(plugin.TurnNote{Kind: plugin.NoteThinking, Text: "让我想想"})
+		fn(plugin.TurnNote{Kind: plugin.NoteToolCalls, Tools: []string{"exec_command", "read_file"}})
+	}
+	return "最终回复", nil
+}
+
+// 展示开关：默认不装通知回调；开启后思考与工具调用按序推送、格式与 Web UI 对齐。
+func TestShowProcess(t *testing.T) {
+	// 默认关闭：轮次 ctx 里不应有通知回调
+	sawNotes := false
+	plain := func(ctx context.Context, _, _ string) (string, error) {
+		sawNotes = plugin.TurnNotesFrom(ctx) != nil
+		return "ok", nil
+	}
+	_, f, _ := newInited(t, plain, "user1")
+	f.pushC2C("user1", "你好")
+	f.expectSend(t)
+	if sawNotes {
+		t.Fatal("默认配置下不应安装过程通知回调")
+	}
+
+	// 都开启：思考 → 工具 → 最终回复，三条按序
+	_, f2, _ := newInitedCfg(t, notesTurn, "user1",
+		map[string]any{"show_thinking": true, "show_tools": true})
+	f2.pushC2C("user1", "查一下")
+	m := f2.expectSend(t)
+	if !strings.Contains(m.content, "🧠 思考过程") || !strings.Contains(m.content, "让我想想") {
+		t.Fatalf("第一条应是思考链: %q", m.content)
+	}
+	m = f2.expectSend(t)
+	if !strings.Contains(m.content, "🔧 调用工具") || !strings.Contains(m.content, "exec_command") ||
+		strings.Contains(m.content, "参数") {
+		t.Fatalf("第二条应是工具名列表: %q", m.content)
+	}
+	if m = f2.expectSend(t); !strings.Contains(m.content, "最终回复") {
+		t.Fatalf("第三条应是最终回复: %q", m.content)
+	}
+
+	// 只开工具：思考不推
+	_, f3, _ := newInitedCfg(t, notesTurn, "user1", map[string]any{"show_tools": true})
+	f3.pushC2C("user1", "查一下")
+	m = f3.expectSend(t)
+	if strings.Contains(m.content, "思考") {
+		t.Fatalf("未开思考展示不该推思考链: %q", m.content)
+	}
+	if !strings.Contains(m.content, "🔧 调用工具") {
+		t.Fatalf("应推工具调用: %q", m.content)
+	}
+	f3.expectSend(t) // 最终回复
+}
 
 // 白名单外的用户被拒绝，无任何回复。
 func TestWhitelistBlocksStrangers(t *testing.T) {

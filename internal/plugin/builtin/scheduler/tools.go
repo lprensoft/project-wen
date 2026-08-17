@@ -177,4 +177,3 @@ func (t *cancelTool) Execute(_ context.Context, args json.RawMessage) (string, e
 	}
 	return "", fmt.Errorf("找不到任务 %q", req.ID)
 }
-

@@ -43,6 +43,8 @@ type Plugin struct {
 	whitelist      map[string]bool
 	confirmTimeout time.Duration
 	format         string // formatMarkdown / formatPlain
+	showThinking   bool   // 把每轮思考链推送到 QQ
+	showTools      bool   // 把工具调用（仅名字）推送到 QQ
 
 	// markdown 能力缓存：openid → 关闭到何时（平台返回 40034012 后记入）
 	mdOff map[string]time.Time
@@ -113,6 +115,14 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
 		},
 		{
+			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
+			Description: "开启后把每轮的完整思考链推送到 QQ；关闭（默认）只发最终回复",
+		},
+		{
+			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
+			Description: "开启后推送调用了哪些工具（只有名字，不含参数与结果，避免隐私外泄）；关闭（默认）不推送",
+		},
+		{
 			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
 			Options: []plugin.ConfigOption{
 				{Value: formatMarkdown, Label: "markdown（推荐）"},
@@ -161,6 +171,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.whitelist = whitelist
 	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
+	p.showThinking = plugin.CfgBool(cfg, "show_thinking", false)
+	p.showTools = plugin.CfgBool(cfg, "show_tools", false)
 	p.mdOff = map[string]time.Time{}
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession

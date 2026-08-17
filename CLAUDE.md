@@ -16,7 +16,7 @@
 
 插件可选声明 `Dependent`（`Requires() []string`）与 `Conflicting`（`Conflicts() []string`）。依赖是硬性的：依赖未满足时拒绝启用（校验放在 `Init` **之前**，避免产生副作用），被依赖的插件也无法在依赖方仍启用时关闭——拒绝而非级联关闭，因为界面没有确认或提示通道，级联只会表现为「另一个开关自己变灰了」。冲突只告警不阻止。依赖校验必须在**全部 `Register` 之后**由 `Manager.Resolve()` 统一做（register 是逐个进行的，依赖方可能先注册），且要显式检出依赖环。被强制关闭的插件记在 `entry.forcedOff` 而不是直接改 `enabled`：状态文件是全量重写的，直接改会把强制关闭固化成用户意图，依赖恢复后也回不来。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十三处按此标准放行：
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十四处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
 2. `InitContext.SessionDir` —— 会话目录，只读用；
@@ -30,7 +30,8 @@
 10. `TurnObserver` —— 轮次结束观察（`Manager.NotifyTurnEnd` 逐个 recover 广播）；
 11. **交互标记与会话活跃时间**（`WithInteractive` / `Meta.LastActiveAt`，见「插件发起轮次约定」）；
 12. `InitContext.Status` —— 模型配置与会话用量快照，与 Web UI 的状态命令同源，远端界面（如 QQ 的 /status）据此保持一致输出。
-13. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、Manager 持锁时调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始；界面关闭弹窗只停轮询不打断流程。
+13. **轮次过程通知**（`WithTurnNotes` / `TurnNotesFrom`，`internal/plugin/turn.go`）—— 发起方按需安装回调，核心在每轮模型响应后送出完整思考链与工具名批次（**只有名字**：参数与结果可能载有隐私，转发与否不由核心替接收方决定）；不安装零开销。IM 插件的「展示思考过程 / 展示工具调用」开关（默认都关）据此把过程转发到远端，措辞与 Web UI 对齐（🧠 思考过程 / 🔧 调用工具）。
+14. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、Manager 持锁时调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始；界面关闭弹窗只停轮询不打断流程。
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「危险命令」「心跳」「定时」「QQ」或「微信」这回事。
 

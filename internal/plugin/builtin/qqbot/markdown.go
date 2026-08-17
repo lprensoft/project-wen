@@ -11,7 +11,7 @@ import (
 // 参考实现都实测降级了——以实践为准）。发送前先把不支持的语法降级掉。
 
 // sanitizeForQQ 是 markdown 方言降级管线，顺序固定：表格 → 图片 → 长代码块
-//（表格必须在图片之前，否则单元格里的图片语法会干扰行匹配）。
+// （表格必须在图片之前，否则单元格里的图片语法会干扰行匹配）。
 func sanitizeForQQ(text string) string {
 	return truncateLongCode(downgradeImages(downgradeTables(text)))
 }

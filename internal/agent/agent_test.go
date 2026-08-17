@@ -82,8 +82,8 @@ func (m *mockProvider) ChatStream(ctx context.Context, req llm.ChatRequest) (<-c
 // echoTool 原样返回参数中的 text 字段。
 type echoTool struct{}
 
-func (echoTool) Name() string             { return "echo" }
-func (echoTool) Description() string      { return "echo text back" }
+func (echoTool) Name() string        { return "echo" }
+func (echoTool) Description() string { return "echo text back" }
 func (echoTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`)
 }
