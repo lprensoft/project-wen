@@ -31,7 +31,7 @@
 11. **交互标记与会话活跃时间**（`WithInteractive` / `Meta.LastActiveAt`，见「插件发起轮次约定」）；
 12. `InitContext.Status` —— 模型配置与会话用量快照，与 Web UI 的状态命令同源，远端界面（如 QQ 的 /status）据此保持一致输出。
 13. **轮次过程通知**（`WithTurnNotes` / `TurnNotesFrom`，`internal/plugin/turn.go`）—— 发起方按需安装回调，核心在每轮模型响应后送出完整思考链与工具名批次（**只有名字**：参数与结果可能载有隐私，转发与否不由核心替接收方决定）；不安装零开销。IM 插件的「展示思考过程 / 展示工具调用」开关（默认都关）据此把过程转发到远端，措辞与 Web UI 对齐（🧠 思考过程 / 🔧 调用工具）。
-14. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、Manager 持锁时调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始；界面关闭弹窗只停轮询不打断流程。
+14. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、Manager 持锁时调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始。界面入口统一在齿轮的配置弹窗内（有操作或有配置项都会出齿轮，卡片上不单独摆按钮），点击操作转入进展弹窗；关闭弹窗只停轮询不打断流程。
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「危险命令」「心跳」「定时」「QQ」或「微信」这回事。
 

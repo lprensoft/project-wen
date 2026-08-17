@@ -753,17 +753,8 @@ function renderSettingsPlugins(list) {
 
     const actions = document.createElement("div");
     actions.className = "plugin-card-actions";
-    // 插件声明的操作入口（仅启用且初始化成功时后端才会给出）
-    for (const a of p.actions || []) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn-ghost btn-plugin-action";
-      btn.textContent = a.label;
-      if (a.description) btn.title = a.description;
-      btn.addEventListener("click", () => startPluginAction(p.name, a));
-      actions.appendChild(btn);
-    }
-    if ((p.config_fields || []).length > 0) {
+    // 操作入口（如扫码绑定）也走齿轮：入口统一在配置弹窗里，卡片上不单独摆按钮
+    if ((p.config_fields || []).length > 0 || (p.actions || []).length > 0) {
       const gear = document.createElement("button");
       gear.type = "button";
       gear.className = "btn-icon btn-square btn-gear";
@@ -951,10 +942,36 @@ function openPluginConfig(p) {
   configTitleEl.textContent = p.name + " · 配置";
   configFormEl.textContent = "";
   showConfigError("");
+  const fields = p.config_fields || [];
   const values = p.config || {};
-  for (const f of p.config_fields || []) {
+  for (const f of fields) {
     configFormEl.appendChild(buildConfigField(f, values[f.key]));
   }
+  // 插件的操作入口（如扫码绑定）附在配置项之后；点击后转入操作进展弹窗
+  for (const a of p.actions || []) {
+    const row = document.createElement("div");
+    row.className = "plugin-config-action";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-ghost";
+    btn.textContent = a.label;
+    btn.addEventListener("click", () => {
+      closePluginConfig();
+      startPluginAction(p.name, a);
+    });
+    row.appendChild(btn);
+    if (a.description) {
+      const desc = document.createElement("div");
+      desc.className = "field-desc";
+      desc.textContent = a.description;
+      row.appendChild(desc);
+    }
+    configFormEl.appendChild(row);
+  }
+  // 没有配置项（纯操作入口）时保存与恢复默认没有意义
+  const hasFields = fields.length > 0;
+  configSaveBtn.classList.toggle("hidden", !hasFields);
+  $("#btn-config-reset").classList.toggle("hidden", !hasFields);
   configModal.classList.remove("hidden");
   const first = configFormEl.querySelector("input, select, textarea");
   if (first) first.focus();

@@ -580,8 +580,15 @@ body {
 .plugin-card-name { font-size: 13.5px; font-weight: 600; }
 .plugin-card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-/* 插件卡片上的操作按钮（插件声明的操作入口，如扫码绑定） */
-.btn-plugin-action { padding: 4px 10px; font-size: 12px; }
+/* 配置弹窗里的插件操作入口（如扫码绑定）：配置项之后、以分隔线区隔的按钮区 */
+.plugin-config-action {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.plugin-config-action .btn-ghost { align-self: flex-start; }
 
 /* 插件操作弹窗：图片（如二维码）居中，说明文字在下 */
 .plugin-action-body { align-items: center; text-align: center; }
