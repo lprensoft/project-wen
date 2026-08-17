@@ -19,6 +19,7 @@ import (
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
+	"wen/internal/plugin/builtin/heartbeat"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/readfile"
 	"wen/internal/plugin/builtin/roleplay"
@@ -154,12 +155,14 @@ func main() {
 
 // needsSetupPlugins 是默认不启用的插件：它们不配置就没法工作——roleplay 没有角色设定
 // 就不成其为角色扮演，dual_persona 没有触发词就永远切不过去。默认打开一个空壳只会让人
-// 以为功能坏了，所以留给用户配好再开。
+// 以为功能坏了，所以留给用户配好再开。heartbeat 属于另一类理由：无人值守持续消耗模型
+// 额度的功能应当由用户显式打开，而不是装上就开始花钱。
 //
 // 其余插件用声明的默认参数就能直接工作，因此默认启用。
 var needsSetupPlugins = map[string]bool{
 	"roleplay":     true,
 	"dual_persona": true,
+	"heartbeat":    true,
 }
 
 // buildPlugins 注册全部内置系统插件，注册顺序即提示词拼接顺序。
@@ -174,6 +177,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义
 		roleplay.New(), dualpersona.New(),
+		heartbeat.New(),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
