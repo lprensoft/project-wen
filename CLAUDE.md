@@ -21,9 +21,10 @@
 3. `InitContext.Complete` —— 辅助模型调用；
 4. `Lifecycle` —— 会话生命周期通知；
 5. **可见域**（`Scope` / `ScopeDecider` / `TurnPrompter`，见下节）；
-6. `Requires` / `Conflicts` —— 插件间的依赖与互斥声明。
+6. `Requires` / `Conflicts` —— 插件间的依赖与互斥声明；
+7. **操作确认**（`ConfirmFunc` / `WithConfirmer` / `ConfirmerFrom`，见下节）。
 
-任何插件都能用，核心不知道「记忆」「检索」或「人格」这回事。
+任何插件都能用，核心不知道「记忆」「检索」「人格」或「危险命令」这回事。
 
 ## 插件持久化与生命周期约定
 
@@ -57,6 +58,20 @@
 - 自动压缩判据取「实测用量」与「全量历史估算」的较大者：实测用量只反映本轮实际发出的、已过滤的上下文，只看它会让上下文很小的可见域永不触发压缩，而其它域的历史仍在无限增长。
 
 **可见域是上下文隔离，不是沙箱。** `read_file` 与 `exec_command` 是通用的文件与命令通道，能直接读到会话文件、记忆目录与插件状态文件，绕过一切提示词与工具层过滤。`dual_persona` 把它们声明为 `Conflicts` 告警，但不阻止——这是产品前提，不是待修的漏洞。
+
+## 操作确认约定
+
+不可逆的操作在执行前交由人判断（`internal/plugin/confirm.go` + `internal/server/confirm.go`）。核心只提供通道，**不知道什么算危险**——由插件自己判定风险并发起请求。
+
+链路：工具用 `plugin.ConfirmerFrom(ctx)` 取通道并调用 → server 侧的确认器经当前对话的 SSE 流发 `confirm_request` 帧、在 broker 里登记一个 channel 并阻塞等待 → 浏览器 `POST /api/confirmations/{id}` → broker 交回答复 → 再发一帧 `confirm_done` 让界面定稿。
+
+- 确认器**按请求注入**（`WithConfirmer`）而不是放进 `InitContext`：确认必须回到发起这轮对话的那个界面，而插件是进程级单实例。
+- 工具执行是 `run` 循环里的**同步调用**，所以阻塞在这里就等于这一轮对话停住了、命令还没执行——这正是想要的效果，同时也意味着 SSE 写入仍是单 goroutine，不需要加锁。
+- **拿不到答复不等于得到许可**：`ConfirmerFrom` 返回 false（无可交互界面）、返回 error（超时、断开）都必须按拒绝处理。别给「无人值守就放行」的开关，要放行就用插件自己的总开关，那是个看得见的选择。
+- 等待必须有上限（`ctx` 超时）并在结束时 `release`，否则 broker 的 pending 会一直涨、工具会永久挂住。
+- 拦截生效时要把规则**告诉模型**，否则被拒绝的模型会改写命令重试。
+
+关于 `exec_command` 为什么选拦截确认而不是沙箱，见 `internal/plugin/builtin/execcmd/guard.go` 顶部的说明：shell 接的是任意字符串，靠文本分析做路径约束是能被轻易绕过的安全假象，而用户会信它。
 
 ## 模型配置约定
 

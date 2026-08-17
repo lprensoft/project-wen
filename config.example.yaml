@@ -45,7 +45,14 @@ plugins:
   exec_command:
     enabled: true
     config:
-      timeout_seconds: 60
+      guard: dangerous       # dangerous = 删除、覆盖、改写提交历史、改动系统配置等操作先由你确认（默认）
+                             # all       = 除只读命令外一律确认
+                             # off       = 不拦截
+                             # 注意这是按命令文本判断的，挡的是误操作，挡不住刻意混淆
+                             #（base64、变量拼接、自己写个脚本再执行）——只有 all 这一档是完整的。
+                             # 个别极高危命令（整盘格式化、删除系统根目录、销毁备份等）一律直接拒绝，不询问。
+      timeout_seconds: 60    # 单条命令的最长执行时间
+      confirm_timeout_seconds: 300   # 等待确认的上限，超时按拒绝处理
   web_fetch:
     enabled: true
     config:

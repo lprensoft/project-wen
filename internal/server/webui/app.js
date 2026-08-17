@@ -240,6 +240,79 @@ function addError(text) {
   scrollBottom();
 }
 
+// addConfirmBlock 渲染一次操作确认请求。这一轮对话正阻塞在这里等回答，
+// 因此不设默认动作：必须显式点一个按钮，或让它超时（按拒绝处理）。
+function addConfirmBlock(ev) {
+  hideHint();
+  const box = document.createElement("div");
+  box.className = "confirm-block";
+
+  const head = document.createElement("div");
+  head.className = "confirm-head";
+  head.textContent = `⚠️ ${ev.title || "需要确认"}`;
+  box.appendChild(head);
+
+  if (ev.reason) {
+    const reason = document.createElement("div");
+    reason.className = "confirm-reason";
+    reason.textContent = ev.reason;
+    box.appendChild(reason);
+  }
+
+  const detail = document.createElement("pre");
+  detail.className = "confirm-detail";
+  detail.textContent = ev.detail || "";
+  box.appendChild(detail);
+
+  const actions = document.createElement("div");
+  actions.className = "confirm-actions";
+  const status = document.createElement("span");
+  status.className = "confirm-status";
+  const deny = document.createElement("button");
+  deny.type = "button";
+  deny.className = "btn-ghost";
+  deny.textContent = "拒绝";
+  const allow = document.createElement("button");
+  allow.type = "button";
+  allow.className = "btn-danger";
+  allow.textContent = "允许执行";
+
+  const settle = (approved, note) => {
+    allow.remove();
+    deny.remove();
+    box.classList.add(approved ? "confirm-allowed" : "confirm-denied");
+    status.textContent = note;
+  };
+  const answer = async (approved) => {
+    allow.disabled = true;
+    deny.disabled = true;
+    try {
+      const res = await fetch("/api/confirmations/" + encodeURIComponent(ev.id), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "HTTP " + res.status);
+      }
+      // 定稿交给 confirm_done 事件统一处理，避免两处各写一遍
+    } catch (e) {
+      allow.disabled = false;
+      deny.disabled = false;
+      status.textContent = "提交失败：" + e.message;
+    }
+  };
+  deny.addEventListener("click", () => answer(false));
+  allow.addEventListener("click", () => answer(true));
+
+  actions.append(status, deny, allow);
+  box.appendChild(actions);
+  messagesEl.appendChild(box);
+  scrollBottom();
+  return { el: box, settle };
+}
+
 function renderHistory(messages) {
   clearMessages();
   if (!messages || messages.length === 0) return;
@@ -286,6 +359,7 @@ async function sendMessage() {
   let compactBlock = null;    // 自动压缩的动态展示块
   let autoCompacted = false;  // 本轮发生过自动压缩，结束后需重载历史
   const toolBlocks = {};
+  const confirmBlocks = {};
   const finishBubble = () => {
     if (assistantBubble) assistantBubble.classList.remove("streaming");
     assistantBubble = null;
@@ -328,6 +402,16 @@ async function sendMessage() {
       } else if (ev.type === "tool_result") {
         const tb = toolBlocks[ev.tool_call_id];
         if (tb) setToolDetail(tb.el.querySelector(".tool-detail"), tb.args, ev.tool_result);
+      } else if (ev.type === "confirm_request") {
+        finishBubble();   // 等待期间正文气泡先定稿
+        finishThinking();
+        confirmBlocks[ev.id] = addConfirmBlock(ev);
+      } else if (ev.type === "confirm_done") {
+        const cb = confirmBlocks[ev.id];
+        if (cb) {
+          cb.settle(ev.approved,
+            ev.approved ? "已允许" : ev.expired ? "已超时，按拒绝处理" : "已拒绝");
+        }
       } else if (ev.type === "compact_start") {
         finishBubble();
         finishThinking();
