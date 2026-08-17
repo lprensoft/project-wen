@@ -12,10 +12,28 @@ import (
 	"sync"
 )
 
+// 插件来源。
+const (
+	SourceBuiltin  = "builtin"  // 随程序内置
+	SourceExternal = "external" // 来自外部来源
+)
+
+// SourceLabel 返回来源的中文显示名。
+func SourceLabel(source string) string {
+	switch source {
+	case SourceBuiltin:
+		return "内置"
+	case SourceExternal:
+		return "外源"
+	}
+	return source
+}
+
 // Status 是插件在 /api/plugins 中展示的状态。
 type Status struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
+	Source      string   `json:"source"`
 	Enabled     bool     `json:"enabled"`
 	ToolNames   []string `json:"tool_names"`
 	HasPrompt   bool     `json:"has_prompt"`
@@ -26,6 +44,7 @@ type Status struct {
 
 type entry struct {
 	plugin  Plugin
+	source  string
 	baseCfg map[string]any // 配置文件 plugins.<name>.config
 	userCfg map[string]any // 界面上保存过的配置（持久化到状态文件，覆盖 baseCfg）
 	cfg     map[string]any // 生效配置 = baseCfg 叠加 userCfg
@@ -77,9 +96,19 @@ func (m *Manager) initCtxFor(name string) InitContext {
 	return ictx
 }
 
-// Register 注册插件并按配置与持久化状态决定是否启用。
-// 工具名与已注册插件冲突时拒绝注册。
+// Register 注册内置插件，其余行为见 register。
 func (m *Manager) Register(p Plugin, cfg PluginConfig) error {
+	return m.register(p, cfg, SourceBuiltin)
+}
+
+// RegisterExternal 注册来自外部来源的插件（界面上标记为「外源」）。
+func (m *Manager) RegisterExternal(p Plugin, cfg PluginConfig) error {
+	return m.register(p, cfg, SourceExternal)
+}
+
+// register 注册插件并按配置与持久化状态决定是否启用。
+// 工具名与已注册插件冲突时拒绝注册。
+func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -100,7 +129,7 @@ func (m *Manager) Register(p Plugin, cfg PluginConfig) error {
 		}
 	}
 
-	e := &entry{plugin: p, baseCfg: cfg.Config, cfg: cfg.Config, enabled: cfg.Enabled}
+	e := &entry{plugin: p, source: source, baseCfg: cfg.Config, cfg: cfg.Config, enabled: cfg.Enabled}
 	m.entries[name] = e
 	m.order = append(m.order, name)
 
@@ -198,6 +227,7 @@ func (m *Manager) List() []Status {
 		st := Status{
 			Name:        name,
 			Description: e.plugin.Description(),
+			Source:      e.source,
 			Enabled:     e.enabled,
 			ToolNames:   names,
 			HasPrompt:   e.plugin.SystemPrompt() != "",

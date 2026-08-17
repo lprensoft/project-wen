@@ -89,7 +89,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | GET | `/api/sessions/{id}` | 会话历史消息 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
 | POST | `/api/chat` | `{"session_id","message"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `compact_*` / `done` / `error`） |
-| GET | `/api/plugins` | 插件列表与状态（含可配置项声明 `config_fields` 与当前生效值 `config`） |
+| GET | `/api/plugins` | 插件列表与状态（含来源 `source`、可配置项声明 `config_fields` 与当前生效值 `config`） |
 | PUT | `/api/plugins/{name}` | `{"enabled": bool}` 运行时开关插件 |
 | PUT | `/api/plugins/{name}/config` | `{"config": {...}}` 保存插件配置，校验通过后立即生效并持久化 |
 | GET | `/api/models` | 提供商与模型配置（`api_key` 只返回掩码） |

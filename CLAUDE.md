@@ -8,7 +8,7 @@
 
 ## 插件架构约定
 
-核心（agent / session / server / llm）不包含具体工具；工具能力一律通过 `internal/plugin` 的 `Plugin` 接口以插件形式提供，内置插件放 `internal/plugin/builtin/<name>/`，在 `cmd/wen/main.go` 的 `buildPlugins` 注册。插件名限小写字母、数字与下划线（`Register` 强制校验，因为它会被用来拼持久化目录）。插件可通过 `SystemPrompt()` 注入提示词片段（可返回空串不注入），注入位置在环境块之后、用户配置提示词之前。插件可选实现 `Configurable`（`ConfigFields() []ConfigField`）声明可配置项，Web UI 设置页据此在插件卡片上显示齿轮按钮并生成配置表单；保存时由 `Manager.SetConfig` 校验、重新 `Init` 使其立即生效。运行时开关状态与界面上改过的配置存 `<配置目录>/plugins.state.json`（优先于 config.yaml，不回写 config.yaml）。
+核心（agent / session / server / llm）不包含具体工具；工具能力一律通过 `internal/plugin` 的 `Plugin` 接口以插件形式提供，内置插件放 `internal/plugin/builtin/<name>/`，在 `cmd/wen/main.go` 的 `buildPlugins` 注册。插件名限小写字母、数字与下划线（`Register` 强制校验，因为它会被用来拼持久化目录）。`Register` 注册的插件来源为 `builtin`，`RegisterExternal` 为 `external`，界面上以「内置 / 外源」标签区分。插件可通过 `SystemPrompt()` 注入提示词片段（可返回空串不注入），注入位置在环境块之后、用户配置提示词之前。插件可选实现 `Configurable`（`ConfigFields() []ConfigField`）声明可配置项，Web UI 设置页据此在插件卡片上显示齿轮按钮并生成配置表单；保存时由 `Manager.SetConfig` 校验、重新 `Init` 使其立即生效。运行时开关状态与界面上改过的配置存 `<配置目录>/plugins.state.json`（优先于 config.yaml，不回写 config.yaml）。
 
 给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有两处按此标准放行——`InitContext.StateDir`（插件专属持久化目录）与 `Lifecycle`（会话生命周期通知），任何插件都能用，核心不知道"记忆"这回事。
 
