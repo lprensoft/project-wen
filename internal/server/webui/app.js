@@ -381,7 +381,7 @@ async function sendMessage() {
 // ---------- 命令菜单（输入 / 时弹出，随输入筛选） ----------
 
 const COMMANDS = [
-  { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量" },
+  { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量、会话 ID" },
   { cmd: "/compact", desc: "压缩当前会话为摘要" },
 ];
 const cmdMenu = $("#cmd-menu");
@@ -481,6 +481,8 @@ async function runStatus() {
           st.session.est_tokens.toLocaleString() + " tokens（估算，占用 " + pct + "%）"
         );
       }
+      // 会话 ID 便于用 read_session / read_archive 定位这次对话
+      lines.push("会话 ID：" + (st.session.id || currentSession));
     } else {
       lines.push("当前会话：无");
     }
