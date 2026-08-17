@@ -71,6 +71,7 @@ const (
 	FieldBool   = "bool"
 	FieldString = "string"
 	FieldSelect = "select"
+	FieldText   = "text" // 多行文本（界面上渲染成 textarea）
 )
 
 // ConfigOption 是 select 型配置项的一个候选值。
@@ -110,11 +111,18 @@ func ConfigFieldsOf(p Plugin) []ConfigField {
 
 // NormalizeConfig 按字段声明校验并规整配置：
 // 未声明的键被忽略，缺失的键取默认值，字符串形式的数字/布尔值会被转换。
+//
+// 空串的处理按类型区分：数值/开关/单选的空输入表示「用默认值」（界面对清空的
+// number input 提交的就是空串），而文本与多行文本的空串是合法取值——否则用户
+// 清空一个文本框后保存，会看到默认值又长回来，字段永远清不掉。
 func NormalizeConfig(fields []ConfigField, in map[string]any) (map[string]any, error) {
 	out := make(map[string]any, len(fields))
 	for _, f := range fields {
 		raw, ok := in[f.Key]
-		if !ok || raw == nil || raw == "" {
+		switch {
+		case !ok || raw == nil:
+			raw = f.Default
+		case raw == "" && f.Type != FieldString && f.Type != FieldText:
 			raw = f.Default
 		}
 		v, err := normalizeField(f, raw)
@@ -156,13 +164,19 @@ func normalizeField(f ConfigField, raw any) (any, error) {
 			return b, nil
 		}
 		return nil, fmt.Errorf("配置项 %q 需要布尔值", label)
-	case FieldString:
+	case FieldString, FieldText:
 		s, ok := raw.(string)
 		if !ok {
 			if raw == nil {
 				return "", nil
 			}
 			return nil, fmt.Errorf("配置项 %q 需要文本", label)
+		}
+		if f.Type == FieldText {
+			// 换行统一成 \n：多行文本会被按行切分使用（如逐行的关键词表），
+			// 残留的 \r 会跟到每行末尾，让匹配莫名失败
+			s = strings.ReplaceAll(s, "\r\n", "\n")
+			s = strings.ReplaceAll(s, "\r", "\n")
 		}
 		return s, nil
 	case FieldSelect:
