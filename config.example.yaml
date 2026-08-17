@@ -51,15 +51,27 @@ plugins:
     config:
       timeout_seconds: 20
       max_bytes: 65536
-  # 长期记忆：记忆条目存 <配置目录>/plugins/memory/memories/，压缩归档存同级 archives/
+  # 长期记忆
   memory:
     enabled: true
     config:
+      scope: global            # global = <配置目录>/plugins/memory/memories/（所有工作目录共享）
+                               # project = <工作目录>/.wen/memories/（按项目分库，建议加进项目的 .gitignore）
+                               # 切换后原位置的记忆不会自动迁移
       max_index_entries: 200   # 索引最多列出条数
       max_index_bytes: 16384   # 索引字节上限（约 170 条带摘要；实测一条约 31 token）
                                # 注意：索引在每一轮对话中都会重复发送，且计入自动压缩的判据
       max_entry_bytes: 8192    # 读取单条记忆的返回上限
-      max_archives: 20         # 保留的压缩归档数，0 = 不归档
+      auto_extract: true       # 压缩前自动从历史里提炼长期记忆（每次压缩多一次模型调用）
+      max_extract: 5           # 单次压缩最多提炼条数
+  # 历史检索：回查原始对话，范围含现存会话与压缩前的完整归档
+  session_search:
+    enabled: true
+    config:
+      max_scan_sessions: 300   # 单次最多读取的会话数（按时间从新到旧，超出会在结果里注明）
+      max_snippets: 3          # 每个会话最多返回的摘录数
+      max_bytes: 8192          # 单次返回上限
+      max_archives: 20         # 保留的压缩归档数，0 = 不归档（被压缩过的会话将只剩摘要可查）
 
 session:
   dir: ""                    # session 存储目录，空 = <配置目录>/sessions

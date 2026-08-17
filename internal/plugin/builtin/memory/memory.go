@@ -14,27 +14,55 @@ const (
 	defaultMaxIndexEntries = 200
 	defaultMaxIndexBytes   = 16 * 1024
 	defaultMaxEntryBytes   = 8 * 1024
-	defaultMaxArchives     = 20
+	defaultAutoExtract     = true
+	defaultMaxExtract      = 5
+	// maxExtractBytes 限制送去提炼的历史长度，避免一次压缩带来过高的调用成本。
+	maxExtractBytes = 24 * 1024
 )
+
+// 记忆库的归属范围。
+const (
+	scopeGlobal  = "global"  // 全局单库，所有工作目录共享
+	scopeProject = "project" // 按工作目录分库
+	defaultScope = scopeGlobal
+)
+
+// memoriesDir 按 scope 决定记忆目录。
+func memoriesDir(ictx plugin.InitContext, scope string) (string, error) {
+	if scope == scopeProject {
+		if ictx.Workdir == "" {
+			return "", fmt.Errorf("按项目分库需要工作目录，当前未设置（可改用全局记忆库）")
+		}
+		return filepath.Join(ictx.Workdir, ".wen", "memories"), nil
+	}
+	if ictx.StateDir == "" {
+		return "", fmt.Errorf("没有可用的持久化目录，无法保存记忆")
+	}
+	return filepath.Join(ictx.StateDir, "memories"), nil
+}
 
 // Plugin 是 memory 系统插件：注入记忆索引，并提供读写记忆的工具。
 type Plugin struct {
 	mu sync.RWMutex
 
 	store           *Store
-	archiveDir      string
+	scope           string
+	complete        plugin.CompleteFunc
 	maxIndexEntries int
 	maxIndexBytes   int
 	maxEntryBytes   int
-	maxArchives     int
+	autoExtract     bool
+	maxExtract      int
 }
 
 func New() *Plugin {
 	return &Plugin{
+		scope:           defaultScope,
 		maxIndexEntries: defaultMaxIndexEntries,
 		maxIndexBytes:   defaultMaxIndexBytes,
 		maxEntryBytes:   defaultMaxEntryBytes,
-		maxArchives:     defaultMaxArchives,
+		autoExtract:     defaultAutoExtract,
+		maxExtract:      defaultMaxExtract,
 	}
 }
 
@@ -45,6 +73,19 @@ func (p *Plugin) Description() string {
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
+		{
+			Key:   "scope",
+			Label: "记忆库范围",
+			Type:  plugin.FieldSelect,
+			Description: "全局：所有工作目录共享一份，存于配置目录下；" +
+				"按项目：存于工作目录的 .wen/memories/，不同项目互不可见（建议加入该项目的 .gitignore）。" +
+				"切换后原位置的记忆不会自动迁移。",
+			Default: defaultScope,
+			Options: []plugin.ConfigOption{
+				{Value: scopeGlobal, Label: "全局"},
+				{Value: scopeProject, Label: "按项目（工作目录）"},
+			},
+		},
 		{
 			Key:         "max_index_entries",
 			Label:       "索引最多列出条数",
@@ -74,32 +115,44 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Max:         plugin.IntPtr(1024 * 1024),
 		},
 		{
-			Key:         "max_archives",
-			Label:       "保留的压缩归档数",
+			Key:   "auto_extract",
+			Label: "压缩时自动提炼记忆",
+			Type:  plugin.FieldBool,
+			Description: "会话历史被压缩摘要替换之前，用一次独立的模型调用从其中提炼值得长期保留的结论。" +
+				"关闭后只能靠模型在对话中主动调用 save_memory。每次压缩会因此多一次模型调用。",
+			Default: defaultAutoExtract,
+		},
+		{
+			Key:         "max_extract",
+			Label:       "单次压缩最多提炼条数",
 			Type:        plugin.FieldInt,
-			Description: "会话历史被压缩前会先原样归档，超出数量时删除最旧的；填 0 表示不归档。",
-			Default:     defaultMaxArchives,
-			Min:         plugin.IntPtr(0),
-			Max:         plugin.IntPtr(500),
+			Description: "超出的部分丢弃，避免一次压缩灌入过多低价值记忆。",
+			Default:     defaultMaxExtract,
+			Min:         plugin.IntPtr(1),
+			Max:         plugin.IntPtr(50),
 		},
 	}
 }
 
-// Init 需要一个持久化目录；没有则拒绝启用，避免把记忆散落到进程当前目录。
+// Init 需要一个可写目录；没有则拒绝启用，避免把记忆散落到进程当前目录。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
-	if ictx.StateDir == "" {
-		return fmt.Errorf("没有可用的持久化目录，无法保存记忆")
+	scope := plugin.CfgString(cfg, "scope", defaultScope)
+	dir, err := memoriesDir(ictx, scope)
+	if err != nil {
+		return err
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.store = NewStore(filepath.Join(ictx.StateDir, "memories"))
-	p.archiveDir = filepath.Join(ictx.StateDir, "archives")
+	p.scope = scope
+	p.store = NewStore(dir)
+	p.complete = ictx.Complete
 	p.maxIndexEntries = plugin.CfgInt(cfg, "max_index_entries", defaultMaxIndexEntries)
 	p.maxIndexBytes = plugin.CfgInt(cfg, "max_index_bytes", defaultMaxIndexBytes)
 	p.maxEntryBytes = plugin.CfgInt(cfg, "max_entry_bytes", defaultMaxEntryBytes)
-	p.maxArchives = plugin.CfgInt(cfg, "max_archives", defaultMaxArchives)
+	p.autoExtract = plugin.CfgBool(cfg, "auto_extract", defaultAutoExtract)
+	p.maxExtract = plugin.CfgInt(cfg, "max_extract", defaultMaxExtract)
 	return nil
 }
 
@@ -115,11 +168,12 @@ func (p *Plugin) Tools() []plugin.Tool {
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
 	store           *Store
-	archiveDir      string
 	maxIndexEntries int
 	maxIndexBytes   int
 	maxEntryBytes   int
-	maxArchives     int
+	autoExtract     bool
+	maxExtract      int
+	maxExtractBytes int
 }
 
 // snapshot 取一份配置快照：SetConfig 会在运行时重新 Init，而工具可能正在执行。
@@ -128,12 +182,20 @@ func (p *Plugin) snapshot() settings {
 	defer p.mu.RUnlock()
 	return settings{
 		store:           p.store,
-		archiveDir:      p.archiveDir,
 		maxIndexEntries: p.maxIndexEntries,
 		maxIndexBytes:   p.maxIndexBytes,
 		maxEntryBytes:   p.maxEntryBytes,
-		maxArchives:     p.maxArchives,
+		autoExtract:     p.autoExtract,
+		maxExtract:      p.maxExtract,
+		maxExtractBytes: maxExtractBytes,
 	}
+}
+
+// completeFunc 返回当前的辅助调用入口（可能为 nil）。
+func (p *Plugin) completeFunc() plugin.CompleteFunc {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.complete
 }
 
 // sortByUpdatedDesc 按更新时间倒序，仅用于超预算时挑选保留哪些条目。

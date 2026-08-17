@@ -249,6 +249,23 @@ func TestStateDirEmptyWithoutStatePath(t *testing.T) {
 	}
 }
 
+func TestCfgBool(t *testing.T) {
+	cfg := map[string]any{"on": true, "off": false, "s": "true", "bad": "呃"}
+	// 关键点：false 是合法取值，不能按「零值即缺失」退回默认值
+	if CfgBool(cfg, "off", true) {
+		t.Error("显式的 false 应被采用，而不是退回默认值 true")
+	}
+	if !CfgBool(cfg, "on", false) {
+		t.Error("显式的 true 未被采用")
+	}
+	if !CfgBool(cfg, "s", false) {
+		t.Error("字符串形式的布尔应被接受")
+	}
+	if !CfgBool(cfg, "bad", true) || CfgBool(cfg, "missing", false) {
+		t.Error("无法解析或缺失时应退回默认值")
+	}
+}
+
 func TestRegisterRecordsSource(t *testing.T) {
 	m := NewManager(InitContext{}, "")
 	if err := m.Register(&fakePlugin{name: "inner"}, PluginConfig{Enabled: true}); err != nil {

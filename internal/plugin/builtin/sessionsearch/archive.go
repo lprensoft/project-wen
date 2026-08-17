@@ -1,4 +1,4 @@
-package memory
+package sessionsearch
 
 import (
 	"context"
@@ -15,9 +15,12 @@ import (
 
 // OnCompact 在会话历史被摘要替换之前把原始历史原样归档。
 //
-// 自动压缩是无人值守触发的，且会物理删除整段历史；归档是这些内容唯一的挽回途径。
-// 这里只做纯文件写入，不额外发起模型调用——从摘要里提炼记忆由模型在正常对话中
-// 用 save_memory 完成，代价为零。
+// 自动压缩是无人值守触发的，且会物理删除整段历史；归档是这些原文唯一的挽回途径，
+// 也让 search_sessions 能覆盖已经被压缩过的会话——否则那些会话只剩一条摘要，
+// 恰好是最值得回查的部分成了盲区。
+//
+// 这里只做文件写入，不发起模型调用；从历史中提炼长期记忆是 memory 插件订阅同一个
+// 钩子完成的事。
 func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, error) {
 	s := p.snapshot()
 	if s.archiveDir == "" || s.maxArchives <= 0 || len(ev.History) == 0 {
@@ -29,21 +32,36 @@ func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, e
 
 	name := fmt.Sprintf("%s-%s.md", sanitizeID(ev.SessionID), time.Now().Format("20060102-150405"))
 	path := filepath.Join(s.archiveDir, name)
-	if err := writeFileAtomic(path, []byte(renderArchive(ev))); err != nil {
-		return "", err
+	raw := []byte(renderArchive(ev))
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return "", fmt.Errorf("写入归档失败: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("写入归档失败: %w", err)
 	}
 	pruneArchives(s.archiveDir, s.maxArchives)
 
 	return fmt.Sprintf("（本次压缩前的完整历史已归档：%s）", name), nil
 }
 
-// sanitizeID 防止会话 id 里的异常字符影响归档文件名。
+// sanitizeID 只保留字母数字与连字符下划线，避免异常的会话 id 影响归档文件名。
 func sanitizeID(id string) string {
-	slug, err := slugify(id)
-	if err != nil {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_")
+	if out == "" {
 		return "session"
 	}
-	return slug
+	return out
 }
 
 // renderArchive 把历史渲染成可读的 Markdown。与压缩用的序列化不同，
@@ -121,4 +139,60 @@ func pruneArchives(dir string, max int) {
 	for _, it := range items[:len(items)-max] {
 		_ = os.Remove(filepath.Join(dir, it.name))
 	}
+}
+
+// archiveHit 是归档文件中的一处命中。
+type archiveHit struct {
+	name    string
+	mod     time.Time
+	matches []string
+}
+
+// searchArchives 在归档文件里做包含匹配，返回命中的文件与摘录。
+func searchArchives(dir, keyword string, from, to time.Time, maxSnippets int) ([]archiveHit, error) {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	kw := strings.ToLower(strings.TrimSpace(keyword))
+
+	var hits []archiveHit
+	for _, de := range des {
+		if de.IsDir() || !strings.HasSuffix(de.Name(), ".md") {
+			continue
+		}
+		fi, err := de.Info()
+		if err != nil {
+			continue
+		}
+		// 归档写入时间即其内容的时间下界，可据此按日期筛选
+		if !inRange(fi.ModTime(), from, to) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, de.Name()))
+		if err != nil {
+			continue
+		}
+		text := string(raw)
+		if kw != "" && !strings.Contains(strings.ToLower(text), kw) {
+			continue
+		}
+		hit := archiveHit{name: de.Name(), mod: fi.ModTime()}
+		if kw != "" {
+			for line := range strings.SplitSeq(text, "\n") {
+				if strings.Contains(strings.ToLower(line), kw) {
+					hit.matches = append(hit.matches, strings.TrimSpace(line))
+					if len(hit.matches) >= maxSnippets {
+						break
+					}
+				}
+			}
+		}
+		hits = append(hits, hit)
+	}
+	slices.SortFunc(hits, func(a, b archiveHit) int { return b.mod.Compare(a.mod) })
+	return hits, nil
 }
