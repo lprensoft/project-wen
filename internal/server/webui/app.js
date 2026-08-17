@@ -697,6 +697,10 @@ async function openSettings() {
   settingsView.classList.remove("hidden");
   settingsPluginsEl.textContent = "加载中…";
   loadModels();
+  await loadSettingsPlugins();
+}
+
+async function loadSettingsPlugins() {
   try {
     renderSettingsPlugins(await fetch("/api/plugins").then((r) => r.json()));
   } catch (e) {
@@ -749,6 +753,16 @@ function renderSettingsPlugins(list) {
 
     const actions = document.createElement("div");
     actions.className = "plugin-card-actions";
+    // 插件声明的操作入口（仅启用且初始化成功时后端才会给出）
+    for (const a of p.actions || []) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn-ghost btn-plugin-action";
+      btn.textContent = a.label;
+      if (a.description) btn.title = a.description;
+      btn.addEventListener("click", () => startPluginAction(p.name, a));
+      actions.appendChild(btn);
+    }
     if ((p.config_fields || []).length > 0) {
       const gear = document.createElement("button");
       gear.type = "button";
@@ -833,8 +847,87 @@ document.addEventListener("keydown", (e) => {
   // 弹窗盖在设置页之上，Esc 先关最上层的弹窗
   if (!providerModal.classList.contains("hidden")) closeProviderModal();
   else if (!modelModal.classList.contains("hidden")) closeModelModal();
+  else if (!actionModal.classList.contains("hidden")) closePluginAction();
   else if (!configModal.classList.contains("hidden")) closePluginConfig();
   else if (!settingsView.classList.contains("hidden")) closeSettings();
+});
+
+// ---------- 插件操作弹窗 ----------
+
+const actionModal = $("#plugin-action-modal");
+const actionTitleEl = $("#plugin-action-title");
+const actionImageEl = $("#plugin-action-image");
+const actionMessageEl = $("#plugin-action-message");
+
+let actionPollTimer = null;
+
+function renderActionState(st) {
+  actionMessageEl.textContent = st.message || "";
+  if (st.image) {
+    actionImageEl.src = "data:image/png;base64," + st.image;
+    actionImageEl.classList.remove("hidden");
+  } else {
+    actionImageEl.removeAttribute("src");
+    actionImageEl.classList.add("hidden");
+  }
+  actionMessageEl.classList.toggle("action-error", st.status === "error");
+}
+
+// 触发插件操作并弹出进展窗；长流程由插件在后台推进，这里只轮询展示
+async function startPluginAction(pluginName, actionDef) {
+  actionTitleEl.textContent = pluginName + " · " + actionDef.label;
+  renderActionState({ message: "正在开始…" });
+  actionModal.classList.remove("hidden");
+  const url =
+    "/api/plugins/" + encodeURIComponent(pluginName) +
+    "/actions/" + encodeURIComponent(actionDef.key);
+  try {
+    const res = await fetch(url, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "HTTP " + res.status);
+    }
+  } catch (e) {
+    renderActionState({ status: "error", message: "操作启动失败：" + e.message });
+    return;
+  }
+  const poll = async () => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "HTTP " + res.status);
+      }
+      const st = await res.json();
+      renderActionState(st);
+      if (st.status === "done" || st.status === "error") {
+        actionPollTimer = null;
+        if (st.status === "done") loadSettingsPlugins(); // 操作可能改变按钮文案（如「绑定」变「重新绑定」）
+        return;
+      }
+    } catch (e) {
+      renderActionState({ status: "error", message: "查询进展失败：" + e.message });
+      actionPollTimer = null;
+      return;
+    }
+    actionPollTimer = setTimeout(poll, 1500);
+  };
+  actionPollTimer = setTimeout(poll, 800);
+}
+
+// 关闭弹窗只停轮询，不打断插件侧的流程（插件自带超时）
+function closePluginAction() {
+  actionModal.classList.add("hidden");
+  if (actionPollTimer) {
+    clearTimeout(actionPollTimer);
+    actionPollTimer = null;
+  }
+}
+
+$("#btn-action-close").addEventListener("click", closePluginAction);
+$("#btn-action-dismiss").addEventListener("click", closePluginAction);
+actionModal.addEventListener("mousedown", (e) => {
+  if (e.target === actionModal) closePluginAction();
 });
 
 // ---------- 插件配置弹窗 ----------

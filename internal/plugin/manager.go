@@ -45,6 +45,8 @@ type Status struct {
 	Unmet       []string `json:"unmet,omitempty"`       // 其中未满足的（未注册或未启用）
 	Conflicts   []string `json:"conflicts,omitempty"`   // 声明的冲突项
 	Conflicting []string `json:"conflicting,omitempty"` // 其中当前已启用的
+	// Actions 是插件声明的操作入口，仅在启用且初始化成功时暴露。
+	Actions []ActionDef `json:"actions,omitempty"`
 }
 
 type entry struct {
@@ -267,6 +269,43 @@ func (m *Manager) SetConfig(name string, cfg map[string]any) error {
 	return nil
 }
 
+// actionableFor 解析出可执行操作的插件：必须存在、启用、已初始化且实现 Actionable。
+// 返回后在锁外调用其方法——操作可能有网络请求，不能占着 Manager 的锁。
+func (m *Manager) actionableFor(name string) (Actionable, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e, ok := m.entries[name]
+	if !ok {
+		return nil, fmt.Errorf("插件 %q 不存在", name)
+	}
+	if !e.enabled || !e.inited {
+		return nil, fmt.Errorf("插件 %q 未启用", name)
+	}
+	a, ok := e.plugin.(Actionable)
+	if !ok {
+		return nil, fmt.Errorf("插件 %q 没有操作入口", name)
+	}
+	return a, nil
+}
+
+// StartAction 触发插件的一个操作。
+func (m *Manager) StartAction(ctx context.Context, name, key string) error {
+	a, err := m.actionableFor(name)
+	if err != nil {
+		return err
+	}
+	return a.StartAction(ctx, key)
+}
+
+// ActionState 查询插件操作的当前状态。
+func (m *Manager) ActionState(name, key string) (ActionState, error) {
+	a, err := m.actionableFor(name)
+	if err != nil {
+		return ActionState{}, err
+	}
+	return a.ActionState(key)
+}
+
 // StopAll 停止所有有后台活动的已初始化插件，供进程退出时调用。
 // 与 SetEnabled 相同的理由，Stop 在锁外进行。
 func (m *Manager) StopAll() {
@@ -310,6 +349,9 @@ func (m *Manager) List() []Status {
 			Unmet:       m.unmetLocked(name),
 			Conflicts:   ConflictsOf(e.plugin),
 			Conflicting: m.conflictingLocked(name),
+		}
+		if a, ok := e.plugin.(Actionable); ok && e.enabled && e.inited {
+			st.Actions = a.Actions()
 		}
 		if fields := ConfigFieldsOf(e.plugin); len(fields) > 0 {
 			st.ConfigFields = fields

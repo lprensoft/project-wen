@@ -43,6 +43,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)
 	mux.HandleFunc("PUT /api/plugins/{name}", s.setPlugin)
 	mux.HandleFunc("PUT /api/plugins/{name}/config", s.setPluginConfig)
+	mux.HandleFunc("POST /api/plugins/{name}/actions/{key}", s.startPluginAction)
+	mux.HandleFunc("GET /api/plugins/{name}/actions/{key}", s.pluginActionState)
 	mux.HandleFunc("GET /api/models", s.listModels)
 	mux.HandleFunc("PUT /api/models", s.saveModels)
 	mux.HandleFunc("PUT /api/models/current", s.setCurrentModel)
