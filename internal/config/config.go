@@ -86,6 +86,7 @@ func Default() *Config {
 			"read_file":    {Enabled: true},
 			"exec_command": {Enabled: true},
 			"web_fetch":    {Enabled: true},
+			"memory":       {Enabled: true},
 		},
 	}
 }

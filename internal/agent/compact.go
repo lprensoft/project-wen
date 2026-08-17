@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"wen/internal/llm"
+	"wen/internal/plugin"
 	"wen/internal/session"
 )
 
@@ -77,8 +78,23 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 		return fmt.Errorf("摘要生成失败：模型返回为空")
 	}
 
+	// 历史即将被物理删除，先广播给插件（可借此归档），其注记随摘要一并留在会话里
+	content := summaryPrefix + summary.String()
+	msgs := make([]llm.Message, 0, len(history))
+	for _, h := range history {
+		msgs = append(msgs, h.Message)
+	}
+	notes := a.plugins.NotifyCompact(ctx, plugin.CompactEvent{
+		SessionID: sessionID,
+		History:   msgs,
+		Summary:   summary.String(),
+	})
+	if len(notes) > 0 {
+		content += "\n\n" + strings.Join(notes, "\n")
+	}
+
 	if err := a.store.Replace(sessionID, []session.StoredMessage{{
-		Message: llm.Message{Role: llm.RoleUser, Content: summaryPrefix + summary.String()},
+		Message: llm.Message{Role: llm.RoleUser, Content: content},
 		Kind:    "summary",
 		TS:      time.Now(),
 	}}); err != nil {

@@ -15,6 +15,7 @@ import (
 	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/execcmd"
+	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/readfile"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/server"
@@ -104,7 +105,7 @@ func buildPlugins(cfg *config.Config, workdir string) *plugin.Manager {
 		plugin.InitContext{Workdir: workdir},
 		filepath.Join(cfg.BaseDir, "plugins.state.json"),
 	)
-	for _, p := range []plugin.Plugin{readfile.New(), execcmd.New(), webfetch.New()} {
+	for _, p := range []plugin.Plugin{readfile.New(), execcmd.New(), webfetch.New(), memory.New()} {
 		pc, ok := cfg.Plugins[p.Name()]
 		if !ok {
 			pc = plugin.PluginConfig{Enabled: true}

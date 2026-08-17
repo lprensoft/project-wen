@@ -379,6 +379,59 @@ func TestCompact(t *testing.T) {
 	}
 }
 
+// archiverPlugin 实现 Lifecycle，记录压缩事件并返回一条注记。
+type archiverPlugin struct {
+	note string
+	got  plugin.CompactEvent
+}
+
+func (*archiverPlugin) Name() string                                  { return "archiver" }
+func (*archiverPlugin) Description() string                           { return "测试压缩钩子" }
+func (*archiverPlugin) Init(plugin.InitContext, map[string]any) error { return nil }
+func (*archiverPlugin) SystemPrompt() string                          { return "" }
+func (*archiverPlugin) Tools() []plugin.Tool                          { return nil }
+func (p *archiverPlugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, error) {
+	p.got = ev
+	return p.note, nil
+}
+
+func TestCompactNotifiesPluginsBeforeReplace(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	provider := &mockProvider{turns: []mockTurn{
+		{content: "第一轮回答"},
+		{content: "这是压缩摘要内容"},
+	}}
+	arch := &archiverPlugin{note: "（本次压缩前的完整历史已归档：x.md）"}
+	ag := New(provider, newTestManager(t, arch), store, Options{Model: "test", MaxTurns: 5})
+	ag.Run(context.Background(), meta.ID, "做点事", func(Event) {})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+
+	// 钩子拿到的是尚未被删除的完整历史
+	if arch.got.SessionID != meta.ID {
+		t.Errorf("session id = %q, want %q", arch.got.SessionID, meta.ID)
+	}
+	if len(arch.got.History) != 2 {
+		t.Fatalf("history 应为 user+assistant 两条，得到 %d 条", len(arch.got.History))
+	}
+	if arch.got.History[0].Content != "做点事" || arch.got.History[1].Content != "第一轮回答" {
+		t.Errorf("history 内容不对: %+v", arch.got.History)
+	}
+	if arch.got.Summary != "这是压缩摘要内容" {
+		t.Errorf("summary = %q（应为不含前缀的摘要正文）", arch.got.Summary)
+	}
+
+	// 注记随摘要一起落进该会话的历史
+	_, msgs, _ := store.Get(meta.ID)
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages after compact, want 1", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content, "这是压缩摘要内容") ||
+		!strings.Contains(msgs[0].Content, "已归档：x.md") {
+		t.Errorf("摘要消息应同时包含摘要与注记: %q", msgs[0].Content)
+	}
+}
+
 func TestPluginPromptInjectionOrder(t *testing.T) {
 	store, _ := session.NewStore(t.TempDir())
 	meta, _ := store.Create()

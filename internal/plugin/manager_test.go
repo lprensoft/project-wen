@@ -19,16 +19,18 @@ func (t fakeTool) Execute(context.Context, json.RawMessage) (string, error) {
 }
 
 type fakePlugin struct {
-	name    string
-	prompt  string
-	tools   []Tool
-	initErr error
-	inited  bool
+	name     string
+	prompt   string
+	tools    []Tool
+	initErr  error
+	inited   bool
+	lastICtx InitContext // 最近一次 Init 收到的运行环境
 }
 
 func (p *fakePlugin) Name() string        { return p.name }
 func (p *fakePlugin) Description() string { return "测试插件 " + p.name }
-func (p *fakePlugin) Init(InitContext, map[string]any) error {
+func (p *fakePlugin) Init(ictx InitContext, _ map[string]any) error {
+	p.lastICtx = ictx
 	if p.initErr != nil {
 		return p.initErr
 	}
@@ -202,6 +204,107 @@ func TestLoadLegacyStateFormat(t *testing.T) {
 	m.Register(&fakePlugin{name: "x"}, PluginConfig{Enabled: true})
 	if m.List()[0].Enabled {
 		t.Error("旧格式（name -> bool）状态文件应仍然生效")
+	}
+}
+
+func TestStateDirIsolatedPerPlugin(t *testing.T) {
+	base := t.TempDir()
+	m := NewManager(InitContext{Workdir: "/w"}, filepath.Join(base, "plugins.state.json"))
+	p := newConfigurable("c")
+	if err := m.Register(p, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := filepath.Join(base, "plugins", "c")
+	if p.lastICtx.StateDir != want {
+		t.Errorf("Register 时 StateDir = %q, want %q", p.lastICtx.StateDir, want)
+	}
+	if p.lastICtx.Workdir != "/w" {
+		t.Errorf("Workdir 不应被改动: %q", p.lastICtx.Workdir)
+	}
+
+	// SetConfig 与 SetEnabled 触发的重新 Init 也必须带上同一个目录
+	p.lastICtx = InitContext{}
+	if err := m.SetConfig("c", map[string]any{"size": 200}); err != nil {
+		t.Fatal(err)
+	}
+	if p.lastICtx.StateDir != want {
+		t.Errorf("SetConfig 后 StateDir = %q, want %q", p.lastICtx.StateDir, want)
+	}
+
+	m2 := NewManager(InitContext{}, filepath.Join(base, "plugins.state.json"))
+	q := &fakePlugin{name: "other"}
+	m2.Register(q, PluginConfig{Enabled: true})
+	if q.lastICtx.StateDir == want {
+		t.Error("不同插件不应共用同一个 StateDir")
+	}
+}
+
+func TestStateDirEmptyWithoutStatePath(t *testing.T) {
+	m := NewManager(InitContext{Workdir: "/w"}, "")
+	p := &fakePlugin{name: "x"}
+	m.Register(p, PluginConfig{Enabled: true})
+	if p.lastICtx.StateDir != "" {
+		t.Errorf("未配置状态文件时 StateDir 应为空，得到 %q", p.lastICtx.StateDir)
+	}
+}
+
+func TestRegisterRejectsInvalidName(t *testing.T) {
+	for _, name := range []string{"", "Foo", "a-b", "1a", "../evil", "a b", "a/b"} {
+		m := NewManager(InitContext{}, "")
+		if err := m.Register(&fakePlugin{name: name}, PluginConfig{Enabled: true}); err == nil {
+			t.Errorf("插件名 %q 应被拒绝", name)
+		}
+	}
+	m := NewManager(InitContext{}, "")
+	if err := m.Register(&fakePlugin{name: "read_file2"}, PluginConfig{Enabled: true}); err != nil {
+		t.Errorf("合法插件名被拒绝: %v", err)
+	}
+}
+
+// lifecyclePlugin 实现 Lifecycle，用于验证压缩事件广播。
+type lifecyclePlugin struct {
+	fakePlugin
+	note  string
+	err   error
+	calls int
+	got   CompactEvent
+}
+
+func (p *lifecyclePlugin) OnCompact(_ context.Context, ev CompactEvent) (string, error) {
+	p.calls++
+	p.got = ev
+	return p.note, p.err
+}
+
+func TestNotifyCompact(t *testing.T) {
+	m := NewManager(InitContext{}, "")
+	on := &lifecyclePlugin{fakePlugin: fakePlugin{name: "a"}, note: "注记A"}
+	off := &lifecyclePlugin{fakePlugin: fakePlugin{name: "b"}, note: "注记B"}
+	boom := &lifecyclePlugin{fakePlugin: fakePlugin{name: "c"}, note: "注记C", err: fmt.Errorf("boom")}
+	silent := &lifecyclePlugin{fakePlugin: fakePlugin{name: "d"}} // 返回空串
+	plain := &fakePlugin{name: "e"}                               // 未实现 Lifecycle
+
+	m.Register(on, PluginConfig{Enabled: true})
+	m.Register(off, PluginConfig{Enabled: false})
+	m.Register(boom, PluginConfig{Enabled: true})
+	m.Register(silent, PluginConfig{Enabled: true})
+	m.Register(plain, PluginConfig{Enabled: true})
+
+	ev := CompactEvent{SessionID: "s1", Summary: "摘要"}
+	notes := m.NotifyCompact(context.Background(), ev)
+
+	if len(notes) != 1 || notes[0] != "注记A" {
+		t.Errorf("notes = %v，应只收集启用插件的非空注记且跳过报错的插件", notes)
+	}
+	if off.calls != 0 {
+		t.Error("禁用的插件不应收到压缩事件")
+	}
+	if boom.calls != 1 {
+		t.Error("报错的插件应被调用过，且错误不阻断后续插件")
+	}
+	if on.got.SessionID != "s1" || on.got.Summary != "摘要" {
+		t.Errorf("事件内容未透传: %+v", on.got)
 	}
 }
 
