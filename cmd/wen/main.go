@@ -127,5 +127,7 @@ func buildPlugins(cfg *config.Config, workdir string, complete plugin.CompleteFu
 			log.Printf("警告: 注册插件 %q 失败: %v", p.Name(), err)
 		}
 	}
+	// 依赖校验必须等全部注册完：register 是逐个进行的，依赖方可能先于被依赖方注册
+	m.Resolve()
 	return m
 }

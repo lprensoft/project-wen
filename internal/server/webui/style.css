@@ -547,6 +547,17 @@ body {
   border-color: var(--accent);
   background: transparent;
 }
+/* 依赖未满足（开关置灰）与能力相抵（仅告警）两种警示标签 */
+.plugin-card-tags .tag-blocked,
+.plugin-card-tags .tag-warn {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.plugin-card-blocked .plugin-card-name,
+.plugin-card-blocked .plugin-card-desc { opacity: 0.6; }
+.plugin-card-blocked .switch { opacity: 0.5; cursor: not-allowed; }
+
 /* 说明文字撑开剩余高度，等高拉伸后的空白留在卡片底部而不是标签与说明之间 */
 .plugin-card-desc { font-size: 12.5px; color: var(--text-dim); flex: 1; }
 

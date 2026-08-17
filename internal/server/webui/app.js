@@ -625,6 +625,22 @@ function renderSettingsPlugins(list) {
     };
     addTag(SOURCE_LABELS[p.source] || p.source || "内置", "tag-source");
     if (p.has_prompt) addTag("注入提示词");
+
+    // 依赖未满足时不让开：后端也会拒绝，这里只是别让用户白点一次
+    const unmet = p.unmet || [];
+    if (unmet.length > 0) {
+      addTag("需先启用 " + unmet.join("、"), "tag-blocked");
+      input.disabled = true;
+      label.title = "该插件依赖 " + unmet.join("、") + "，请先启用它们";
+      card.classList.add("plugin-card-blocked");
+    } else if ((p.requires || []).length > 0) {
+      addTag("依赖 " + p.requires.join("、"));
+    }
+    // 冲突只告警不阻止：能力相抵的代价由用户自己权衡
+    const conflicting = p.conflicting || [];
+    if (p.enabled && conflicting.length > 0) {
+      addTag("与 " + conflicting.join("、") + " 能力相抵", "tag-warn");
+    }
     card.appendChild(tags);
 
     // 工具名不再逐个占一个标签（数量多时会把版面撑乱），改为悬停查看
