@@ -580,6 +580,15 @@ body {
 .plugin-card-name { font-size: 13.5px; font-weight: 600; }
 .plugin-card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
+/* 插件卡片上的操作按钮（插件声明的操作入口，如扫码绑定） */
+.btn-plugin-action { padding: 4px 10px; font-size: 12px; }
+
+/* 插件操作弹窗：图片（如二维码）居中，说明文字在下 */
+.plugin-action-body { align-items: center; text-align: center; }
+.plugin-action-image { max-width: 260px; max-height: 260px; border-radius: 8px; background: #fff; padding: 8px; }
+.plugin-action-message { font-size: 13px; color: var(--text); white-space: pre-wrap; }
+.plugin-action-message.action-error { color: var(--danger, #d33); }
+
 /* 卡片右上角的配置齿轮（仅有可配置项的插件显示） */
 .btn-gear {
   width: 26px;

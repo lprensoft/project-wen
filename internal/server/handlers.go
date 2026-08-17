@@ -195,6 +195,25 @@ func (s *Server) setPluginConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.plugins.List())
 }
 
+// startPluginAction 触发插件的一个操作入口（长流程在插件后台进行，本请求立即返回）。
+func (s *Server) startPluginAction(w http.ResponseWriter, r *http.Request) {
+	if err := s.plugins.StartAction(r.Context(), r.PathValue("name"), r.PathValue("key")); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+// pluginActionState 查询插件操作的进展，供界面轮询。
+func (s *Server) pluginActionState(w http.ResponseWriter, r *http.Request) {
+	st, err := s.plugins.ActionState(r.PathValue("name"), r.PathValue("key"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 // compact 压缩指定会话，过程以 SSE 流返回。
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
