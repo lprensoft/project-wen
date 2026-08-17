@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,13 +17,30 @@ type Status struct {
 	Enabled     bool     `json:"enabled"`
 	ToolNames   []string `json:"tool_names"`
 	HasPrompt   bool     `json:"has_prompt"`
+	// ConfigFields 为空表示该插件没有可配置项（界面不显示配置入口）。
+	ConfigFields []ConfigField  `json:"config_fields,omitempty"`
+	Config       map[string]any `json:"config,omitempty"` // 当前生效值（含默认值）
 }
 
 type entry struct {
 	plugin  Plugin
-	cfg     map[string]any
+	baseCfg map[string]any // 配置文件 plugins.<name>.config
+	userCfg map[string]any // 界面上保存过的配置（持久化到状态文件，覆盖 baseCfg）
+	cfg     map[string]any // 生效配置 = baseCfg 叠加 userCfg
 	enabled bool
 	inited  bool
+}
+
+// applyCfg 重算生效配置。
+func (e *entry) applyCfg() {
+	if len(e.userCfg) == 0 {
+		e.cfg = e.baseCfg
+		return
+	}
+	merged := make(map[string]any, len(e.baseCfg)+len(e.userCfg))
+	maps.Copy(merged, e.baseCfg)
+	maps.Copy(merged, e.userCfg)
+	e.cfg = merged
 }
 
 // Manager 管理系统插件：注册、开关、状态持久化、工具与提示词聚合。
@@ -64,13 +82,24 @@ func (m *Manager) Register(p Plugin, cfg PluginConfig) error {
 		}
 	}
 
-	e := &entry{plugin: p, cfg: cfg.Config, enabled: cfg.Enabled}
+	e := &entry{plugin: p, baseCfg: cfg.Config, cfg: cfg.Config, enabled: cfg.Enabled}
 	m.entries[name] = e
 	m.order = append(m.order, name)
 
-	// 持久化状态覆盖配置初始值
+	// 持久化状态覆盖配置文件的初始值（界面上的改动优先）
 	if saved, ok := m.loadState()[name]; ok {
-		e.enabled = saved
+		e.enabled = saved.Enabled
+		e.userCfg = saved.Config
+		// JSON 会把整数读成 float64，按字段声明还原类型；非法值退回配置文件
+		if fields := ConfigFieldsOf(p); len(fields) > 0 && len(e.userCfg) > 0 {
+			values, err := NormalizeConfig(fields, e.userCfg)
+			if err != nil {
+				log.Printf("插件 %q 的持久化配置无效，改用配置文件的值: %v", name, err)
+				values = nil
+			}
+			e.userCfg = values
+		}
+		e.applyCfg()
 	}
 	if e.enabled {
 		if err := p.Init(m.ictx, e.cfg); err != nil {
@@ -103,6 +132,39 @@ func (m *Manager) SetEnabled(name string, on bool) error {
 	return nil
 }
 
+// SetConfig 保存插件配置并持久化。已初始化的插件会以新配置重新 Init，
+// 失败时回滚到旧配置。配置中未声明的键被忽略，缺失的键取默认值。
+func (m *Manager) SetConfig(name string, cfg map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	e, ok := m.entries[name]
+	if !ok {
+		return fmt.Errorf("插件 %q 不存在", name)
+	}
+	fields := ConfigFieldsOf(e.plugin)
+	if len(fields) == 0 {
+		return fmt.Errorf("插件 %q 没有可配置项", name)
+	}
+	next, err := NormalizeConfig(fields, cfg)
+	if err != nil {
+		return err
+	}
+
+	oldUser, oldCfg := e.userCfg, e.cfg
+	e.userCfg = next
+	e.applyCfg()
+	if e.inited {
+		if err := e.plugin.Init(m.ictx, e.cfg); err != nil {
+			e.userCfg, e.cfg = oldUser, oldCfg
+			_ = e.plugin.Init(m.ictx, oldCfg) // 尽力恢复旧配置下的状态
+			return fmt.Errorf("插件 %q 应用配置失败: %w", name, err)
+		}
+	}
+	m.saveStateLocked()
+	return nil
+}
+
 // List 返回全部插件状态（按注册顺序）。
 func (m *Manager) List() []Status {
 	m.mu.RLock()
@@ -115,13 +177,23 @@ func (m *Manager) List() []Status {
 		for _, t := range e.plugin.Tools() {
 			names = append(names, t.Name())
 		}
-		out = append(out, Status{
+		st := Status{
 			Name:        name,
 			Description: e.plugin.Description(),
 			Enabled:     e.enabled,
 			ToolNames:   names,
 			HasPrompt:   e.plugin.SystemPrompt() != "",
-		})
+		}
+		if fields := ConfigFieldsOf(e.plugin); len(fields) > 0 {
+			st.ConfigFields = fields
+			// 配置非法时（如手改配置文件）退回默认值展示，不影响列表可用
+			values, err := NormalizeConfig(fields, e.cfg)
+			if err != nil {
+				values, _ = NormalizeConfig(fields, nil)
+			}
+			st.Config = values
+		}
+		out = append(out, st)
 	}
 	return out
 }
@@ -177,8 +249,15 @@ func (m *Manager) SystemPrompts() []string {
 
 // ---------- 状态持久化（plugins.state.json） ----------
 
-func (m *Manager) loadState() map[string]bool {
-	state := map[string]bool{}
+// persistedEntry 是单个插件的持久化状态（开关 + 界面上改过的配置）。
+type persistedEntry struct {
+	Enabled bool           `json:"enabled"`
+	Config  map[string]any `json:"config,omitempty"`
+}
+
+// loadState 读取状态文件，兼容旧格式（name -> bool）。
+func (m *Manager) loadState() map[string]persistedEntry {
+	state := map[string]persistedEntry{}
 	if m.statePath == "" {
 		return state
 	}
@@ -186,7 +265,21 @@ func (m *Manager) loadState() map[string]bool {
 	if err != nil {
 		return state
 	}
-	_ = json.Unmarshal(raw, &state)
+	var items map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return state
+	}
+	for name, item := range items {
+		var enabled bool
+		if err := json.Unmarshal(item, &enabled); err == nil {
+			state[name] = persistedEntry{Enabled: enabled}
+			continue
+		}
+		var pe persistedEntry
+		if err := json.Unmarshal(item, &pe); err == nil {
+			state[name] = pe
+		}
+	}
 	return state
 }
 
@@ -194,9 +287,10 @@ func (m *Manager) saveStateLocked() {
 	if m.statePath == "" {
 		return
 	}
-	state := map[string]bool{}
+	state := map[string]persistedEntry{}
 	for name, e := range m.entries {
-		state[name] = e.enabled
+		// 只持久化界面上改过的配置，未改动的插件仍跟随配置文件
+		state[name] = persistedEntry{Enabled: e.enabled, Config: e.userCfg}
 	}
 	raw, _ := json.MarshalIndent(state, "", "  ")
 	_ = os.MkdirAll(filepath.Dir(m.statePath), 0o755)

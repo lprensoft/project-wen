@@ -27,8 +27,9 @@ agent:
   max_turns: 20              # 单次用户请求内工具循环上限
   workdir: ""                # 工作目录（插件与环境块共用），空 = 进程当前目录
 
-# 系统插件：enabled 为初始状态；运行时开关（/plugins 或 API）持久化在
-# <配置目录>/plugins.state.json，优先于这里的初始值，不会回写本文件。
+# 系统插件：enabled 与 config 为初始值；运行时的开关（/plugins 或 API）与在
+# 设置页里改过的插件配置持久化在 <配置目录>/plugins.state.json，
+# 优先于这里的初始值，不会回写本文件。
 plugins:
   read_file:
     enabled: true

@@ -25,6 +25,18 @@ func (p *Plugin) Name() string        { return "read_file" }
 func (p *Plugin) Description() string { return "读取本地文本文件内容" }
 func (p *Plugin) SystemPrompt() string { return "" }
 
+func (p *Plugin) ConfigFields() []plugin.ConfigField {
+	return []plugin.ConfigField{{
+		Key:         "max_bytes",
+		Label:       "最大读取字节数",
+		Type:        plugin.FieldInt,
+		Description: "单次读取返回的最大字节数，超出部分截断。",
+		Default:     defaultMaxBytes,
+		Min:         plugin.IntPtr(1024),
+		Max:         plugin.IntPtr(4 * 1024 * 1024),
+	}}
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.workdir = ictx.Workdir
 	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)

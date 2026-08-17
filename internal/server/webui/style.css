@@ -510,6 +510,17 @@ body {
   gap: 10px;
 }
 .plugin-card-name { font-size: 13.5px; font-weight: 600; }
+.plugin-card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* 卡片右上角的配置齿轮（仅有可配置项的插件显示） */
+.btn-gear {
+  width: 26px;
+  height: 26px;
+  color: var(--text-dim);
+}
+.btn-gear:hover { color: var(--text); }
+.btn-gear svg { width: 15px; height: 15px; }
+
 .plugin-card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .plugin-card-tags .tag {
   font-size: 11.5px;
@@ -547,3 +558,85 @@ body {
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
 .switch input:disabled + .slider { opacity: 0.5; cursor: wait; }
+
+/* ---------- 弹窗（插件配置） ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.hidden { display: none; }
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 14px; font-weight: 600; }
+.modal-body { padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+.modal-foot-gap { flex: 1; }
+.modal-error {
+  margin: 0 14px 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.modal-error.hidden { display: none; }
+
+.btn-ghost {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-ghost:hover { background: var(--bg); }
+
+/* 配置表单项 */
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field-label { font-size: 13px; font-weight: 600; }
+.field-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.field input[type="text"], .field input[type="number"], .field select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+}
+.field input:focus, .field select:focus { border-color: var(--accent); }
+.field-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
