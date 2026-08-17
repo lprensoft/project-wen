@@ -574,6 +574,9 @@ function closeSettings() {
   settingsView.classList.add("hidden");
 }
 
+// 与 internal/plugin 的 SourceBuiltin / SourceExternal 对应
+const SOURCE_LABELS = { builtin: "内置", external: "外源" };
+
 function renderSettingsPlugins(list) {
   settingsPluginsEl.textContent = "";
   for (const p of list) {
@@ -612,19 +615,21 @@ function renderSettingsPlugins(list) {
 
     const tags = document.createElement("div");
     tags.className = "plugin-card-tags";
-    for (const t of p.tool_names || []) {
+    const addTag = (text, extraClass) => {
       const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "工具 " + t;
+      tag.className = extraClass ? "tag " + extraClass : "tag";
+      tag.textContent = text;
       tags.appendChild(tag);
+    };
+    addTag(SOURCE_LABELS[p.source] || p.source || "内置", "tag-source");
+    if (p.has_prompt) addTag("注入提示词");
+    card.appendChild(tags);
+
+    // 工具名不再逐个占一个标签（数量多时会把版面撑乱），改为悬停查看
+    const tools = p.tool_names || [];
+    if (tools.length > 0) {
+      card.title = "工具：" + tools.join("、");
     }
-    if (p.has_prompt) {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "注入提示词";
-      tags.appendChild(tag);
-    }
-    if (tags.childElementCount > 0) card.appendChild(tags);
 
     const desc = document.createElement("div");
     desc.className = "plugin-card-desc";

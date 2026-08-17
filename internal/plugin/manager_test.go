@@ -249,6 +249,33 @@ func TestStateDirEmptyWithoutStatePath(t *testing.T) {
 	}
 }
 
+func TestRegisterRecordsSource(t *testing.T) {
+	m := NewManager(InitContext{}, "")
+	if err := m.Register(&fakePlugin{name: "inner"}, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RegisterExternal(&fakePlugin{name: "outer"}, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, st := range m.List() {
+		got[st.Name] = st.Source
+	}
+	if got["inner"] != SourceBuiltin || got["outer"] != SourceExternal {
+		t.Errorf("来源记录错误: %v", got)
+	}
+	if SourceLabel(SourceBuiltin) != "内置" || SourceLabel(SourceExternal) != "外源" {
+		t.Error("来源显示名不对")
+	}
+	// 外源插件同样受重名与工具冲突校验
+	if err := m.RegisterExternal(&fakePlugin{name: "inner"}, PluginConfig{Enabled: true}); err == nil {
+		t.Error("外源插件重名应被拒绝")
+	}
+	if err := m.RegisterExternal(&fakePlugin{name: "Bad"}, PluginConfig{Enabled: true}); err == nil {
+		t.Error("外源插件名同样要校验")
+	}
+}
+
 func TestRegisterRejectsInvalidName(t *testing.T) {
 	for _, name := range []string{"", "Foo", "a-b", "1a", "../evil", "a b", "a/b"} {
 		m := NewManager(InitContext{}, "")
