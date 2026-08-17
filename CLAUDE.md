@@ -16,7 +16,7 @@
 
 插件可选声明 `Dependent`（`Requires() []string`）与 `Conflicting`（`Conflicts() []string`）。依赖是硬性的：依赖未满足时拒绝启用（校验放在 `Init` **之前**，避免产生副作用），被依赖的插件也无法在依赖方仍启用时关闭——拒绝而非级联关闭，因为界面没有确认或提示通道，级联只会表现为「另一个开关自己变灰了」。冲突只告警不阻止。依赖校验必须在**全部 `Register` 之后**由 `Manager.Resolve()` 统一做（register 是逐个进行的，依赖方可能先注册），且要显式检出依赖环。被强制关闭的插件记在 `entry.forcedOff` 而不是直接改 `enabled`：状态文件是全量重写的，直接改会把强制关闭固化成用户意图，依赖恢复后也回不来。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有六处按此标准放行：
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十一处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
 2. `InitContext.SessionDir` —— 会话目录，只读用；
@@ -24,9 +24,13 @@
 4. `Lifecycle` —— 会话生命周期通知；
 5. **可见域**（`Scope` / `ScopeDecider` / `TurnPrompter`，见下节）；
 6. `Requires` / `Conflicts` —— 插件间的依赖与互斥声明；
-7. **操作确认**（`ConfirmFunc` / `WithConfirmer` / `ConfirmerFrom`，见下节）。
+7. **操作确认**（`ConfirmFunc` / `WithConfirmer` / `ConfirmerFrom`，见下节）；
+8. **插件发起轮次**（`InitContext.RunTurn` / `NewSession` / `Compact`，见「插件发起轮次约定」）；
+9. `Stoppable` —— 插件停止钩子（禁用、重配、进程退出三处由 Manager 在**锁外**调用）；
+10. `TurnObserver` —— 轮次结束观察（`Manager.NotifyTurnEnd` 逐个 recover 广播）；
+11. **交互标记与会话活跃时间**（`WithInteractive` / `Meta.LastActiveAt`，见「插件发起轮次约定」）。
 
-任何插件都能用，核心不知道「记忆」「检索」「人格」或「危险命令」这回事。
+任何插件都能用，核心不知道「记忆」「检索」「人格」「危险命令」「心跳」「定时」或「QQ」这回事。
 
 ## 插件持久化与生命周期约定
 
@@ -41,6 +45,16 @@
 注意 `Init` 可能在运行时被反复调用（`SetConfig` 会重新 `Init`），此时可能有 in-flight 的 `Execute` 正在读插件字段——有状态的插件必须自己加锁，不要照抄现有几个内置插件在 `Init` 里裸写字段的写法。
 
 插件向 system 消息注入的内容会随**每一轮** LLM 调用重复发送（`trimToBudget` 永不裁 `msgs[0]`），且计入自动压缩的判据。因此体量会增长的注入内容必须有硬上限，超限时降级要保住"存在性"信息而不是整条丢弃。
+
+## 插件发起轮次约定
+
+插件能以编程方式跑一轮完整对话：`InitContext.RunTurn`（写会话、带工具、注入 system 提示词，返回助手最终文本）、`NewSession`、`Compact`，均为闭包延迟绑定（`main.go`），nil 表示不可用应降级。`Manager.initCtxFor` 下发 `RunTurn` 时自动注入发起方标记（`WithTurnOrigin(插件名)`），插件无法伪装成前台；发起方随整轮消息落盘到 `StoredMessage.Origin`。
+
+**per-session 轮次锁**（`Agent.turnLocks`）：前台 `Run` / `Compact` 排队；插件的 `RunTurn` / `CompactTurn` 忙时立即返回 `plugin.ErrSessionBusy` **不排队**——后台任务堆在锁上只会在解锁瞬间连环轰炸会话，跳过等下个周期才是对的。这把锁同时根治并发轮次交错写历史与压缩 `Replace` 覆盖并发 `Append` 的丢消息竞态。
+
+**交互标记**：真人在对面的轮次（Web UI 的 chat handler、QQ 等远程 IM 插件）用 `WithInteractive(ctx)` 标记，核心只在此时更新 `Meta.LastActiveAt`。「最近活跃会话」按它判定（缺字段回落 `CreatedAt`，查询逻辑放插件侧）；机器自发的轮次（心跳、定时任务）不标记，否则以最近活跃会话为落点的后台功能会自我续命。
+
+后台轮次**不注入 confirmer**，execcmd 的「拿不到答复=拒绝」正是无人值守想要的默认；要接入远程确认（如 QQ 的 /apply //deny）由发起方插件自己 `WithConfirmer`。起 goroutine 的插件必须实现 `Stoppable`（只做取消 + 有界等待，不得等整轮对话），并保证 `Init` 可重入（先停旧循环再起新的）。`TurnObserver.OnTurnEnd` 在轮次收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
 
 ## 可见域约定
 
