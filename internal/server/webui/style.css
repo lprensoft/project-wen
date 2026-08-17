@@ -733,3 +733,35 @@ body {
 }
 .field input:focus, .field select:focus { border-color: var(--accent); }
 .field-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* 数字输入：隐藏系统默认的上下箭头，换成与其余控件同风格的按钮 */
+.field input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.field input[type="number"]::-webkit-outer-spin-button,
+.field input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.number-field { position: relative; display: flex; }
+.number-field input[type="number"] { flex: 1; padding-right: 32px; }
+.number-steppers {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.number-step {
+  flex: 1;
+  width: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.number-step:hover { background: var(--bg); color: var(--text); }
+.number-step svg { width: 11px; height: 11px; }
