@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -216,22 +217,25 @@ const promptGuide = `对话中出现下列内容时，用 save_memory 保存，�
 只保存长期有效的结论，不保存一次性的任务细节、临时中间结果与可以随时重新读取的内容。
 对话历史被压缩后，摘要中若含上述内容，需要检查是否已经保存。`
 
-// SystemPrompt 返回记忆索引与保存判据。未初始化时不注入（列表接口会对
-// 禁用的插件也调用本方法，此时不应产生任何磁盘访问）。
+// SystemPrompt 只返回静态的保存判据。
 //
-// 记忆库为空时只注入判据、不注入索引：判据正是引导保存第一条记忆的东西，
-// 一条记忆都没有的时候最需要它。
-func (p *Plugin) SystemPrompt() string {
+// 记忆索引改由 TurnPrompt 注入：索引的内容取决于本轮的可见域，而 SystemPrompt 拿不到
+// 可见域，一律全列会把不可读域的记忆标题漏出去。顺带的好处是本方法不再有任何磁盘
+// 访问——列表接口会对禁用的插件也调用它。
+func (p *Plugin) SystemPrompt() string { return promptGuide }
+
+// TurnPrompt 注入本轮可读的记忆索引。
+// 记忆库为空时不注入：判据已在 SystemPrompt 里，那是引导保存第一条记忆的东西。
+func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if s.store == nil {
-		return ""
+		return "", nil
 	}
 	entries, err := s.store.List()
 	if err != nil || len(entries) == 0 {
-		return promptGuide
+		return "", err
 	}
-	return promptHeader + "\n" +
-		renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes) + "\n\n" + promptGuide
+	return promptHeader + "\n" + renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes), nil
 }
 
 // renderIndex 按预算渲染索引，分三级降级：
