@@ -23,6 +23,7 @@ import (
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/readfile"
 	"wen/internal/plugin/builtin/roleplay"
+	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/server"
@@ -177,7 +178,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义
 		roleplay.New(), dualpersona.New(),
-		heartbeat.New(),
+		heartbeat.New(), scheduler.New(),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
