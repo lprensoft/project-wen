@@ -23,6 +23,7 @@ import (
 type sentMsg struct {
 	openid  string
 	content string
+	msgType int
 	msgID   string
 	seq     int
 }
@@ -32,9 +33,10 @@ type fakeQQ struct {
 	srv   *httptest.Server
 	sends chan sentMsg
 
-	mu   sync.Mutex
-	conn *websocket.Conn
-	seq  int64
+	mu             sync.Mutex
+	conn           *websocket.Conn
+	seq            int64
+	rejectMarkdown bool // 模拟平台「不允许发送原生 markdown」(40034012)
 
 	ready chan struct{} // 收到 Identify 并回了 READY
 }
@@ -81,12 +83,28 @@ func newFakeQQ(t *testing.T) *fakeQQ {
 	})
 	mux.HandleFunc("POST /v2/users/{openid}/messages", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Content string `json:"content"`
-			MsgID   string `json:"msg_id"`
-			MsgSeq  int    `json:"msg_seq"`
+			Content  string `json:"content"`
+			MsgType  int    `json:"msg_type"`
+			Markdown *struct {
+				Content string `json:"content"`
+			} `json:"markdown"`
+			MsgID  string `json:"msg_id"`
+			MsgSeq int    `json:"msg_seq"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		f.sends <- sentMsg{openid: r.PathValue("openid"), content: body.Content, msgID: body.MsgID, seq: body.MsgSeq}
+		f.mu.Lock()
+		reject := f.rejectMarkdown
+		f.mu.Unlock()
+		if body.MsgType == 2 && reject {
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 40034012})
+			return
+		}
+		content := body.Content
+		if body.Markdown != nil {
+			content = body.Markdown.Content
+		}
+		f.sends <- sentMsg{openid: r.PathValue("openid"), content: content, msgType: body.MsgType, msgID: body.MsgID, seq: body.MsgSeq}
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": "out-1"})
 	})
 	f.srv = httptest.NewServer(mux)
@@ -197,6 +215,41 @@ func TestChatRoundTrip(t *testing.T) {
 	}
 	if m.msgID != id || m.seq != 1 {
 		t.Fatalf("被动回复应带 msg_id=%s seq=1: %+v", id, m)
+	}
+	if m.msgType != 2 {
+		t.Fatalf("默认应发原生 markdown（msg_type=2），得到 %d", m.msgType)
+	}
+}
+
+// 平台拒绝原生 markdown 时当场降级纯文本重发，且能力缓存生效（后续直接发纯文本）。
+func TestMarkdownFallback(t *testing.T) {
+	runTurn := func(_ context.Context, _, input string) (string, error) {
+		return "**加粗** `代码` " + input, nil
+	}
+	p, f, _ := newInited(t, runTurn, "user1")
+	f.mu.Lock()
+	f.rejectMarkdown = true
+	f.mu.Unlock()
+
+	f.pushC2C("user1", "一")
+	m := f.expectSend(t)
+	if m.msgType != 0 {
+		t.Fatalf("markdown 被拒后应降级纯文本重发: %+v", m)
+	}
+	if strings.Contains(m.content, "**") || strings.Contains(m.content, "`") {
+		t.Fatalf("纯文本重发应去除 markdown 标记: %s", m.content)
+	}
+	if !strings.Contains(m.content, "加粗") || !strings.Contains(m.content, "「代码」") {
+		t.Fatalf("纯文本转换不符: %s", m.content)
+	}
+	if p.markdownAllowed("user1") {
+		t.Fatal("被拒后能力缓存应关闭该用户的 markdown")
+	}
+
+	// 第二条：直接走纯文本，不再撞 400
+	f.pushC2C("user1", "二")
+	if m := f.expectSend(t); m.msgType != 0 {
+		t.Fatalf("能力缓存生效后应直接发纯文本: %+v", m)
 	}
 }
 
@@ -338,21 +391,111 @@ func TestDedup(t *testing.T) {
 
 // ---------- 纯函数 ----------
 
-func TestSplitText(t *testing.T) {
-	if parts := splitText("短消息", 1500); len(parts) != 1 || parts[0] != "短消息" {
+func TestChunkMarkdown(t *testing.T) {
+	if parts := chunkMarkdown("短消息", 1500); len(parts) != 1 || parts[0] != "短消息" {
 		t.Fatalf("短消息不该分段: %v", parts)
 	}
-	long := strings.Repeat("这是一行比较长的内容。\n", 300) // 约 3600 rune
-	parts := splitText(long, 1500)
+
+	// 普通长文按行切且不超限
+	long := strings.Repeat("这是一行比较长的内容。\n", 500)
+	parts := chunkMarkdown(long, 1500)
 	if len(parts) < 3 {
 		t.Fatalf("长文应分成 3 段以上，得到 %d", len(parts))
 	}
-	for i, part := range parts {
-		if !strings.HasPrefix(part, fmt.Sprintf("(%d/%d) ", i+1, len(parts))) {
-			t.Fatalf("分段应带标注: %q", part[:20])
+	for _, part := range parts {
+		if len([]rune(part)) > 1500 {
+			t.Fatalf("分段超限: %d", len([]rune(part)))
 		}
-		if len([]rune(part)) > 1520 {
-			t.Fatalf("分段过长: %d", len([]rune(part)))
+	}
+
+	// 代码块被拦腰切断时：本段补闭合、下一段以原围栏重开
+	code := "```go\n" + strings.Repeat("fmt.Println(1)\n", 200) + "```"
+	parts = chunkMarkdown(code, 1000)
+	if len(parts) < 2 {
+		t.Fatalf("长代码块应分段，得到 %d", len(parts))
+	}
+	for i, part := range parts {
+		if i > 0 && !strings.HasPrefix(part, "```go") {
+			t.Fatalf("后续段应以原围栏重开: %q", part[:20])
+		}
+		if !strings.HasSuffix(strings.TrimSpace(part), "```") {
+			t.Fatalf("每段代码块都应闭合: …%q", part[len(part)-10:])
+		}
+	}
+
+	// 超长单行硬切
+	oneLine := strings.Repeat("字", 3200)
+	parts = chunkMarkdown(oneLine, 1500)
+	if len(parts) != 3 {
+		t.Fatalf("3200 字单行按 1500 应切成 3 段，得到 %d", len(parts))
+	}
+}
+
+func TestDowngradeTables(t *testing.T) {
+	md := strings.Join([]string{
+		"前文",
+		"| 姓名 | 年龄 | 城市 |",
+		"|---|---|---|",
+		"| 张三 | 30 | 北京 |",
+		"| 李四 | 25 | 上海 |",
+		"| 王五 | 28 | 广州 |",
+		"| 赵六 | 22 | 深圳 |",
+		"| 孙七 | 31 | 成都 |",
+		"后文",
+	}, "\n")
+	out := downgradeTables(md)
+	if strings.Contains(out, "|---") || strings.Contains(out, "| 张三 |") {
+		t.Fatalf("表格未降级:\n%s", out)
+	}
+	if !strings.Contains(out, "姓名: 张三 ｜ 年龄: 30 ｜ 城市: 北京") {
+		t.Fatalf("键值行不符:\n%s", out)
+	}
+	if !strings.Contains(out, "另有 2 行数据") { // 5 行数据保留 3 行，折叠 2 行
+		t.Fatalf("应输出折叠提示:\n%s", out)
+	}
+	// 代码块里的管道行不能被当成表格
+	code := "```\n| a | b |\n```"
+	if out := downgradeTables(code); out != code {
+		t.Fatalf("代码块内不该降级:\n%s", out)
+	}
+}
+
+func TestSanitizeImagesAndCode(t *testing.T) {
+	out := sanitizeForQQ("看这张 ![截图](https://x/1.png) 和 ![](https://x/2.png)")
+	if strings.Contains(out, "!") || !strings.Contains(out, "[截图](https://x/1.png)") || !strings.Contains(out, "[图片](https://x/2.png)") {
+		t.Fatalf("图片降级不符: %s", out)
+	}
+
+	long := "```\n" + strings.Repeat("字", 2000) + "\n```"
+	out = sanitizeForQQ(long)
+	if !strings.Contains(out, "代码过长已截断，共 2000 字符") {
+		t.Fatalf("长代码应截断: %s", out[:80])
+	}
+}
+
+func TestToPlainText(t *testing.T) {
+	md := strings.Join([]string{
+		"# 标题",
+		"**加粗** 和 *斜体* 与 `代码` 及 ~~删除~~",
+		"- 列表项",
+		"1. 有序项",
+		"> 引用",
+		"[链接](https://example.com)",
+		"---",
+		"```go",
+		"x := \"**不要动我**\"",
+		"```",
+	}, "\n")
+	out := toPlainText(md)
+	for _, bad := range []string{"# ", "**加粗**", "*斜体*", "~~", "- 列表项", "> ", "](", "```"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("纯文本残留 %q:\n%s", bad, out)
+		}
+	}
+	for _, want := range []string{"【标题】", "加粗", "斜体", "「代码」", "• 列表项", "1. 有序项", "｜ 引用",
+		"链接（https://example.com）", `x := "**不要动我**"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("纯文本缺少 %q:\n%s", want, out)
 		}
 	}
 }

@@ -79,3 +79,18 @@ func (p *Plugin) sendC2C(ctx context.Context, openid, content, msgID string, seq
 	_, err := p.apiDo(ctx, http.MethodPost, "/v2/users/"+openid+"/messages", body)
 	return err
 }
+
+// sendC2CMarkdown 发送一条原生 markdown 单聊消息（msg_type=2）。
+// 注意 markdown 与 message_reference 互斥，这里不带引用。
+func (p *Plugin) sendC2CMarkdown(ctx context.Context, openid, content, msgID string, seq int) error {
+	body := map[string]any{
+		"msg_type": 2,
+		"markdown": map[string]any{"content": content},
+	}
+	if msgID != "" {
+		body["msg_id"] = msgID
+		body["msg_seq"] = seq
+	}
+	_, err := p.apiDo(ctx, http.MethodPost, "/v2/users/"+openid+"/messages", body)
+	return err
+}

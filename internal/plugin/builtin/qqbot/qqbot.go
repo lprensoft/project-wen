@@ -27,6 +27,9 @@ const (
 
 	turnTimeout = 10 * time.Minute
 	queueSize   = 8 // 每用户待处理消息队列长度，超出直接回复稍候
+
+	formatMarkdown = "markdown"
+	formatPlain    = "plain"
 )
 
 // Plugin 是 QQ 机器人插件。有状态：Init 可重入（先停旧网关连接），字段由 mu 保护。
@@ -39,6 +42,10 @@ type Plugin struct {
 	apiBase        string
 	whitelist      map[string]bool
 	confirmTimeout time.Duration
+	format         string // formatMarkdown / formatPlain
+
+	// markdown 能力缓存：openid → 关闭到何时（平台返回 40034012 后记入）
+	mdOff map[string]time.Time
 
 	// 能力
 	runTurn    plugin.RunTurnFunc
@@ -105,6 +112,14 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default: defConfirmTimeout, Min: plugin.IntPtr(10), Max: plugin.IntPtr(3600),
 			Description: "危险操作发出确认请求后等待 /apply 或 /deny 的时长，超时按拒绝处理",
 		},
+		{
+			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
+			Options: []plugin.ConfigOption{
+				{Value: formatMarkdown, Label: "markdown（推荐）"},
+				{Value: formatPlain, Label: "纯文本"},
+			},
+			Description: "markdown：按原生 markdown 消息发送（表格与图片自动降级），平台拒绝时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
+		},
 	}
 }
 
@@ -145,6 +160,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
 	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second
+	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
+	p.mdOff = map[string]time.Time{}
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
 	p.compact = ictx.Compact
