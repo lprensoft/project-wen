@@ -96,10 +96,21 @@ func TestScopeProjectRequiresWorkdir(t *testing.T) {
 	}
 }
 
-func TestSystemPromptEmptyWithoutMemories(t *testing.T) {
+func TestSystemPromptGuideOnlyWithoutMemories(t *testing.T) {
 	p := newTestPlugin(t, nil)
-	if got := p.SystemPrompt(); got != "" {
-		t.Errorf("没有记忆时不应注入提示词，得到:\n%s", got)
+	got := p.SystemPrompt()
+	// 判据是引导保存第一条记忆的东西，空库时最需要它
+	if !strings.Contains(got, "save_memory") {
+		t.Errorf("空记忆库仍应注入保存判据:\n%s", got)
+	}
+	// 但不应出现空的索引标题
+	if strings.Contains(got, "[长期记忆]") {
+		t.Errorf("空记忆库不应注入索引部分:\n%s", got)
+	}
+
+	// 未初始化（如插件被禁用）时一概不注入，且不产生磁盘访问
+	if got := New().SystemPrompt(); got != "" {
+		t.Errorf("未初始化时不应注入:\n%s", got)
 	}
 }
 
@@ -362,8 +373,8 @@ func TestDeleteMemoryTool(t *testing.T) {
 	if !strings.Contains(out, "约定/临时约定") {
 		t.Errorf("删除结果 = %q", out)
 	}
-	if p.SystemPrompt() != "" {
-		t.Error("删除最后一条后不应再注入索引")
+	if strings.Contains(p.SystemPrompt(), "临时约定") {
+		t.Error("删除后索引里不应再有该条目")
 	}
 	if _, err := del.Execute(context.Background(), json.RawMessage(`{"name":"临时约定"}`)); err == nil {
 		t.Error("重复删除应报错")

@@ -218,6 +218,9 @@ const promptGuide = `对话中出现下列内容时，用 save_memory 保存，�
 
 // SystemPrompt 返回记忆索引与保存判据。未初始化时不注入（列表接口会对
 // 禁用的插件也调用本方法，此时不应产生任何磁盘访问）。
+//
+// 记忆库为空时只注入判据、不注入索引：判据正是引导保存第一条记忆的东西，
+// 一条记忆都没有的时候最需要它。
 func (p *Plugin) SystemPrompt() string {
 	s := p.snapshot()
 	if s.store == nil {
@@ -225,7 +228,7 @@ func (p *Plugin) SystemPrompt() string {
 	}
 	entries, err := s.store.List()
 	if err != nil || len(entries) == 0 {
-		return ""
+		return promptGuide
 	}
 	return promptHeader + "\n" +
 		renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes) + "\n\n" + promptGuide
