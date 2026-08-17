@@ -37,6 +37,7 @@ agent:
 # 系统插件：enabled 与 config 为初始值；运行时的开关（/plugins 或 API）与在
 # 设置页里改过的插件配置持久化在 <配置目录>/plugins.state.json，
 # 优先于这里的初始值，不会回写本文件。
+# 插件自身的数据落在 <配置目录>/plugins/<插件名>/（已在 .gitignore 中）。
 plugins:
   read_file:
     enabled: true
@@ -50,6 +51,15 @@ plugins:
     config:
       timeout_seconds: 20
       max_bytes: 65536
+  # 长期记忆：记忆条目存 <配置目录>/plugins/memory/memories/，压缩归档存同级 archives/
+  memory:
+    enabled: true
+    config:
+      max_index_entries: 200   # 索引最多列出条数
+      max_index_bytes: 16384   # 索引字节上限（约 170 条带摘要；实测一条约 31 token）
+                               # 注意：索引在每一轮对话中都会重复发送，且计入自动压缩的判据
+      max_entry_bytes: 8192    # 读取单条记忆的返回上限
+      max_archives: 20         # 保留的压缩归档数，0 = 不归档
 
 session:
   dir: ""                    # session 存储目录，空 = <配置目录>/sessions
