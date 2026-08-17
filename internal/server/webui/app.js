@@ -1568,4 +1568,10 @@ $("#chat-form").addEventListener("submit", (e) => {
 $("#btn-new").addEventListener("click", newSession);
 
 loadSessions();
+
+// 侧栏定期刷新：QQ 远程会话、心跳与定时任务产生的新会话及标题变化自动出现。
+// 只刷列表不动消息区，对话进行中（busy）跳过，避免打扰。
+setInterval(() => {
+  if (!busy) loadSessions();
+}, 30000);
 inputEl.focus();
