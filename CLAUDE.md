@@ -14,7 +14,7 @@
 
 `NormalizeConfig` 的空串语义按类型区分：数值/开关/单选的空输入表示「用默认值」（界面对清空的 number input 提交的就是空串），而 `string` / `text` 的空串是合法取值——否则用户清空文本框后保存会看到默认值又长回来，字段永远清不掉。
 
-插件可选实现 `Categorized`（`Category() string`，`internal/plugin/category.go`）声明功能分组（基础工具 / 记忆与检索 / 角色演绎 / 后台任务 / 消息通道），设置页据此分节展示；未声明归「其他」。分组只影响展示，组序与组内顺序仍由注册顺序决定——注册顺序承载提示词注入顺序与依赖关系，不为展示而改。程序版本号唯一来源是 `internal/version`（界面左下角、/status 首行、启动日志共用），只用于面向用户的展示，不注入模型上下文。
+插件可选实现 `Categorized`（`Category() string`，`internal/plugin/category.go`）声明功能分组（基础工具 / 记忆与检索 / 角色演绎 / 后台任务 / 消息通道），设置页据此分节展示；未声明归「其他」。分组只影响展示，组序与组内顺序仍由注册顺序决定——注册顺序承载提示词注入顺序与依赖关系，不为展示而改。程序版本号唯一来源是 `internal/version`（界面左下角、/status 首行、启动日志共用），只用于面向用户的展示，不注入模型上下文。版本号同时编进发布产物：`tools/genwinres` 从它生成 Windows 版本资源（`cmd/wen/resource_windows_*.syso`，随库提交，`go build` 自动链入，exe 属性里可见）。**发布改版本的流程**：改 `internal/version/version.go` → `go generate ./cmd/wen` 重新生成 .syso → 构建；两步都做完再提交，否则 exe 属性里的版本与界面显示会分叉。
 
 插件可选声明 `Dependent`（`Requires() []string`）与 `Conflicting`（`Conflicts() []string`）。依赖是硬性的：依赖未满足时拒绝启用（校验放在 `Init` **之前**，避免产生副作用），被依赖的插件也无法在依赖方仍启用时关闭——拒绝而非级联关闭，因为界面没有确认或提示通道，级联只会表现为「另一个开关自己变灰了」。冲突只告警不阻止。依赖校验必须在**全部 `Register` 之后**由 `Manager.Resolve()` 统一做（register 是逐个进行的，依赖方可能先注册），且要显式检出依赖环。被强制关闭的插件记在 `entry.forcedOff` 而不是直接改 `enabled`：状态文件是全量重写的，直接改会把强制关闭固化成用户意图，依赖恢复后也回不来。
 

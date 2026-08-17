@@ -1,3 +1,7 @@
+// 版本资源：改动 internal/version 后执行 go generate ./cmd/wen 重新生成 .syso
+// （生成器说明见 tools/genwinres），go build 会自动链入本目录的 .syso。
+//go:generate go run wen/tools/genwinres
+
 package main
 
 import (
