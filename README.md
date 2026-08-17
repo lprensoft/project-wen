@@ -42,7 +42,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | `agent.system_prompt` | 系统提示词（当前留空；运行时会自动在其前注入 `[系统环境]` 块：操作系统、Shell、工作目录、区域语言、当前时间） |
 | `agent.max_turns` | 单次请求内工具循环上限 |
 | `agent.workdir` | 插件与环境块共用的工作目录，空 = 进程当前目录 |
-| `plugins.<name>` | 系统插件：`enabled` 初始状态 + `config` 插件配置；运行时开关持久化在 `<配置目录>/plugins.state.json`（优先于初始值，不回写本文件） |
+| `plugins.<name>` | 系统插件：`enabled` 初始状态 + `config` 插件配置；运行时的开关与在设置页改过的配置持久化在 `<配置目录>/plugins.state.json`（优先于初始值，不回写本文件） |
 | `session.dir` | 会话存储目录，默认 `<配置目录>/sessions` |
 
 ## HTTP API
@@ -54,8 +54,9 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | GET | `/api/sessions/{id}` | 会话历史消息 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
 | POST | `/api/chat` | `{"session_id","message"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `compact_*` / `done` / `error`） |
-| GET | `/api/plugins` | 插件列表与状态 |
+| GET | `/api/plugins` | 插件列表与状态（含可配置项声明 `config_fields` 与当前生效值 `config`） |
 | PUT | `/api/plugins/{name}` | `{"enabled": bool}` 运行时开关插件 |
+| PUT | `/api/plugins/{name}/config` | `{"config": {...}}` 保存插件配置，校验通过后立即生效并持久化 |
 
 ## 项目结构
 

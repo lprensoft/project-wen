@@ -35,6 +35,29 @@ func (p *Plugin) SystemPrompt() string {
 	return "你可以使用 fetch_url 工具抓取网页的文本内容。"
 }
 
+func (p *Plugin) ConfigFields() []plugin.ConfigField {
+	return []plugin.ConfigField{
+		{
+			Key:         "timeout_seconds",
+			Label:       "请求超时（秒）",
+			Type:        plugin.FieldInt,
+			Description: "抓取单个网页的最长等待时间。",
+			Default:     20,
+			Min:         plugin.IntPtr(1),
+			Max:         plugin.IntPtr(300),
+		},
+		{
+			Key:         "max_bytes",
+			Label:       "最大抓取字节数",
+			Type:        plugin.FieldInt,
+			Description: "单个网页读取的最大字节数，超出部分截断。",
+			Default:     defaultMaxBytes,
+			Min:         plugin.IntPtr(1024),
+			Max:         plugin.IntPtr(4 * 1024 * 1024),
+		},
+	}
+}
+
 func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
 	p.timeout = time.Duration(plugin.CfgInt(cfg, "timeout_seconds", 20)) * time.Second
 	p.maxBytes = plugin.CfgInt(cfg, "max_bytes", defaultMaxBytes)

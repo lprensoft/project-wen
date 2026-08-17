@@ -26,6 +26,18 @@ func (p *Plugin) Name() string        { return "exec_command" }
 func (p *Plugin) Description() string { return "在工作目录下执行 shell 命令" }
 func (p *Plugin) SystemPrompt() string { return "" }
 
+func (p *Plugin) ConfigFields() []plugin.ConfigField {
+	return []plugin.ConfigField{{
+		Key:         "timeout_seconds",
+		Label:       "命令超时（秒）",
+		Type:        plugin.FieldInt,
+		Description: "单条命令的最长执行时间，超时后终止并把已有输出返回给模型。",
+		Default:     60,
+		Min:         plugin.IntPtr(1),
+		Max:         plugin.IntPtr(3600),
+	}}
+}
+
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.workdir = ictx.Workdir
 	p.timeout = time.Duration(plugin.CfgInt(cfg, "timeout_seconds", 60)) * time.Second

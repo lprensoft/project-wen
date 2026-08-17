@@ -578,7 +578,20 @@ function renderSettingsPlugins(list) {
     const slider = document.createElement("span");
     slider.className = "slider";
     label.append(input, slider);
-    head.append(name, label);
+
+    const actions = document.createElement("div");
+    actions.className = "plugin-card-actions";
+    if ((p.config_fields || []).length > 0) {
+      const gear = document.createElement("button");
+      gear.type = "button";
+      gear.className = "btn-icon btn-square btn-gear";
+      gear.title = "配置";
+      gear.innerHTML = gearIconSVG;
+      gear.addEventListener("click", () => openPluginConfig(p));
+      actions.appendChild(gear);
+    }
+    actions.appendChild(label);
+    head.append(name, actions);
     card.appendChild(head);
 
     const tags = document.createElement("div");
@@ -630,7 +643,172 @@ function renderSettingsPlugins(list) {
 $("#btn-settings").addEventListener("click", openSettings);
 $("#btn-settings-back").addEventListener("click", closeSettings);
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !settingsView.classList.contains("hidden")) closeSettings();
+  if (e.key !== "Escape") return;
+  // 配置弹窗盖在设置页之上，Esc 先关弹窗
+  if (!configModal.classList.contains("hidden")) closePluginConfig();
+  else if (!settingsView.classList.contains("hidden")) closeSettings();
+});
+
+// ---------- 插件配置弹窗 ----------
+
+const gearIconSVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+
+const configModal = $("#plugin-config-modal");
+const configTitleEl = $("#plugin-config-title");
+const configFormEl = $("#plugin-config-form");
+const configErrorEl = $("#plugin-config-error");
+const configSaveBtn = $("#btn-config-save");
+
+let configPlugin = null; // 当前编辑的插件状态
+let configInputs = new Map(); // 配置项 key -> 输入元素
+
+function openPluginConfig(p) {
+  configPlugin = p;
+  configInputs = new Map();
+  configTitleEl.textContent = p.name + " · 配置";
+  configFormEl.textContent = "";
+  showConfigError("");
+  const values = p.config || {};
+  for (const f of p.config_fields || []) {
+    configFormEl.appendChild(buildConfigField(f, values[f.key]));
+  }
+  configModal.classList.remove("hidden");
+  const first = configFormEl.querySelector("input, select");
+  if (first) first.focus();
+}
+
+function closePluginConfig() {
+  configModal.classList.add("hidden");
+  configPlugin = null;
+}
+
+// buildConfigField 按字段声明生成一行表单项，并登记其输入元素
+function buildConfigField(f, value) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+
+  const label = document.createElement("span");
+  label.className = "field-label";
+  label.textContent = f.label || f.key;
+
+  let el;
+  if (f.type === "bool") {
+    el = document.createElement("input");
+    el.type = "checkbox";
+    const sw = document.createElement("label");
+    sw.className = "switch";
+    const slider = document.createElement("span");
+    slider.className = "slider";
+    sw.append(el, slider);
+    const row = document.createElement("div");
+    row.className = "field-row";
+    row.append(label, sw);
+    wrap.appendChild(row);
+  } else if (f.type === "select") {
+    el = document.createElement("select");
+    for (const o of f.options || []) {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label || o.value;
+      el.appendChild(opt);
+    }
+    wrap.append(label, el);
+  } else {
+    el = document.createElement("input");
+    if (f.type === "int") {
+      el.type = "number";
+      el.step = "1";
+      if (f.min !== undefined) el.min = f.min;
+      if (f.max !== undefined) el.max = f.max;
+    } else {
+      el.type = "text";
+    }
+    wrap.append(label, el);
+  }
+
+  setFieldValue(f, el, value === undefined ? f.default : value);
+  configInputs.set(f.key, el);
+
+  const descText = [f.description, rangeHint(f)].filter(Boolean).join(" ");
+  if (descText) {
+    const desc = document.createElement("div");
+    desc.className = "field-desc";
+    desc.textContent = descText;
+    wrap.appendChild(desc);
+  }
+  return wrap;
+}
+
+function rangeHint(f) {
+  if (f.type !== "int") return "";
+  if (f.min !== undefined && f.max !== undefined) return `取值范围 ${f.min} ~ ${f.max}。`;
+  if (f.min !== undefined) return `不小于 ${f.min}。`;
+  if (f.max !== undefined) return `不大于 ${f.max}。`;
+  return "";
+}
+
+function setFieldValue(f, el, v) {
+  if (f.type === "bool") el.checked = Boolean(v);
+  else el.value = v === undefined || v === null ? "" : String(v);
+}
+
+// readConfigValues 收集表单值；数值以字符串提交，由服务端统一校验并给出中文提示
+function readConfigValues() {
+  const out = {};
+  for (const f of configPlugin.config_fields || []) {
+    const el = configInputs.get(f.key);
+    if (!el) continue;
+    out[f.key] = f.type === "bool" ? el.checked : el.value.trim();
+  }
+  return out;
+}
+
+function showConfigError(msg) {
+  configErrorEl.textContent = msg;
+  configErrorEl.classList.toggle("hidden", !msg);
+}
+
+async function savePluginConfig() {
+  if (!configPlugin) return;
+  const name = configPlugin.name;
+  configSaveBtn.disabled = true;
+  try {
+    const res = await fetch("/api/plugins/" + encodeURIComponent(name) + "/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config: readConfigValues() }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "HTTP " + res.status);
+    }
+    renderSettingsPlugins(await res.json());
+    closePluginConfig();
+  } catch (e) {
+    showConfigError("保存失败：" + e.message);
+  } finally {
+    configSaveBtn.disabled = false;
+  }
+}
+
+$("#btn-config-save").addEventListener("click", savePluginConfig);
+$("#btn-config-cancel").addEventListener("click", closePluginConfig);
+$("#btn-config-close").addEventListener("click", closePluginConfig);
+$("#btn-config-reset").addEventListener("click", () => {
+  if (!configPlugin) return;
+  for (const f of configPlugin.config_fields || []) {
+    setFieldValue(f, configInputs.get(f.key), f.default);
+  }
+  showConfigError("");
+});
+configFormEl.addEventListener("submit", (e) => {
+  e.preventDefault(); // 回车提交等同点击保存
+  savePluginConfig();
+});
+configModal.addEventListener("mousedown", (e) => {
+  if (e.target === configModal) closePluginConfig(); // 点击遮罩关闭
 });
 
 // 解析 POST 响应体中的 SSE 流，逐个产出 {type, ...} 事件对象

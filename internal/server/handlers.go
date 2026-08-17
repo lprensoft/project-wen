@@ -166,6 +166,22 @@ func (s *Server) setPlugin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.plugins.List())
 }
 
+// setPluginConfig 保存插件配置，保存成功后立即生效。
+func (s *Server) setPluginConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Config map[string]any `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := s.plugins.SetConfig(r.PathValue("name"), req.Config); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.plugins.List())
+}
+
 // compact 压缩指定会话，过程以 SSE 流返回。
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

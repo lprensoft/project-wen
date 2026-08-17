@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.compact)
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)
 	mux.HandleFunc("PUT /api/plugins/{name}", s.setPlugin)
+	mux.HandleFunc("PUT /api/plugins/{name}/config", s.setPluginConfig)
 
 	return mux
 }
