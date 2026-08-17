@@ -1,0 +1,175 @@
+package wechatbot
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// getupdates 长轮询主循环，对照官方 monitor.ts 移植：
+//   - 游标 get_updates_buf 持久化到 StateDir/updates_buf，重启后续传不重复收消息；
+//   - 服务端可通过 longpolling_timeout_ms 调整下次轮询的客户端超时；
+//   - errcode/ret = -14（会话过期）暂停一切请求一段时间后重试（官方行为），并在日志里
+//     提示可能需要重新扫码；
+//   - 其它错误连败 3 次退避 30s，否则 2s 重试。
+
+const (
+	maxConsecutiveFails = 3
+	failBackoff         = 30 * time.Second
+	failRetry           = 2 * time.Second
+)
+
+func bufPath(stateDir string) string { return filepath.Join(stateDir, "updates_buf") }
+
+func loadUpdatesBuf(stateDir string) string {
+	raw, err := os.ReadFile(bufPath(stateDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func saveUpdatesBuf(stateDir, buf string) {
+	if err := os.WriteFile(bufPath(stateDir), []byte(buf), 0o644); err != nil {
+		log.Printf("wechat_bot: 保存收信游标失败: %v", err)
+	}
+}
+
+func (p *Plugin) pollLoop(ctx context.Context) {
+	defer p.wg.Done()
+
+	p.mu.Lock()
+	creds, stateDir, pause := p.creds, p.stateDir, p.pauseOnExpired
+	p.mu.Unlock()
+
+	buf := loadUpdatesBuf(stateDir)
+	timeout := longPollTimeout
+	fails := 0
+	log.Printf("wechat_bot: 已连接微信收信通道（bot_id=%s）", creds.BotID)
+
+	for ctx.Err() == nil {
+		resp, err := p.getUpdates(ctx, creds, buf, timeout)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if isTimeout(err) { // 长轮询窗口内无消息，正常继续
+				continue
+			}
+			fails++
+			log.Printf("wechat_bot: 收信失败（%d/%d）: %v", fails, maxConsecutiveFails, err)
+			if fails >= maxConsecutiveFails {
+				fails = 0
+				sleepCtx(ctx, failBackoff)
+			} else {
+				sleepCtx(ctx, failRetry)
+			}
+			continue
+		}
+		if ms := resp.LongpollingTimeoutMs; ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+		if resp.Ret != 0 || resp.Errcode != 0 {
+			if resp.Ret == errcodeExpired || resp.Errcode == errcodeExpired {
+				log.Printf("wechat_bot: 微信侧会话已过期（errcode %d），暂停 %v 后重试；若持续出现请到设置页重新扫码绑定",
+					errcodeExpired, pause)
+				fails = 0
+				sleepCtx(ctx, pause)
+				continue
+			}
+			fails++
+			log.Printf("wechat_bot: 收信接口报错（%d/%d）: ret=%d errcode=%d %s",
+				fails, maxConsecutiveFails, resp.Ret, resp.Errcode, resp.Errmsg)
+			if fails >= maxConsecutiveFails {
+				fails = 0
+				sleepCtx(ctx, failBackoff)
+			} else {
+				sleepCtx(ctx, failRetry)
+			}
+			continue
+		}
+		fails = 0
+		if resp.GetUpdatesBuf != "" {
+			buf = resp.GetUpdatesBuf
+			saveUpdatesBuf(stateDir, buf)
+		}
+		for _, msg := range resp.Msgs {
+			p.dispatch(ctx, msg)
+		}
+	}
+}
+
+// getUpdates 发一次长轮询请求。
+func (p *Plugin) getUpdates(ctx context.Context, creds credentials, buf string, timeout time.Duration) (getUpdatesResp, error) {
+	var resp getUpdatesResp
+	body := map[string]any{
+		"get_updates_buf": buf,
+		"base_info":       baseInfo{ChannelVersion: channelVersion},
+	}
+	raw, err := apiPost(ctx, creds.BaseURL, "/ilink/bot/getupdates", body, creds.BotToken, timeout)
+	if err != nil {
+		return resp, err
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return resp, fmt.Errorf("解析收信响应失败: %w", err)
+	}
+	return resp, nil
+}
+
+// dispatch 把一条入站消息转成 inbound 交给分发层。仅处理用户发来的私聊；
+// 语音用微信自带的转写文本，其余媒体类型回复暂不支持。
+func (p *Plugin) dispatch(ctx context.Context, msg wxMessage) {
+	if msg.MessageType != msgTypeUser {
+		return // Bot 自己的消息回显等
+	}
+	if msg.GroupID != "" {
+		log.Printf("wechat_bot: 忽略群聊消息（group_id=%s，仅支持私聊）", msg.GroupID)
+		return
+	}
+	if msg.FromUserID == "" || msg.ContextToken == "" {
+		return
+	}
+
+	var parts []string
+	unsupported := false
+	for _, item := range msg.ItemList {
+		switch item.Type {
+		case 1:
+			if item.TextItem != nil && strings.TrimSpace(item.TextItem.Text) != "" {
+				parts = append(parts, item.TextItem.Text)
+			}
+		case 3:
+			if item.VoiceItem != nil && strings.TrimSpace(item.VoiceItem.Text) != "" {
+				parts = append(parts, "【语音】"+item.VoiceItem.Text)
+			} else {
+				unsupported = true
+			}
+		default:
+			unsupported = true
+		}
+	}
+
+	in := inbound{
+		userID:       msg.FromUserID,
+		contextToken: msg.ContextToken,
+		text:         strings.TrimSpace(strings.Join(parts, "\n")),
+	}
+	dedupKey := msg.ClientID
+	if msg.MessageID != 0 {
+		dedupKey = fmt.Sprintf("%d", msg.MessageID)
+	}
+	p.handleInbound(ctx, in, dedupKey, unsupported)
+}
+
+// sleepCtx 可被 ctx 打断的休眠。
+func sleepCtx(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
+}

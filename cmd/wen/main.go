@@ -22,6 +22,7 @@ import (
 	"wen/internal/plugin/builtin/heartbeat"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/qqbot"
+	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/plugin/builtin/readfile"
 	"wen/internal/plugin/builtin/roleplay"
 	"wen/internal/plugin/builtin/scheduler"
@@ -196,6 +197,7 @@ var needsSetupPlugins = map[string]bool{
 	"dual_persona": true,
 	"heartbeat":    true,
 	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
+	"wechat_bot":   true, // 不扫码绑定没法工作
 }
 
 // buildPlugins 注册全部内置系统插件，注册顺序即提示词拼接顺序。
@@ -210,7 +212,7 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义
 		roleplay.New(), dualpersona.New(),
-		heartbeat.New(), scheduler.New(), qqbot.New(),
+		heartbeat.New(), scheduler.New(), qqbot.New(), wechatbot.New(),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍

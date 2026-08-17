@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"wen/internal/mdtext"
 )
 
 // chunkLimit 是单条消息的 rune 上限（QQ 上限约 5000，留足余量）。
@@ -27,9 +29,9 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 
 	var chunks []string
 	if useMD {
-		chunks = chunkMarkdown(text, chunkLimit)
+		chunks = mdtext.ChunkMarkdown(text, chunkLimit)
 	} else {
-		chunks = chunkMarkdown(toPlainText(text), chunkLimit)
+		chunks = mdtext.ChunkMarkdown(mdtext.ToPlainText(text), chunkLimit)
 	}
 
 	total := len(chunks)
@@ -50,7 +52,7 @@ func (p *Plugin) send(ctx context.Context, openid, text, replyMsgID string) {
 				p.disableMarkdown(openid)
 				useMD = false
 				log.Printf("qq_bot: 平台拒绝原生 markdown，对 %s 降级为纯文本（%v 后重新探测）", openid, mdOffTTL)
-				err = p.sendC2C(ctx, openid, toPlainText(chunk), msgID, seq)
+				err = p.sendC2C(ctx, openid, mdtext.ToPlainText(chunk), msgID, seq)
 			}
 		} else {
 			err = p.sendC2C(ctx, openid, chunk, msgID, seq)
@@ -95,68 +97,4 @@ func (p *Plugin) disableMarkdown(openid string) {
 	p.mdOff[openid] = time.Now().Add(mdOffTTL)
 }
 
-// chunkMarkdown 按行把文本切成不超过 limit 个 rune 的分段，且保证 markdown 结构完整：
-// 代码块中途要断开时先补 ``` 闭合、下一段以原围栏行重开（否则第二段整体变成代码/
-// 代码整体变成正文）；超长单行硬切（不能整体保留，平台会拒收超限消息）。
-func chunkMarkdown(s string, limit int) []string {
-	var chunks []string
-	var cur []string
-	curLen := 0
-	inCode := false
-	fence := "```"
-
-	flush := func() {
-		if len(cur) == 0 {
-			return
-		}
-		text := strings.TrimSpace(strings.Join(cur, "\n"))
-		if text != "" {
-			chunks = append(chunks, text)
-		}
-		cur, curLen = nil, 0
-	}
-	appendLine := func(line string) {
-		cur = append(cur, line)
-		curLen += len([]rune(line)) + 1
-	}
-
-	for _, line := range strings.Split(s, "\n") {
-		lineRunes := []rune(line)
-		// 超长单行：先冲掉当前段，再按 limit 硬切成独立段
-		if len(lineRunes) > limit {
-			if inCode {
-				appendLine(fence)
-			}
-			flush()
-			for i := 0; i < len(lineRunes); i += limit {
-				end := min(i+limit, len(lineRunes))
-				chunks = append(chunks, string(lineRunes[i:end]))
-			}
-			if inCode {
-				appendLine(fence)
-			}
-			continue
-		}
-		if curLen+len(lineRunes)+1 > limit {
-			if inCode {
-				appendLine("```") // 闭合本段的代码块
-				flush()
-				appendLine(fence) // 下一段重开同款围栏
-			} else {
-				flush()
-			}
-		}
-		appendLine(line)
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			if !inCode {
-				fence = strings.TrimSpace(line)
-			}
-			inCode = !inCode
-		}
-	}
-	flush()
-	if len(chunks) == 0 {
-		chunks = []string{""}
-	}
-	return chunks
-}
+// 分段与纯文本转换的实现在 wen/internal/mdtext（与微信等其它 IM 通道共用）。
