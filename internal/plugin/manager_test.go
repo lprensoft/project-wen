@@ -368,3 +368,31 @@ func TestStatePersistOverridesConfig(t *testing.T) {
 		t.Error("persisted disabled state should override config initial value")
 	}
 }
+
+func TestManagerInjectsOriginIntoNotice(t *testing.T) {
+	var gotOrigin, gotText string
+	m := NewManager(InitContext{
+		Notice: func(ctx context.Context, _, text string) error {
+			gotOrigin, gotText = TurnOriginFrom(ctx), text
+			return nil
+		},
+	}, "")
+	p := &fakePlugin{name: "memory"}
+	if err := m.Register(p, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	notice := p.lastICtx.Notice
+	if notice == nil {
+		t.Fatal("插件应拿到注记入口")
+	}
+	if err := notice(context.Background(), "s1", "🧠 记忆提炼：新增「事实/某事」"); err != nil {
+		t.Fatal(err)
+	}
+	// 发起方由 Manager 裁定，插件既不必也无法自己填
+	if gotOrigin != "memory" {
+		t.Errorf("注记应自动带上发起方，实际 %q", gotOrigin)
+	}
+	if gotText == "" {
+		t.Error("注记正文应原样传下去")
+	}
+}

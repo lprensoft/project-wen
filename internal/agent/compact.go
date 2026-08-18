@@ -20,10 +20,20 @@ func EstimateHistoryTokens(msgs []llm.Message) int {
 	return total
 }
 
+// EstimateStoredTokens 估算一段会话历史的 token 总量，会话注记不计入。
+// 状态展示与压缩判据都该用它，别在调用处各自摊平一遍 StoredMessage。
+func EstimateStoredTokens(stored []session.StoredMessage) int {
+	return EstimateHistoryTokens(messagesOf(stored))
+}
+
 // messagesOf 剥掉存储层的附加字段，只留下消息本身。
+// 会话注记不在其中：它从不发给模型，计进用量会让状态与压缩判据都虚高。
 func messagesOf(stored []session.StoredMessage) []llm.Message {
 	out := make([]llm.Message, 0, len(stored))
 	for _, m := range stored {
+		if m.Kind == session.KindNotice {
+			continue
+		}
 		out = append(out, m.Message)
 	}
 	return out
@@ -96,7 +106,9 @@ func groupByTag(history []session.StoredMessage) []scopeGroup {
 			groups = append(groups, scopeGroup{tag: m.Tag})
 		}
 		groups[g].msgs = append(groups[g].msgs, m)
-		groups[g].est += estimateTokens(m.Message)
+		if m.Kind != session.KindNotice {
+			groups[g].est += estimateTokens(m.Message) // 注记不占上下文，不进压缩判据
+		}
 		lastSeen[m.Tag] = i
 	}
 	// 按最后出现位置排序
@@ -225,7 +237,7 @@ func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Optio
 func serializeHistory(msgs []session.StoredMessage) string {
 	var b strings.Builder
 	for _, m := range msgs {
-		if m.Kind == session.KindEphemeral {
+		if m.Kind == session.KindEphemeral || m.Kind == session.KindNotice {
 			continue
 		}
 		switch m.Role {

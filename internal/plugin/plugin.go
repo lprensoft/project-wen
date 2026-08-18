@@ -41,6 +41,10 @@ type InitContext struct {
 	NewSession NewSessionFunc
 	// Compact 压缩指定会话的历史。会话忙时返回 ErrSessionBusy。为 nil 表示不可用。
 	Compact CompactFunc
+	// Notice 往一个会话里追加一行只给人看的注记：落盘、在界面实时展示，但永不进入
+	// 模型上下文。供后台工作交代自己做了什么——轮次收尾后事件流就关了，结果否则只能
+	// 进日志。标签取自 ctx 的可见域，发起方由 Manager 注入。为 nil 表示不可用。
+	Notice NoticeFunc
 	// Status 取当前模型配置与（可选的）会话用量快照，供插件向远端界面展示状态，
 	// 与 Web UI 的状态命令同源。为 nil 表示不可用。
 	Status StatusFunc

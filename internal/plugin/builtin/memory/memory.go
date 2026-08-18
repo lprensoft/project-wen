@@ -70,6 +70,7 @@ type Plugin struct {
 	store           *Store // 基准库，等价于 storeFor("")
 	library         string
 	complete        plugin.CompleteFunc
+	notice          plugin.NoticeFunc
 	maxIndexEntries int
 	maxIndexBytes   int
 	maxEntryBytes   int
@@ -267,6 +268,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.libBase = dir
 	p.store = NewStore(dir)
 	p.complete = ictx.Complete
+	p.notice = ictx.Notice
 	p.maxIndexEntries = plugin.CfgInt(cfg, "max_index_entries", defaultMaxIndexEntries)
 	p.maxIndexBytes = plugin.CfgInt(cfg, "max_index_bytes", defaultMaxIndexBytes)
 	p.maxEntryBytes = plugin.CfgInt(cfg, "max_entry_bytes", defaultMaxEntryBytes)
@@ -360,6 +362,13 @@ func (p *Plugin) snapshot() settings {
 		forgetDays:      p.forgetDays,
 		ctx:             p.ctx,
 	}
+}
+
+// noticeFunc 返回当前的会话注记入口（可能为 nil，此时降级为只记日志）。
+func (p *Plugin) noticeFunc() plugin.NoticeFunc {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.notice
 }
 
 // completeFunc 返回当前的辅助调用入口（可能为 nil）。

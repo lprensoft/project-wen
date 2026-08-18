@@ -99,7 +99,8 @@ var validName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // initCtxFor 返回该插件专属的运行环境：在公共 InitContext 上补一个按插件名隔离的持久化目录。
 // 未配置状态文件时 StateDir 留空，由插件自行决定是否拒绝启用。
-// RunTurn 被包一层自动注入发起方标记——发起方由 Manager 裁定，插件无法伪装成前台。
+// RunTurn 与 Notice 被包一层自动注入发起方标记——发起方由 Manager 裁定，
+// 插件无法伪装成前台。
 func (m *Manager) initCtxFor(name string) InitContext {
 	ictx := m.ictx
 	if m.statePath != "" {
@@ -108,6 +109,11 @@ func (m *Manager) initCtxFor(name string) InitContext {
 	if base := m.ictx.RunTurn; base != nil {
 		ictx.RunTurn = func(ctx context.Context, sessionID, input string) (string, error) {
 			return base(WithTurnOrigin(ctx, name), sessionID, input)
+		}
+	}
+	if base := m.ictx.Notice; base != nil {
+		ictx.Notice = func(ctx context.Context, sessionID, text string) error {
+			return base(WithTurnOrigin(ctx, name), sessionID, text)
 		}
 	}
 	return ictx

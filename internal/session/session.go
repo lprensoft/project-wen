@@ -36,6 +36,13 @@ const KindSummary = "summary"
 // 发给模型，后续轮次组装上下文时被过滤，界面也不按用户消息展示。
 const KindEphemeral = "ephemeral"
 
+// KindNotice 标记会话注记：只给人看的一行说明（如后台任务在这个会话上做了什么），
+// 落盘并在界面展示，但永不进入模型上下文，也不进压缩摘要。
+//
+// 与 KindEphemeral 正好相反：那个是「给模型看一轮、界面不当用户消息展示」，
+// 这个是「界面一直展示、模型一次也看不到」。
+const KindNotice = "notice"
+
 // StoredMessage 是 JSONL 中的一条消息记录（meta 行之后）。
 type StoredMessage struct {
 	llm.Message

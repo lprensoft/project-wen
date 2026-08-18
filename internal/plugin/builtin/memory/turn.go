@@ -198,4 +198,39 @@ func (p *Plugin) runExtract(s settings, key windowKey, w *window) {
 	}
 	log.Printf("记忆提炼：新增/修订 %d 条（%s），另刷新 %d 条的最后提及时间",
 		len(res.saved)+len(res.revised), strings.Join(res.names(), "、"), res.touched)
+	p.postNotice(ctx, key.session, res)
+}
+
+// postNotice 把这次提炼记了什么留在会话里给人看。
+//
+// 提炼跑在轮次收尾之后，界面那一轮的事件流已经关了，不留下痕迹的话，模型自动改了
+// 什么就只有日志知道。修订尤其需要说出来：它会覆盖已有记忆，虽然覆盖前留了 .bak，
+// 但没人会想到去翻。
+func (p *Plugin) postNotice(ctx context.Context, sessionID string, res extractResult) {
+	notice := p.noticeFunc()
+	if notice == nil || sessionID == "" {
+		return
+	}
+	var parts []string
+	if len(res.saved) > 0 {
+		parts = append(parts, "新增 "+quoteNames(res.saved))
+	}
+	if len(res.revised) > 0 {
+		parts = append(parts, "修订 "+quoteNames(res.revised))
+	}
+	if len(parts) == 0 {
+		return // 只刷新了提及时间，没有内容变化，不值得打扰
+	}
+	if err := notice(ctx, sessionID, "🧠 记忆提炼："+strings.Join(parts, "，")); err != nil {
+		log.Printf("记忆提炼：注记写入失败：%v", err)
+	}
+}
+
+// quoteNames 把条目渲染成「分类/标题」的顿号列表。
+func quoteNames(entries []Entry) string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, "「"+e.Type+"/"+e.Name+"」")
+	}
+	return strings.Join(out, "、")
 }

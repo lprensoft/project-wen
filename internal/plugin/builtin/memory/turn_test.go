@@ -293,3 +293,103 @@ func TestPluginImplementsTurnObserverAndStoppable(t *testing.T) {
 	var _ plugin.TurnObserver = New()
 	var _ plugin.Stoppable = New()
 }
+
+// noticeRecorder 收集插件写出的会话注记。
+type noticeRecorder struct {
+	mu    sync.Mutex
+	items []string
+	sess  []string
+	tags  []string
+}
+
+func (n *noticeRecorder) fn(ctx context.Context, sessionID, text string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.items = append(n.items, text)
+	n.sess = append(n.sess, sessionID)
+	n.tags = append(n.tags, plugin.ScopeFrom(ctx).Write)
+	return nil
+}
+
+func (n *noticeRecorder) snapshot() ([]string, []string, []string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string{}, n.items...), append([]string{}, n.sess...), append([]string{}, n.tags...)
+}
+
+// newPluginWithNotice 建一个装了注记出口的插件。
+func newPluginWithNotice(t *testing.T, c *fakeComplete, n *noticeRecorder, cfg map[string]any) *Plugin {
+	t.Helper()
+	p := New()
+	ictx := plugin.InitContext{StateDir: t.TempDir(), Complete: c.fn, Notice: n.fn}
+	if err := p.Init(ictx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	return p
+}
+
+func TestTurnExtractPostsNotice(t *testing.T) {
+	c := &fakeComplete{replies: []string{
+		`{"memories":[{"name":"构建命令","description":"go build","type":"事实","content":"构建：go build ./cmd/wen","mode":"create"}],"mentioned":[]}`,
+	}}
+	n := &noticeRecorder{}
+	p := newPluginWithNotice(t, c, n, turnCfg(nil))
+
+	runTurns(p, 5)
+	waitForNotice(t, n, 1)
+
+	items, sess, _ := n.snapshot()
+	// 提炼跑在轮次收尾之后，不留痕迹的话模型自动记了什么就只有日志知道
+	if !strings.Contains(items[0], "新增") || !strings.Contains(items[0], "事实/构建命令") {
+		t.Errorf("注记应说清记了什么：%q", items[0])
+	}
+	if sess[0] != "s1" {
+		t.Errorf("注记应落在触发提炼的那个会话上，实际 %q", sess[0])
+	}
+}
+
+func TestTurnExtractNoticeCarriesScope(t *testing.T) {
+	c := &fakeComplete{replies: []string{
+		`{"memories":[{"name":"里侧的事","description":"摘要","type":"事实","content":"正文","mode":"create"}],"mentioned":[]}`,
+	}}
+	n := &noticeRecorder{}
+	p := newPluginWithNotice(t, c, n, turnCfg(nil))
+
+	ctx := plugin.WithScope(context.Background(), plugin.Scope{Write: "inner", Read: []string{"inner"}})
+	base := time.Now()
+	for i := range 5 {
+		p.OnTurnEnd(ctx, chat(i, base.Add(time.Duration(i)*time.Minute)))
+	}
+	waitForNotice(t, n, 1)
+
+	// 「在人格 A 的库里记了什么」这件事本身也属于人格 A
+	if _, _, tags := n.snapshot(); tags[0] != "inner" {
+		t.Errorf("注记应带上提炼所属的可见域，实际 %q", tags[0])
+	}
+}
+
+func TestTurnExtractNoNoticeWhenNothingChanged(t *testing.T) {
+	c := &fakeComplete{replies: []string{`{"memories":[],"mentioned":[]}`}}
+	n := &noticeRecorder{}
+	p := newPluginWithNotice(t, c, n, turnCfg(nil))
+
+	runTurns(p, 5)
+	time.Sleep(200 * time.Millisecond)
+	if items, _, _ := n.snapshot(); len(items) != 0 {
+		t.Errorf("没记下任何东西时不该打扰：%v", items)
+	}
+}
+
+// waitForNotice 等到收满 n 条注记。
+func waitForNotice(t *testing.T, rec *noticeRecorder, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if items, _, _ := rec.snapshot(); len(items) >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("等不到 %d 条注记", n)
+}
