@@ -15,3 +15,6 @@ models.json
 /wen.exe
 *.log
 /wen.exe~
+
+# 分发打包产物
+/dist/
