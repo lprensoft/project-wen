@@ -47,6 +47,9 @@ func TestHumanDur(t *testing.T) {
 		90 * time.Minute:   "1 小时 30 分钟",
 		120 * time.Minute:  "2 小时",
 		90*time.Second + 1: "2 分钟", // 四舍五入到分钟
+		24 * time.Hour:     "1 天",
+		30 * time.Hour:     "1 天 6 小时",
+		72 * time.Hour:     "3 天", // 隔天数的间隔不再报到分钟
 	}
 	for d, want := range cases {
 		if got := humanDur(d); got != want {

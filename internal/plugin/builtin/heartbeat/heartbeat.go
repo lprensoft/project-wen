@@ -91,7 +91,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "prompt", Label: "心跳提示词", Type: plugin.FieldText, Default: defaultPrompt,
-			Description: "每次心跳作为输入执行的内容，连同系统提示词与已启用插件的提示词一起发给模型",
+			Description: "每次心跳作为输入执行的内容，连同系统提示词与已启用插件的提示词一起发给模型。" +
+				"末尾会自动附上「距上次对话」的时长，提示词里不必再写「很久没聊」这类模糊措辞",
 		},
 		{
 			Key: "dynamic", Label: "动态心跳", Type: plugin.FieldBool, Default: true,

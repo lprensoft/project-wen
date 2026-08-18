@@ -65,35 +65,45 @@ func TestPickSession(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond) // 会话 ID 精确到秒，隔开保证新会话排后
 	fresh, _ := store.Create()
 
-	// 都没有 LastActiveAt：回落创建时间，挑后建的
-	sid, err := p.pickSession()
+	// 都没有 LastActiveAt：回落创建时间挑后建的，但「上次对话时间」仍是未知
+	sid, active, err := p.pickSession()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sid != fresh.ID {
 		t.Fatalf("应挑最近创建的 %s，得到 %s", fresh.ID, sid)
 	}
+	if !active.IsZero() {
+		t.Fatalf("没有 LastActiveAt 时不该拿创建时间充数，得到 %v", active)
+	}
 
-	// 老会话被真人使用过后应反超
-	_ = store.SetLastActive(old.ID, time.Now().Add(time.Hour))
-	sid, err = p.pickSession()
+	// 老会话被真人使用过后应反超，并带回该会话的真人对话时间
+	used := time.Now().Add(time.Hour).Round(time.Second)
+	_ = store.SetLastActive(old.ID, used)
+	sid, active, err = p.pickSession()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sid != old.ID {
 		t.Fatalf("应挑最近活跃的 %s，得到 %s", old.ID, sid)
 	}
+	if !active.Equal(used) {
+		t.Fatalf("应带回该会话的真人对话时间 %v，得到 %v", used, active)
+	}
 }
 
 // 没有任何会话时心跳自己新建一个。
 func TestPickSessionCreates(t *testing.T) {
 	p, store := newInited(t, noTurn, nil)
-	sid, err := p.pickSession()
+	sid, active, err := p.pickSession()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.Get(sid); err != nil {
 		t.Fatalf("新建的会话应存在: %v", err)
+	}
+	if !active.IsZero() {
+		t.Fatalf("刚建的会话没有「上次对话」可言，得到 %v", active)
 	}
 }
 
@@ -294,5 +304,43 @@ func TestIntervalPersistence(t *testing.T) {
 	p2.mu.Unlock()
 	if cur != 10*time.Minute {
 		t.Fatalf("重启后应恢复持久化间隔 10m，得到 %v", cur)
+	}
+}
+
+// 心跳提示词末尾附上距上次真人对话的时长；时间未知或不足一分钟时不附。
+func TestGapNote(t *testing.T) {
+	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		lastActive time.Time
+		want       string
+	}{
+		{"未知不附", time.Time{}, "提示词"},
+		{"不足一分钟不附", now.Add(-30 * time.Second), "提示词"},
+		{"分钟", now.Add(-20 * time.Minute), "提示词\n\n【距上次对话】20 分钟"},
+		{"跨天", now.Add(-30 * time.Hour), "提示词\n\n【距上次对话】1 天 6 小时"},
+	}
+	for _, c := range cases {
+		if got := gapNote("提示词", c.lastActive, now); got != c.want {
+			t.Errorf("%s: gapNote = %q，期望 %q", c.name, got, c.want)
+		}
+	}
+}
+
+// 心跳实际发出的输入带上了时长注记，且仍是一次性输入。
+func TestBeatSendsGap(t *testing.T) {
+	var sent string
+	turn := func(_ context.Context, _, input string) (string, error) {
+		sent = input
+		return "ok", nil
+	}
+	p, store := newInited(t, turn, map[string]any{"prompt": "心跳内容"})
+	m, _ := store.Create()
+	_ = store.SetLastActive(m.ID, time.Now().Add(-2*time.Hour))
+
+	p.beat(context.Background())
+	want := "心跳内容\n\n【距上次对话】2 小时"
+	if sent != want {
+		t.Fatalf("心跳输入 = %q，期望 %q", sent, want)
 	}
 }
