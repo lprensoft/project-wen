@@ -158,6 +158,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			if meta.LastUsage != nil {
 				// 实测值：最近一次请求的完整上下文 + 本次输出
 				sess["measured_tokens"] = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
+				// 缓存命中：只在真的命中或写入过时下发，界面据此不占版面
+				if meta.LastUsage.CachedTokens > 0 || meta.LastUsage.CacheWriteTokens > 0 {
+					sess["cached_tokens"] = meta.LastUsage.CachedTokens
+					sess["cache_write_tokens"] = meta.LastUsage.CacheWriteTokens
+					sess["prompt_tokens"] = meta.LastUsage.PromptTokens
+				}
 			}
 			resp["session"] = sess
 		}

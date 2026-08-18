@@ -132,6 +132,9 @@ func main() {
 			info.EstTokens = agent.EstimateStoredTokens(msgs)
 			if meta.LastUsage != nil {
 				info.MeasuredTokens = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
+				info.CachedTokens = meta.LastUsage.CachedTokens
+				info.CacheWriteTokens = meta.LastUsage.CacheWriteTokens
+				info.PromptTokens = meta.LastUsage.PromptTokens
 			}
 			return info, nil
 		},
@@ -152,7 +155,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("模型配置无效: %v", err)
 	}
-	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey, cur.Dialect)
+	provider, err := llm.New(llm.Config{
+		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
+		PromptCache: cur.PromptCache,
+	})
 	if err != nil {
 		log.Fatalf("%v", err)
 	}

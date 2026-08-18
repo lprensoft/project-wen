@@ -30,8 +30,13 @@ type Provider struct {
 	BaseURL string  `json:"base_url"`
 	APIKey  string  `json:"api_key"`
 	// Dialect 是思考参数方言（openai_compat 专用），空串等同 deepseek。
-	Dialect string  `json:"thinking_dialect,omitempty"`
-	Models  []Model `json:"models"`
+	Dialect string `json:"thinking_dialect,omitempty"`
+	// PromptCache 是否使用提示词缓存（anthropic 专用；nil = 未设置，按开启算）。
+	// 开关存在的理由是它有钱的含义：命中按约十分之一计费，而未命中的写入要多付
+	// 约四分之一。连续对话几乎必然命中，但若使用节奏比缓存有效期还慢（消息间隔
+	// 常常超过几分钟），那就是一直在付写入的钱、从不读回。
+	PromptCache *bool   `json:"prompt_cache,omitempty"`
+	Models      []Model `json:"models"`
 	// Source 仅出现在响应中："config" 表示该条目来自 config.yaml、尚未被界面接管。
 	Source string `json:"source,omitempty"`
 }
@@ -58,6 +63,7 @@ type Resolved struct {
 	BaseURL       string
 	APIKey        string
 	Dialect       string // 思考参数方言
+	PromptCache   bool   // 是否使用提示词缓存（anthropic 专用）
 	ModelID       string
 	Temperature   float64
 	MaxTokens     int
@@ -122,7 +128,7 @@ func baseProviders(cfg *config.Config) []Provider {
 	for _, name := range names {
 		pc := cfg.Providers[name]
 		p := Provider{Name: name, Type: pc.Type, BaseURL: pc.BaseURL, APIKey: pc.APIKey,
-			Dialect: pc.ThinkingDialect, Models: []Model{}}
+			Dialect: pc.ThinkingDialect, PromptCache: pc.PromptCache, Models: []Model{}}
 		if name == cfg.Model.Provider && cfg.Model.Name != "" {
 			p.Models = append(p.Models, Model{ID: cfg.Model.Name})
 		}
@@ -176,6 +182,7 @@ func resolve(f File, def config.ModelConfig) (Resolved, error) {
 		BaseURL:       p.BaseURL,
 		APIKey:        p.APIKey,
 		Dialect:       p.Dialect,
+		PromptCache:   p.PromptCache == nil || *p.PromptCache, // 未设置按开启算
 		ModelID:       m.ID,
 		Temperature:   def.Temperature,
 		MaxTokens:     def.MaxTokens,

@@ -19,13 +19,18 @@ const anthropicVersion = "2023-06-01"
 type Anthropic struct {
 	baseURL string
 	apiKey  string
-	client  *http.Client
+	// cache 为真时在请求里显式打提示词缓存断点（见 markCacheBreakpoints）。
+	// Anthropic 的缓存必须由调用方声明，且写入按约 1.25 倍输入价单独计费，
+	// 因此它是提供商上一个看得见的开关，不由这里替用户决定。
+	cache  bool
+	client *http.Client
 }
 
-func NewAnthropic(baseURL, apiKey string) *Anthropic {
+func NewAnthropic(baseURL, apiKey string, promptCache bool) *Anthropic {
 	return &Anthropic{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
+		cache:   promptCache,
 		// 与 openai_compat 一致：总超时不设上限（长思考+长输出），连接阶段单独限时
 		client: &http.Client{Transport: &http.Transport{
 			ResponseHeaderTimeout: 60 * time.Second,
@@ -44,9 +49,10 @@ func (p *Anthropic) endpoint() string {
 // ---------- 线上格式 ----------
 
 type antRequest struct {
-	Model        string       `json:"model"`
-	MaxTokens    int          `json:"max_tokens"`
-	System       string       `json:"system,omitempty"`
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
+	// System 用块数组而不是字符串：缓存断点是打在块上的（cache_control）。
+	System       []antBlock   `json:"system,omitempty"`
 	Messages     []antMessage `json:"messages"`
 	Tools        []antTool    `json:"tools,omitempty"`
 	Stream       bool         `json:"stream"`
@@ -83,6 +89,14 @@ type antBlock struct {
 
 	ToolUseID string `json:"tool_use_id,omitempty"` // tool_result
 	Content   string `json:"content,omitempty"`     // tool_result
+
+	// CacheControl 标记「到本块为止的内容作为一段提示词缓存」，见 markCacheBreakpoints。
+	CacheControl *antCacheControl `json:"cache_control,omitempty"`
+}
+
+// antCacheControl 目前只有 ephemeral 一种类型（默认 5 分钟有效期，每次命中会续期）。
+type antCacheControl struct {
+	Type string `json:"type"`
 }
 
 type antTool struct {
@@ -124,7 +138,7 @@ type antDelta struct {
 
 // ---------- 请求装配 ----------
 
-func buildAnthropicRequest(req ChatRequest) antRequest {
+func buildAnthropicRequest(req ChatRequest, cache bool) antRequest {
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 4096
@@ -200,7 +214,9 @@ func buildAnthropicRequest(req ChatRequest) antRequest {
 			appendBlocks("assistant", blocks)
 		}
 	}
-	wr.System = strings.Join(system, "\n\n")
+	if len(system) > 0 {
+		wr.System = []antBlock{{Type: "text", Text: strings.Join(system, "\n\n")}}
+	}
 
 	for _, t := range req.Tools {
 		schema := t.Schema
@@ -209,7 +225,37 @@ func buildAnthropicRequest(req ChatRequest) antRequest {
 		}
 		wr.Tools = append(wr.Tools, antTool{Name: t.Name, Description: t.Description, InputSchema: schema})
 	}
+	if cache {
+		markCacheBreakpoints(&wr)
+	}
 	return wr
+}
+
+// markCacheBreakpoints 打提示词缓存断点。
+//
+// Anthropic 的缓存是前缀精确匹配：断点之前（按 tools → system → messages 的规范
+// 顺序）的全部内容作为一段缓存写入，下次请求前缀逐字节相同即可按约十分之一的价格
+// 读回。两个断点就够，也正对应上下文的两个稳定层：
+//  1. system 块末尾——覆盖 tools 与 system，它们整轮之间不变；
+//  2. 倒数第二条消息末尾——覆盖除本轮新增内容以外的全部历史。
+//
+// 第二个断点刻意不打在最后一条消息上：那条带着每轮都变的本轮状态块，
+// 把它写进缓存只会付写入的钱、永远读不回来。
+func markCacheBreakpoints(wr *antRequest) {
+	mark := func(blocks []antBlock) {
+		for i := len(blocks) - 1; i >= 0; i-- {
+			// 思考块不接受 cache_control，跳到它前面一个可标记的块
+			if blocks[i].Type == "thinking" || blocks[i].Type == "redacted_thinking" {
+				continue
+			}
+			blocks[i].CacheControl = &antCacheControl{Type: "ephemeral"}
+			return
+		}
+	}
+	mark(wr.System)
+	if n := len(wr.Messages); n >= 2 {
+		mark(wr.Messages[n-2].Content)
+	}
 }
 
 // ---------- 流式调用 ----------
@@ -223,7 +269,7 @@ type partialBlock struct {
 }
 
 func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	body, err := json.Marshal(buildAnthropicRequest(req))
+	body, err := json.Marshal(buildAnthropicRequest(req, p.cache))
 	if err != nil {
 		return nil, err
 	}
@@ -298,6 +344,8 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 					u := ev.Message.Usage
 					usage.PromptTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 					usage.CompletionTokens = u.OutputTokens
+					usage.CachedTokens = u.CacheReadInputTokens
+					usage.CacheWriteTokens = u.CacheCreationInputTokens
 				}
 			case "content_block_start":
 				if ev.ContentBlock == nil {
