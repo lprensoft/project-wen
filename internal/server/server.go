@@ -20,10 +20,18 @@ type Server struct {
 	plugins  *plugin.Manager
 	models   *modelcfg.Store
 	confirms *confirmBroker
+	notices  *noticeHub
 }
 
 func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *modelcfg.Store) *Server {
-	return &Server{agent: a, store: store, plugins: plugins, models: models, confirms: newConfirmBroker()}
+	s := &Server{
+		agent: a, store: store, plugins: plugins, models: models,
+		confirms: newConfirmBroker(), notices: newNoticeHub(),
+	}
+	// 接上会话注记的实时出口。后台工作产生的注记本来只能进日志——轮次的事件流
+	// 在它跑完之前就关了。
+	a.SetNoticeSink(s.notices.publish)
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -39,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/chat", s.chat)
 	mux.HandleFunc("POST /api/confirmations/{id}", s.confirmResolve)
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.compact)
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)
 	mux.HandleFunc("PUT /api/plugins/{name}", s.setPlugin)

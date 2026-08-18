@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"wen/internal/agent"
-	"wen/internal/llm"
 	"wen/internal/plugin"
 	"wen/internal/session"
 	"wen/internal/version"
@@ -151,14 +150,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if sid := r.URL.Query().Get("session_id"); sid != "" {
 		if meta, msgs, err := s.store.Get(sid); err == nil {
-			lms := make([]llm.Message, 0, len(msgs))
-			for _, m := range msgs {
-				lms = append(lms, m.Message)
-			}
 			sess := map[string]any{
 				"id":            sid,
 				"message_count": len(msgs),
-				"est_tokens":    agent.EstimateHistoryTokens(lms),
+				"est_tokens":    agent.EstimateStoredTokens(msgs),
 			}
 			if meta.LastUsage != nil {
 				// 实测值：最近一次请求的完整上下文 + 本次输出

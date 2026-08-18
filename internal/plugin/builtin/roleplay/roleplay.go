@@ -25,6 +25,7 @@ const (
 	defaultInteraction = true
 	defaultHumanize    = true
 	defaultTimeRules   = true
+	defaultMemoryRules = true
 	// defaultMaxTextBytes 限制角色设定与用户信息的合计长度。这些内容每轮随 system
 	// 消息全额重发、且不参与预算裁剪，还计入自动压缩判据，必须有硬上限。
 	defaultMaxTextBytes = 8 * 1024
@@ -39,6 +40,7 @@ type Plugin struct {
 	interaction  bool
 	humanize     bool
 	timeRules    bool
+	memoryRules  bool
 	maxTextBytes int
 }
 
@@ -47,6 +49,7 @@ func New() *Plugin {
 		interaction:  defaultInteraction,
 		humanize:     defaultHumanize,
 		timeRules:    defaultTimeRules,
+		memoryRules:  defaultMemoryRules,
 		maxTextBytes: defaultMaxTextBytes,
 	}
 }
@@ -91,6 +94,12 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default:     defaultTimeRules,
 		},
 		{
+			Key: "memory_rules", Label: "启用记忆与回想约束", Type: plugin.FieldBool,
+			Description: "引导给生活类记忆标上会淡忘、结论被推翻时修订旧记忆，" +
+				"并要求不去翻历史对话的原文复述细节——记不清就照记不清说。",
+			Default: defaultMemoryRules,
+		},
+		{
 			Key: "max_text_bytes", Label: "设定文本上限（字节）", Type: plugin.FieldInt,
 			Description: "角色设定与我的信息的合计上限。它们每轮全额重发且不参与预算裁剪，超出部分会被截断。",
 			Default:     defaultMaxTextBytes,
@@ -112,6 +121,7 @@ func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
 	p.interaction = plugin.CfgBool(cfg, "interaction", defaultInteraction)
 	p.humanize = plugin.CfgBool(cfg, "humanize", defaultHumanize)
 	p.timeRules = plugin.CfgBool(cfg, "time_rules", defaultTimeRules)
+	p.memoryRules = plugin.CfgBool(cfg, "memory_rules", defaultMemoryRules)
 	p.maxTextBytes = limit
 	return nil
 }
@@ -125,6 +135,7 @@ type settings struct {
 	interaction bool
 	humanize    bool
 	timeRules   bool
+	memoryRules bool
 }
 
 // snapshot 取一份配置快照：SetConfig 会在运行时重新 Init，而提示词可能正在生成。
@@ -137,6 +148,7 @@ func (p *Plugin) snapshot() settings {
 		interaction: p.interaction,
 		humanize:    p.humanize,
 		timeRules:   p.timeRules,
+		memoryRules: p.memoryRules,
 	}
 }
 
@@ -163,6 +175,9 @@ func (p *Plugin) SystemPrompt() string {
 	}
 	if s.timeRules {
 		parts = append(parts, timeRules)
+	}
+	if s.memoryRules {
+		parts = append(parts, memoryRules)
 	}
 	return strings.Join(parts, "\n\n")
 }

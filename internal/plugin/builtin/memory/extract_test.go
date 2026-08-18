@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
@@ -211,6 +212,8 @@ func TestParseExtracted(t *testing.T) {
 		{"前后带说明文字", "分析如下：\n[{\"name\":\"a\",\"description\":\"d\",\"type\":\"事实\",\"content\":\"c\"}]\n以上。", 1},
 		{"空数组", `[]`, 0},
 		{"空串", ``, 0},
+		{"对象形式", `{"memories":[{"name":"a","description":"d","type":"事实","content":"c"}],"mentioned":[]}`, 1},
+		{"对象形式空 memories", `{"memories":[],"mentioned":["事实/x"]}`, 0},
 		{"仅空白", "  \n ", 0},
 	}
 	for _, c := range cases {
@@ -219,8 +222,8 @@ func TestParseExtracted(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
-		if len(got) != c.want {
-			t.Errorf("%s: 解析出 %d 条，want %d", c.name, len(got), c.want)
+		if len(got.Memories) != c.want {
+			t.Errorf("%s: 解析出 %d 条，want %d", c.name, len(got.Memories), c.want)
 		}
 	}
 
@@ -283,5 +286,115 @@ func TestPluginImplementsLifecycle(t *testing.T) {
 	})
 	if len(notes) != 1 || !strings.Contains(notes[0], "经由广播") {
 		t.Errorf("Manager 广播未拿到提炼注记: %v", notes)
+	}
+}
+
+func TestExtractRevisesContradictedMemory(t *testing.T) {
+	c := &fakeComplete{replies: []string{`{"memories":[
+		{"name":"饮食禁忌","description":"现在吃香菜","type":"偏好","mode":"replace",
+		 "content":"现在吃香菜。此前约两个月一直明确表示不吃。"}
+	],"mentioned":[]}`}}
+	p := newPluginWithComplete(t, c, nil)
+
+	store := p.snapshot().store
+	if _, err := store.Save(Entry{
+		Name: "饮食禁忌", Description: "不吃香菜", Type: "偏好", Content: "不吃香菜。",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 修订的是同一条，而不是新建出一条与它打架的记忆
+	all, _ := store.List()
+	if len(all) != 1 {
+		t.Fatalf("矛盾应就地修订，实际留下 %d 条", len(all))
+	}
+	if !strings.Contains(all[0].Content, "现在吃香菜") {
+		t.Errorf("未写入新结论：%q", all[0].Content)
+	}
+	if !strings.Contains(all[0].Content, "此前") {
+		t.Errorf("被推翻的旧结论应留在正文里：%q", all[0].Content)
+	}
+}
+
+func TestExtractSkipsSameNameWithoutReplace(t *testing.T) {
+	c := &fakeComplete{replies: []string{
+		`[{"name":"饮食禁忌","description":"换个说法","type":"偏好","content":"重复的内容。"}]`,
+	}}
+	p := newPluginWithComplete(t, c, nil)
+	store := p.snapshot().store
+	if _, err := store.Save(Entry{
+		Name: "饮食禁忌", Description: "不吃香菜", Type: "偏好", Content: "原始内容。",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := store.Get("饮食禁忌")
+	if e.Content != "原始内容。" {
+		t.Errorf("没打算修订就不该覆盖：%q", e.Content)
+	}
+}
+
+func TestExtractPromptCarriesDescriptions(t *testing.T) {
+	c := &fakeComplete{}
+	p := newPluginWithComplete(t, c, nil)
+	if _, err := p.snapshot().store.Save(Entry{
+		Name: "饮食禁忌", Description: "不吃香菜", Type: "偏好", Content: "不吃香菜。",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	// 只给标题的话，模型认不出「饮食禁忌」与「喜欢香菜」说的是同一件事
+	if !strings.Contains(c.prompts[0], "偏好/饮食禁忌 — 不吃香菜") {
+		t.Errorf("已有记忆清单应带上摘要：\n%s", c.prompts[0])
+	}
+}
+
+func TestExtractTouchesMentionedMemories(t *testing.T) {
+	c := &fakeComplete{replies: []string{`{"memories":[],"mentioned":["事实/老早的事"]}`}}
+	p := newPluginWithComplete(t, c, decayCfg(30, 90))
+	store := p.snapshot().store
+	saveDecaying(t, store, "老早的事", true)
+	saveDecaying(t, store, "没提到的事", true)
+	backdate(t, store, "老早的事", 60)
+	backdate(t, store, "没提到的事", 60)
+
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	// 对话里谈到就算用到：不刷新的话，一件一直在聊的事照样会走到淡忘
+	if e, _ := store.Get("老早的事"); !sameDay(e.LastUsed, time.Now()) {
+		t.Errorf("被提及的记忆应刷新最后使用时间：%v", e.LastUsed)
+	}
+	if e, _ := store.Get("没提到的事"); sameDay(e.LastUsed, time.Now()) {
+		t.Error("没被提及的记忆不该被刷新")
+	}
+}
+
+func TestExtractPromptMentionsDecayOnlyWhenEnabled(t *testing.T) {
+	off := &fakeComplete{}
+	p := newPluginWithComplete(t, off, nil)
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(off.prompts[0], "decay") {
+		t.Error("关闭淡忘时不该让模型多做一次无用的判断")
+	}
+
+	on := &fakeComplete{}
+	q := newPluginWithComplete(t, on, decayCfg(30, 90))
+	if _, err := q.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(on.prompts[0], "decay") {
+		t.Error("开启淡忘后应要求模型给出该字段")
 	}
 }

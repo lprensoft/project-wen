@@ -37,6 +37,10 @@ func visibleHistory(stored []session.StoredMessage, sc plugin.Scope) []session.S
 		if m.Kind == session.KindEphemeral {
 			continue
 		}
+		// 会话注记只给人看，任何时候都不进模型上下文
+		if m.Kind == session.KindNotice {
+			continue
+		}
 		out = append(out, m)
 	}
 	return sanitizeSequence(out)

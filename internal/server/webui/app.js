@@ -698,6 +698,9 @@ function renderHistory(messages) {
   for (const m of messages) {
     if (m.kind === "summary") {
       addSummaryBlock(m.content);
+    } else if (m.kind === "notice") {
+      // 会话注记：只给人看的一行，模型从来看不到它
+      addSysBlock(m.content, "notice");
     } else if (m.role === "user" && (m.kind === "ephemeral" || m.origin === "heartbeat")) {
       // 机器注入的一次性输入：不渲染成用户气泡，只留一行来源提示。
       // origin=heartbeat 的兜底覆盖标记机制上线前落盘的旧心跳。
@@ -2155,3 +2158,28 @@ setInterval(() => {
   if (!busy) loadSessions();
 }, 30000);
 inputEl.focus();
+
+// ---- 会话注记的实时通道 ----
+//
+// /api/chat 的事件流一轮就关，而后台工作（记忆提炼这类）在那之后才跑完。这里订阅
+// 一条常驻流，任何会话上产生的注记都即时推过来，按当前会话筛选后追加到消息区。
+// 注记同时已经落盘，所以断线期间漏掉的内容刷新页面就能补齐——不需要补发机制。
+function subscribeNotices() {
+  const es = new EventSource("/api/events");
+  es.addEventListener("notice", (e) => {
+    let n;
+    try {
+      n = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (!n.content || n.session_id !== currentSession) return;
+    addSysBlock(n.content, "notice");
+  });
+  // EventSource 自带重连；这里只在彻底关闭时兜一次底
+  es.addEventListener("error", () => {
+    if (es.readyState === EventSource.CLOSED) setTimeout(subscribeNotices, 5000);
+  });
+}
+
+subscribeNotices();

@@ -86,6 +86,12 @@ func main() {
 			}
 			return ag.RunTurn(ctx, sessionID, input)
 		},
+		Notice: func(ctx context.Context, sessionID, text string) error {
+			if ag == nil {
+				return fmt.Errorf("会话尚未就绪")
+			}
+			return ag.AppendNotice(ctx, sessionID, text)
+		},
 		NewSession: func() (string, error) {
 			if store == nil {
 				return "", fmt.Errorf("会话存储尚未就绪")
@@ -122,11 +128,7 @@ func main() {
 			}
 			info.HasSession = true
 			info.MessageCount = len(msgs)
-			lms := make([]llm.Message, 0, len(msgs))
-			for _, m := range msgs {
-				lms = append(lms, m.Message)
-			}
-			info.EstTokens = agent.EstimateHistoryTokens(lms)
+			info.EstTokens = agent.EstimateStoredTokens(msgs)
 			if meta.LastUsage != nil {
 				info.MeasuredTokens = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
 			}

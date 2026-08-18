@@ -69,6 +69,9 @@ type Agent struct {
 	plugins  *plugin.Manager
 	store    *session.Store
 	opts     Options
+	// noticeSink 是会话注记的实时出口（见 notice.go）。同受 mu 保护：
+	// 它由 server 在启动时装一次，而注记从插件的后台 goroutine 上写出。
+	noticeSink NoticeSink
 
 	// 每会话一把轮次锁：同一会话的对话轮次与压缩互斥，防止交错写历史，
 	// 以及压缩的 Replace 覆盖并发轮次刚 Append 的消息。

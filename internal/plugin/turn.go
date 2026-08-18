@@ -21,6 +21,9 @@ type NewSessionFunc func() (string, error)
 // CompactFunc 压缩指定会话的历史。见 InitContext.Compact。
 type CompactFunc func(ctx context.Context, sessionID string) error
 
+// NoticeFunc 往会话里追加一行只给人看的注记。见 InitContext.Notice。
+type NoticeFunc func(ctx context.Context, sessionID, text string) error
+
 // turnOriginKey / interactiveKey 是轮次属性的 ctx 键。
 type turnOriginKey struct{}
 type interactiveKey struct{}

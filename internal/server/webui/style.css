@@ -467,6 +467,14 @@ body {
   line-height: 1.8;
 }
 
+/* 会话注记：后台工作（记忆提炼等）留下的一行说明。模型看不到它，所以视觉上
+   也要与对话内容分开——左侧一道细线，够区分但不抢戏。 */
+.sys-block[data-kind="notice"] {
+  border-left: 3px solid var(--accent);
+  background: var(--active-bg);
+  color: var(--text);
+}
+
 .msg-error {
   align-self: center;
   color: var(--danger);
