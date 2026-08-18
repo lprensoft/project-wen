@@ -10,6 +10,11 @@ import (
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
+	// CachedTokens 是 PromptTokens 中命中提示词缓存的部分，CacheWriteTokens 是本次
+	// 写入缓存的部分（仅 Anthropic 有写入概念）。留着是为了能看出缓存到底有没有在
+	// 起作用——上下文的稳定前缀是靠约定维持的，一处提示词挪错位置就会静默失效。
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // Meta 是每个 session 文件的第一行记录。

@@ -28,6 +28,9 @@ providers:
   #   type: anthropic
   #   base_url: https://api.anthropic.com
   #   api_key: sk-ant-你的密钥
+  #   prompt_cache: true       # 提示词缓存（仅 anthropic，默认开启）：把不变的部分标为
+  #                            # 可缓存，命中约十分之一价、未命中的写入多付约四分之一。
+  #                            # 对话间隔常超过几分钟（缓存有效期）时关掉更省。
 
 agent:
   system_prompt: ""          # 系统提示词，先留空

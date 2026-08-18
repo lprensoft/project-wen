@@ -1,12 +1,9 @@
 package roleplay
 
 import (
-	"fmt"
 	"strings"
-	"time"
 
 	"wen/internal/llm"
-	"wen/internal/plugin"
 )
 
 // maxSceneRunes 限制回写进摘要的场景长度：注记会长期留在会话历史里。
@@ -47,32 +44,6 @@ func clip(s string, limit int) string {
 // isBoundary 判断字节下标是否落在 UTF-8 字符边界上。
 func isBoundary(s string, i int) bool {
 	return i >= len(s) || s[i]&0xC0 != 0x80
-}
-
-// lastTS 返回历史中最后一条消息的落盘时间。
-func lastTS(history []plugin.TaggedMessage) (time.Time, bool) {
-	for i := len(history) - 1; i >= 0; i-- {
-		if !history[i].TS.IsZero() {
-			return history[i].TS, true
-		}
-	}
-	return time.Time{}, false
-}
-
-// humanizeGap 把时长写成中文的粗略说法。精确到分秒没有意义，模型需要的是量级。
-func humanizeGap(d time.Duration) string {
-	switch {
-	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%d 小时", int(d.Hours()))
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%d 天", int(d.Hours()/24))
-	case d < 365*24*time.Hour:
-		return fmt.Sprintf("%d 个月", int(d.Hours()/24/30))
-	default:
-		return fmt.Sprintf("%d 年", int(d.Hours()/24/365))
-	}
 }
 
 // lastScene 从历史中取出最后一处【】里的内容（不含括号本身）。

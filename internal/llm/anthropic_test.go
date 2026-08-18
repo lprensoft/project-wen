@@ -73,11 +73,26 @@ func antRun(t *testing.T, frames []antFrame, req ChatRequest) (map[string]any, a
 	srv := antServer(t, frames, &got)
 	defer srv.Close()
 
-	ch, err := NewAnthropic(srv.URL, "sk-ant-test").ChatStream(context.Background(), req)
+	ch, err := NewAnthropic(srv.URL, "sk-ant-test", false).ChatStream(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return got, antCollect(ch)
+}
+
+// antRunCached 同上，但开启提示词缓存。
+func antRunCached(t *testing.T, frames []antFrame, req ChatRequest) map[string]any {
+	t.Helper()
+	var got map[string]any
+	srv := antServer(t, frames, &got)
+	defer srv.Close()
+
+	ch, err := NewAnthropic(srv.URL, "sk-ant-test", true).ChatStream(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	antCollect(ch)
+	return got
 }
 
 func textFrames(text string) []antFrame {
@@ -251,7 +266,11 @@ func TestAnthropicSystemHoistedAndToolResultsMerged(t *testing.T) {
 		},
 	})
 
-	if got["system"] != "环境块" {
+	sys, _ := got["system"].([]any)
+	if len(sys) != 1 {
+		t.Fatalf("system = %v", got["system"])
+	}
+	if b, _ := sys[0].(map[string]any); b["text"] != "环境块" {
 		t.Errorf("system = %v", got["system"])
 	}
 	msgs, _ := got["messages"].([]any)
@@ -327,7 +346,7 @@ func TestAnthropicAPIErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ch, err := NewAnthropic(srv.URL, "bad").ChatStream(context.Background(), ChatRequest{
+	ch, err := NewAnthropic(srv.URL, "bad", false).ChatStream(context.Background(), ChatRequest{
 		Model: "claude-opus-4-5", Messages: testMessages("hi"),
 	})
 	if err == nil {
@@ -339,10 +358,10 @@ func TestAnthropicAPIErrorStatus(t *testing.T) {
 }
 
 func TestAnthropicEndpointNotDuplicated(t *testing.T) {
-	if got := NewAnthropic("https://api.anthropic.com/v1", "k").endpoint(); got != "https://api.anthropic.com/v1/messages" {
+	if got := NewAnthropic("https://api.anthropic.com/v1", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
 		t.Errorf("endpoint = %s", got)
 	}
-	if got := NewAnthropic("https://api.anthropic.com/", "k").endpoint(); got != "https://api.anthropic.com/v1/messages" {
+	if got := NewAnthropic("https://api.anthropic.com/", "k", false).endpoint(); got != "https://api.anthropic.com/v1/messages" {
 		t.Errorf("endpoint = %s", got)
 	}
 }

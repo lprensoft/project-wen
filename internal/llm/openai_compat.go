@@ -99,7 +99,36 @@ type wireChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage *Usage `json:"usage"` // 最后一个 chunk 携带（需 stream_options.include_usage）
+	Usage *wireUsage `json:"usage"` // 最后一个 chunk 携带（需 stream_options.include_usage）
+}
+
+// wireUsage 单独一个结构而不是直接解进 llm.Usage：缓存命中数各家字段名不同，
+// DeepSeek 放在顶层的 prompt_cache_hit_tokens，OpenAI 放在 prompt_tokens_details
+// 里面，两种都收下再归一。
+type wireUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	// DeepSeek：命中磁盘缓存的输入 token（服务端自动缓存，无需任何请求参数）
+	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+	// OpenAI：同一信息在这里
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// usage 归一成 llm.Usage。写入侧恒为 0：这两家的缓存写入不单独计费。
+func (u *wireUsage) usage() *Usage {
+	out := &Usage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+		CachedTokens:     u.PromptCacheHitTokens,
+	}
+	if out.CachedTokens == 0 && u.PromptTokensDetails != nil {
+		out.CachedTokens = u.PromptTokensDetails.CachedTokens
+	}
+	return out
 }
 
 func buildRequest(req ChatRequest, dialect string) wireRequest {
@@ -263,7 +292,7 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 				continue
 			}
 			if chunk.Usage != nil {
-				if !emit(StreamEvent{Type: EventUsage, Usage: chunk.Usage}) {
+				if !emit(StreamEvent{Type: EventUsage, Usage: chunk.Usage.usage()}) {
 					return
 				}
 			}

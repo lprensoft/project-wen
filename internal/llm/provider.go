@@ -74,6 +74,14 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// CachedTokens 是 PromptTokens 中命中提示词缓存、按更低价计费的部分。
+	// 各家字段名不同（DeepSeek 的 prompt_cache_hit_tokens、OpenAI 的
+	// prompt_tokens_details.cached_tokens、Anthropic 的 cache_read_input_tokens），
+	// 由各 provider 归一到这里。0 表示未命中，或该提供商不报此项。
+	CachedTokens int `json:"cached_tokens,omitempty"`
+	// CacheWriteTokens 是本次写入缓存的 token 数，仅 Anthropic 有此概念且单独计费
+	// （约 1.25 倍输入价）；DeepSeek 与 OpenAI 的缓存由服务端自动维护、写入不计费，恒为 0。
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 type StreamEvent struct {

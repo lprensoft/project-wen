@@ -62,6 +62,12 @@ type StatusInfo struct {
 	MessageCount   int
 	MeasuredTokens int // 最近一轮实测上下文用量；<0 表示无实测值，退用 EstTokens
 	EstTokens      int // 全量历史估算
+	// CachedTokens 是最近一轮里命中提示词缓存的输入 token，CacheWriteTokens 是写入的。
+	// 两者都为 0 表示这一轮没用上缓存（或提供商不报此项）。PromptTokens 是本轮输入
+	// 总量，用于算命中比例（MeasuredTokens 含输出，不能拿来当分母）。
+	CachedTokens     int
+	CacheWriteTokens int
+	PromptTokens     int
 	// PluginLines 是启用插件贡献的状态行（见 StatusReporter），已按注册顺序排好，
 	// 直接逐行输出即可。核心不解释其内容。
 	PluginLines []string

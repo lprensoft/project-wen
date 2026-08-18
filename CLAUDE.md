@@ -4,7 +4,7 @@
 
 1. **所有写入本项目的提示词一律使用中文**——包括工具的 Description、参数 Schema 描述、环境块、默认 system 提示词等，不使用英文提示词。
 2. **严禁注入身份信息**——除 session 管理与工具调用所必需的功能性内容外，不得向模型上下文注入任何公司名、模型名等身份类提示词（避免污染底层模型的真实输出）。`agent.system_prompt` 默认留空，由用户在配置中自行决定。
-3. **横切信息不进工具描述**——操作系统、Shell、工作目录、区域语言、时间等环境信息统一由 `internal/agent/env.go` 的 `[系统环境]` 块注入 system 消息开头，新增工具时描述只写功能本身。
+3. **横切信息不进工具描述**——操作系统、Shell、工作目录、区域语言等环境信息统一由 `internal/agent/env.go` 的 `[系统环境]` 块注入 system 消息开头，新增工具时描述只写功能本身。时间不在其中，它归下面的「上下文分层约定」。
 
 ## 插件架构约定
 
@@ -74,7 +74,7 @@
 
 同一会话内的消息可以分区，使一部分内容对某些轮次不可见（`internal/plugin/scope.go`）。**标签的语义完全由插件定义**，核心只做三件事：给消息打标签、按标签过滤历史、按标签分组压缩——它不知道"人格"这回事。约定 **空标签始终对所有域可见**：升级前无标签的历史因此继续可用，"共享"也不需要任何插件参与就成立。
 
-分两阶段：`ScopeDecider.DecideScope` 先定域，`TurnPrompter.TurnPrompt` 再按已定的域注入一次性提示词（不落盘）。之所以分开，是因为 `memory` 要按可读域过滤记忆索引，而域由 `dual_persona` 裁决，单阶段广播里两者无序。可见域是**单所有者**机制：按注册顺序第一个返回非零 `Scope` 的插件胜出，不做多插件合并（`Write` 来自一个插件而 `Read` 来自另一个是无法推理的组合）。
+分两阶段：`ScopeDecider.DecideScope` 先定域，`TurnPrompter.TurnPrompt` 再按已定的域注入一次性提示词（不落盘，注入位置见「上下文分层约定」：随 `<本轮状态>` 走在历史之后，不进 system）。之所以分开，是因为 `memory` 要按可读域过滤记忆索引，而域由 `dual_persona` 裁决，单阶段广播里两者无序。可见域是**单所有者**机制：按注册顺序第一个返回非零 `Scope` 的插件胜出，不做多插件合并（`Write` 来自一个插件而 `Read` 来自另一个是无法推理的组合）。
 
 **不要改 `SystemPrompt()` 的签名**：它的契约是廉价、无副作用、随时可调（`Manager.List` 会对**禁用**的插件也调用它），需要会话上下文的内容一律走 `TurnPrompt`。`memory` 的记忆索引就是按这条从 `SystemPrompt` 挪走的。
 
@@ -107,7 +107,26 @@
 
 提供商与模型由 `internal/modelcfg` 管理：config.yaml 的 `model:` / `providers:` 段是初始值，Web UI 的改动写入 `<配置目录>/models.json` 覆盖层（0600 权限，含明文密钥，不入库），**永不回写 config.yaml**（`${VAR}` 在解析前展开，回写会固化明文并丢注释）。同名条目由覆盖层完全覆盖，config.yaml 新增的提供商仍可见（`source=config`），界面删除写「删除坠碑」，未改动过的条目不落盘。保存与切换后由 `Agent.SetModel` 热生效，一轮请求全程使用入口处取的同一份快照。
 
-新增 API 模式需在 `internal/llm/factory.go` 的 `KnownTypes` 注册并实现 `Provider` 接口。Anthropic 侧只支持当前世代模型的参数形式（`thinking:{type:"adaptive"}` + `output_config.effort`，不发 `temperature`），带签名的思考块通过 `llm.Message.ReasoningBlocks` 原样回传，无签名的一律丢弃。
+新增 API 模式需在 `internal/llm/factory.go` 的 `KnownTypes` 注册并实现 `Provider` 接口（构造参数走 `llm.Config`）。Anthropic 侧只支持当前世代模型的参数形式（`thinking:{type:"adaptive"}` + `output_config.effort`，不发 `temperature`），带签名的思考块通过 `llm.Message.ReasoningBlocks` 原样回传，无签名的一律丢弃。
+
+提供商级的 `prompt_cache`（config.yaml 的 `providers.<name>.prompt_cache` 与设置页的开关，三态 `*bool`，未设置=开启）只对 anthropic 有意义——只有它要求调用方在请求里显式打断点，且缓存写入单独计费。它必须是个**看得见的开关**而不是默认行为：命中按约十分之一计费，而未命中的写入要多付约四分之一，使用节奏比缓存有效期还慢的人（消息间隔常常超过几分钟）开着就是一直在付写入的钱。openai_compat 那边（DeepSeek、OpenAI）的缓存由服务端自动维护，没有开关可言，命中与否只取决于前缀是否稳定。
+
+## 上下文分层约定
+
+一轮请求的上下文分**稳定段**与**易变段**两层，`internal/agent/agent.go` 的 `run` 按这个顺序组装：
+
+    system（[系统环境] + 各插件 SystemPrompt + 用户配置提示词）
+    历史（隔得久的地方插一行「此处距上一条消息……」）
+    <本轮状态>（当前时间 + 距上一条消息 + 各插件 TurnPrompt）+ 本轮用户输入
+
+**当前时间与插件的每轮片段一律不进 system**。这一条同时服务两件事，改任何一处之前先想清楚这两件：
+
+1. **模型对「现在」的判断**。放在 system 开头时，它离生成位置有几千 token 远，而历史对话里出现过的时刻是叙事事实、就在眼前——多轮之后模型会把上次那个时刻当成现在，接着演深夜。放到历史之后并宣告「与历史里的说法不一致时以这里为准」才压得住。
+2. **提示词缓存**。缓存是前缀精确匹配的，system 里放一个每轮都变的时间戳，等于让整段 system 与历史永远无法命中——DeepSeek 这类服务端自动缓存的提供商也一样，那里没有开关可调，唯一的抓手就是前缀别变。
+
+由此得到两条硬性要求：**`SystemPrompt()` 的返回值必须整轮之间逐字节一致**（它按契约本来就是无参、无副作用的，做到这点是自然的），会随会话变化的内容一律走 `TurnPrompt`；**`<本轮状态>` 块里不放会话历史级别的长内容**，它每轮重发且永远不命中缓存。`internal/agent/context_layout_test.go` 盯着这两条。
+
+历史里的间隔标记只加在发出去的副本上，不落盘（`StoredMessage.TS` 本来就记着时间，只是从不发给模型）。压缩摘要末尾同样带一个时间锚——摘要是 pinned 的、永不裁剪，不带锚的话它里面的时段描述会被一直当成「现在」。间隔的**计算与措辞归核心**，插件不要自己再报一遍（roleplay 原本有个 `[对话间隔]`，已并入核心，它现在只说间隔长了该怎么演）。
 
 ## Git 工作流约定
 

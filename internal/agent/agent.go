@@ -225,22 +225,42 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 		_ = a.store.SetLastActive(sessionID, startedAt)
 	}
 
-	// 组装上下文：system（环境块 + 启用插件的提示词片段 + 本轮片段 + 可选配置提示词）+ 历史 + 本条
+	// 组装上下文，分稳定段与易变段两层：
+	//   system（环境块 + 启用插件的提示词片段 + 可选配置提示词）+ 历史 + 本轮状态 + 本条
+	// 易变的内容（当前时间、插件的每轮片段）**不进 system**，而是拼在本轮输入之前。
+	// 一处改动解决两件事：模型判断「现在」时不必跨几千 token 主动比对，
+	// 且 system 与历史成为整轮之间字节一致的前缀，提示词缓存才可能命中。
 	msgs := make([]llm.Message, 0, len(history)+2)
 	parts := []string{envContext(opts.Workdir)}
 	parts = append(parts, a.plugins.SystemPrompts()...)
-	parts = append(parts, a.plugins.TurnPrompts(ctx, ev)...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)
 	}
 	msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: strings.Join(parts, "\n\n")})
 	// pinned 与 msgs 一一对应，标记预算裁剪时不能丢的消息（system 与压缩摘要）
 	pinned := []bool{true}
+	// 历史里补上时间流逝的信号：隔得久的地方标一行间隔（原文不变，只改发出去的副本）
+	var lastTS time.Time
 	for _, h := range visibleHistory(history, scope) {
-		msgs = append(msgs, h.Message)
+		m := h.Message
+		if note := gapNote(lastTS, h.TS); note != "" && m.Role == llm.RoleUser {
+			m.Content = note + m.Content
+		}
+		if !h.TS.IsZero() {
+			lastTS = h.TS
+		}
+		msgs = append(msgs, m)
 		pinned = append(pinned, h.Kind == session.KindSummary)
 	}
-	msgs = append(msgs, userMsg)
+	// 本轮状态块拼在用户输入前面，落盘的那条（userMsg）保持原样不受影响
+	wireUser := userMsg
+	var sinceLast time.Duration
+	if !lastTS.IsZero() {
+		sinceLast = startedAt.Sub(lastTS)
+	}
+	wireUser.Content = turnStateBlock(startedAt, sinceLast, a.plugins.TurnPrompts(ctx, ev)) +
+		"\n\n" + userMsg.Content
+	msgs = append(msgs, wireUser)
 	pinned = append(pinned, false)
 
 	for turn := 0; turn < opts.MaxTurns; turn++ {
@@ -253,6 +273,8 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			_ = a.store.SetUsage(sessionID, &session.Usage{
 				PromptTokens:     r.usage.PromptTokens,
 				CompletionTokens: r.usage.CompletionTokens,
+				CachedTokens:     r.usage.CachedTokens,
+				CacheWriteTokens: r.usage.CacheWriteTokens,
 			})
 		}
 

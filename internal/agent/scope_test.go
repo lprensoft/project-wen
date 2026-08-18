@@ -167,8 +167,14 @@ func TestRunAppliesScopeToStorageAndRequest(t *testing.T) {
 	if strings.Contains(body, "秘密") {
 		t.Errorf("不可读域的历史泄漏进了请求:\n%s", body)
 	}
-	if !strings.Contains(provider.reqs[0].Messages[0].Content, "本轮提示词") {
-		t.Error("TurnPrompt 的片段未注入 system 消息")
+	// TurnPrompt 的片段随本轮状态块走在最后一条消息里，不进 system——
+	// system 必须逐轮字节一致，否则提示词缓存前缀立刻作废
+	last := provider.reqs[0].Messages[len(provider.reqs[0].Messages)-1]
+	if !strings.Contains(last.Content, "本轮提示词") {
+		t.Errorf("TurnPrompt 的片段未随本轮状态块注入: %q", last.Content)
+	}
+	if strings.Contains(provider.reqs[0].Messages[0].Content, "本轮提示词") {
+		t.Error("TurnPrompt 的片段不该进 system（会作废缓存前缀）")
 	}
 
 	// 本轮落盘的消息都带上了 Write 标签

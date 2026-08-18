@@ -207,6 +207,9 @@ func (p *Plugin) cmdStatus(ctx context.Context, msg inbound) {
 			lines = append(lines, fmt.Sprintf("当前会话：%d 条消息，约 %s tokens（估算，占用 %s%%）",
 				info.MessageCount, comma(info.EstTokens), pct(info.EstTokens, info.ContextLength)))
 		}
+		if line := cacheLine(info); line != "" {
+			lines = append(lines, line)
+		}
 		lines = append(lines, "会话 ID："+sid)
 	} else {
 		lines = append(lines, "当前会话：无")
@@ -237,6 +240,23 @@ func statusHeader(version string) string {
 }
 
 // comma 加千位分隔符，与 Web UI 的 toLocaleString 显示一致。
+// cacheLine 给出提示词缓存那一行，本轮没用上缓存时返回空串。
+// 措辞与 Web UI、另一个 IM 插件保持一致（三处输出同源同序，见 CLAUDE.md）。
+func cacheLine(info plugin.StatusInfo) string {
+	if info.CachedTokens <= 0 && info.CacheWriteTokens <= 0 {
+		return ""
+	}
+	s := "提示词缓存：命中 " + comma(info.CachedTokens)
+	if info.CacheWriteTokens > 0 {
+		s += " / 写入 " + comma(info.CacheWriteTokens)
+	}
+	s += " tokens"
+	if info.PromptTokens > 0 {
+		s += "（占本轮输入 " + pct(info.CachedTokens, info.PromptTokens) + "%）"
+	}
+	return s
+}
+
 func comma(n int) string {
 	s := fmt.Sprintf("%d", n)
 	neg := strings.HasPrefix(s, "-")

@@ -62,6 +62,8 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		APIKey   string `json:"api_key"`
 		Dialect  string `json:"thinking_dialect"`
 		Model    string `json:"model"`
+		// PromptCache 未设置按开启算，与 modelcfg.Resolved 的口径一致
+		PromptCache *bool `json:"prompt_cache"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -82,7 +84,10 @@ func (s *Server) testModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, err := llm.New(req.Type, req.BaseURL, req.APIKey, req.Dialect)
+	provider, err := llm.New(llm.Config{
+		Type: req.Type, BaseURL: req.BaseURL, APIKey: req.APIKey, Dialect: req.Dialect,
+		PromptCache: req.PromptCache == nil || *req.PromptCache,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -125,7 +130,10 @@ func (s *Server) applyCurrentModel() error {
 	if err != nil {
 		return err
 	}
-	provider, err := llm.New(cur.Type, cur.BaseURL, cur.APIKey, cur.Dialect)
+	provider, err := llm.New(llm.Config{
+		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
+		PromptCache: cur.PromptCache,
+	})
 	if err != nil {
 		return err
 	}
@@ -157,8 +165,11 @@ func (s *Server) modelsView() map[string]any {
 			"api_key_masked":   modelcfg.MaskKey(p.APIKey),
 			"has_api_key":      p.APIKey != "",
 			"thinking_dialect": p.Dialect,
-			"source":           p.Source,
-			"models":           models,
+			// 三态：true / false / null（未设置，按开启算）。界面据此区分「用户明确关过」
+			// 与「从未设置」，后者保存时仍写回 null，免得一次保存就把条目从 config.yaml 接管过来。
+			"prompt_cache": p.PromptCache,
+			"source":       p.Source,
+			"models":       models,
 		})
 	}
 	return map[string]any{

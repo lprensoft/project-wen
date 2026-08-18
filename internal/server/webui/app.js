@@ -973,6 +973,17 @@ async function runStatus() {
           st.session.est_tokens.toLocaleString() + " tokens（估算，占用 " + pct + "%）"
         );
       }
+      // 提示词缓存：字段只在本轮真的命中或写入过时才下发
+      if (st.session.cached_tokens != null) {
+        let s = "提示词缓存：命中 " + st.session.cached_tokens.toLocaleString();
+        if (st.session.cache_write_tokens) s += " / 写入 " + st.session.cache_write_tokens.toLocaleString();
+        s += " tokens";
+        if (st.session.prompt_tokens) {
+          s += "（占本轮输入 " +
+            ((st.session.cached_tokens / st.session.prompt_tokens) * 100).toFixed(2) + "%）";
+        }
+        lines.push(s);
+      }
       // 会话 ID 便于用 read_session / read_archive 定位这次对话
       lines.push("会话 ID：" + (st.session.id || currentSession));
     } else {
@@ -1532,6 +1543,8 @@ function payloadFromDoc() {
       base_url: p.base_url,
       api_key: "",
       thinking_dialect: p.thinking_dialect || "",
+      // 三态原样带回：null 表示「未设置」，与「明确关过」不同
+      prompt_cache: typeof p.prompt_cache === "boolean" ? p.prompt_cache : null,
       models: p.models,
     })),
     current: modelsDoc.current,
@@ -1756,8 +1769,15 @@ function openProviderModal(name) {
   const dialectField = fieldEl("思考参数方言", dialectSelect,
     "各家 OpenAI 兼容接口的思考/推理参数写法不同：DeepSeek 用 thinking+reasoning_effort，MiniMax 用 adaptive+reasoning_split，Qwen 用 enable_thinking。选错会被对方 API 以 400 拒绝或思考内容混入正文。");
 
-  const syncDialectVisible = () => {
+  // 提示词缓存：仅 Anthropic 需要在请求里显式打断点，故只在该模式下出现。
+  // 默认开启——未设置（null）与明确开启在效果上一致。
+  const cacheSwitch = switchInput(p ? p.prompt_cache !== false : true);
+  const cacheField = fieldEl("提示词缓存", cacheSwitch.wrap,
+    "开启后把不变的部分（工具、system、已有历史）标为可缓存，命中时这部分按约十分之一的价格计费。未命中的写入要多付约四分之一，因此若对话间隔常常超过几分钟（缓存有效期），关掉更省。");
+
+  const syncTypeFields = () => {
     dialectField.classList.toggle("hidden", typeSelect.value !== "openai_compat");
+    cacheField.classList.toggle("hidden", typeSelect.value !== "anthropic");
   };
 
   // 切换 API 模式时，若地址还是另一模式的默认值就跟着换
@@ -1766,7 +1786,7 @@ function openProviderModal(name) {
     if (!urlInput.value.trim() || defaults.includes(urlInput.value.trim())) {
       urlInput.value = defaultBaseURL(typeSelect.value);
     }
-    syncDialectVisible();
+    syncTypeFields();
   });
 
   providerForm.append(
@@ -1775,9 +1795,11 @@ function openProviderModal(name) {
     dialectField,
     fieldEl("Base URL", urlInput, "服务地址，需以 http:// 或 https:// 开头。"),
     fieldEl("API Key", keyInput, "保存在本机 models.json 中，不会提交到仓库。"),
+    cacheField,
   );
-  syncDialectVisible();
-  providerInputs = { name: nameInput, type: typeSelect, dialect: dialectSelect, base_url: urlInput, api_key: keyInput };
+  syncTypeFields();
+  providerInputs = { name: nameInput, type: typeSelect, dialect: dialectSelect, base_url: urlInput,
+    api_key: keyInput, prompt_cache: cacheSwitch.input };
 
   providerModal.classList.remove("hidden");
   nameInput.focus();
@@ -1809,6 +1831,9 @@ async function saveProvider() {
     api_key: providerInputs.api_key.value.trim(),
     // 方言只对 OpenAI 兼容模式有意义，Anthropic 模式一律留空
     thinking_dialect: providerInputs.type.value === "openai_compat" ? providerInputs.dialect.value : "",
+    // 勾上就交回 null（未设置=开启）而不是 true：这样与 config.yaml 一致的条目不会
+    // 因为多了一个显式取值就被 models.json 接管过来。
+    prompt_cache: promptCacheValue(),
   };
   const payload = payloadFromDoc();
   if (providerEditing) {
@@ -1846,6 +1871,7 @@ async function testProvider() {
         base_url: providerInputs.base_url.value.trim(),
         api_key: providerInputs.api_key.value.trim(),
         thinking_dialect: providerInputs.type.value === "openai_compat" ? providerInputs.dialect.value : "",
+        prompt_cache: promptCacheValue(),
         model: model.id,
       }),
     });
@@ -1996,6 +2022,25 @@ function stepButton(svg, input, dir) {
     input.focus();
   });
   return btn;
+}
+
+// promptCacheValue 读提供商弹窗里的缓存开关：非 Anthropic 模式该项无意义，交 null。
+function promptCacheValue() {
+  if (providerInputs.type.value !== "anthropic") return null;
+  return providerInputs.prompt_cache.checked ? null : false;
+}
+
+// switchInput 造一个滑动开关，返回 {wrap, input}（与插件配置里的 bool 字段同一套样式）。
+function switchInput(checked) {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = !!checked;
+  const wrap = document.createElement("label");
+  wrap.className = "switch";
+  const slider = document.createElement("span");
+  slider.className = "slider";
+  wrap.append(input, slider);
+  return { wrap, input };
 }
 
 function textInput(value) {
