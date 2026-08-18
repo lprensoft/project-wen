@@ -134,7 +134,7 @@ func TestSystemPromptListsAllEntriesWithinBudget(t *testing.T) {
 	seed(t, p, 100)
 
 	got := indexPrompt(t, p)
-	if !strings.Contains(got, "[长期记忆]") {
+	if !strings.Contains(got, "[已保存的记忆]") {
 		t.Fatalf("提示词缺少索引头:\n%s", got)
 	}
 	// 100 条是本方案的目标规模：必须全部带摘要出现，且不触发任何降级
@@ -481,5 +481,50 @@ func TestSystemPromptMentionsDecayOnlyWhenEnabled(t *testing.T) {
 	on := newPluginWithComplete(t, nil, decayCfg(30, 90))
 	if !strings.Contains(on.SystemPrompt(), "decay") {
 		t.Error("开启淡忘后应告诉模型怎么标记")
+	}
+}
+
+// ---------- 注入的结构 ----------
+
+// 保存判据必须是一个带标题的块。它早先是全篇唯一一段无标题的散文，又排在
+// [角色设定 · 最高优先级] 之前，那句「以下设定优先于其它一般性指令」正好把它
+// 归进了被压过的那一类——实测同一批对话里 adjust_mood 与 record_touch 都被
+// 调用过，save_memory 一次也没有。
+func TestGuideIsATitledBlock(t *testing.T) {
+	got := newTestPlugin(t, nil).SystemPrompt()
+	if !strings.HasPrefix(got, "[长期记忆]\n") {
+		t.Errorf("保存判据必须以带标题的块开头，实际开头为:\n%.60s", got)
+	}
+}
+
+// 判据与索引各占一个标题：一个是「什么该记下来」，一个是「已经记住了什么」。
+func TestGuideAndIndexHaveDistinctTitles(t *testing.T) {
+	p := newTestPlugin(t, nil)
+	seed(t, p, 1)
+	guide, index := p.SystemPrompt(), indexPrompt(t, p)
+	if strings.Contains(index, "[长期记忆]") {
+		t.Error("索引不该复用判据的标题，模型会分不清哪句是清单哪句是判据")
+	}
+	if strings.Contains(guide, "[已保存的记忆]") {
+		t.Error("判据里不该出现索引的标题")
+	}
+}
+
+// 判据的四类定义必须兼顾生活，不能只认工程语境的东西：早先「事实 = 环境、配置、
+// 结构」把「我早上十点上班」这类最常见的记忆排除在外了。
+func TestGuideCoversEverydayLife(t *testing.T) {
+	got := newTestPlugin(t, nil).SystemPrompt()
+	for _, want := range []string{"作息", "家人", "喜欢什么"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("判据里缺少生活语境的说法 %q", want)
+		}
+	}
+}
+
+// 对方明说「记住」时不该再由模型判断值不值得——这正是报上来的那个场景。
+func TestGuideObeysExplicitRememberRequest(t *testing.T) {
+	got := newTestPlugin(t, nil).SystemPrompt()
+	if !strings.Contains(got, "记住") || !strings.Contains(got, "一律照办") {
+		t.Errorf("判据应当明确「对方说记住时一律照办」:\n%s", got)
 	}
 }
