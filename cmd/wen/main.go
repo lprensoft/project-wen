@@ -231,13 +231,20 @@ var needsSetupPlugins = map[string]bool{
 func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"))
 	builtins := []plugin.Plugin{
-		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
+		readfile.New(), execcmd.New(), webfetch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，
 		// weather 紧跟 scene：它讲的是舞台之外那个现实地方的天气，与舞台冲突时以舞台为准，
 		// 这条规则得排在舞台设定之后才读得通；
 		// body_sense 再排在其后：身体感知要有角色与场景在先，才有作用对象
 		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), bodysense.New(), mood.New(),
+		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
+		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。
+		// 早先它们排在最前面，落在 [角色设定 · 最高优先级] 声明之前，那句「以下设定优先于
+		// 其它一般性指令」正好把记忆判据归进了被压过的那一类——实测同一批对话里
+		// adjust_mood 与 record_touch 都被调用过，save_memory 一次也没有。
+		// 顺带的可见后果：设置页上「角色演绎」这一节因此排到了「记忆与检索」之前。
+		memory.New(), sessionsearch.New(),
 		heartbeat.New(), scheduler.New(), qqbot.New(), wechatbot.New(),
 	}
 	for _, p := range builtins {
