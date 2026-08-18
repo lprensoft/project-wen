@@ -35,6 +35,7 @@ import (
 	"wen/internal/plugin/builtin/scene"
 	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
+	"wen/internal/plugin/builtin/weather"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/server"
@@ -215,6 +216,7 @@ var needsSetupPlugins = map[string]bool{
 	"scene":        true, // 不配置也能工作，但它依赖默认关闭的 roleplay，默认启用只会在启动时被强制关闭
 	"body_sense":   true, // 同上：自带默认部位表，开箱即用，进这张表只因为它依赖默认关闭的 roleplay
 	"mood":         true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
+	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
 
 	"heartbeat":  true,
 	"qq_bot":     true, // 不填 AppID/AppSecret 没法工作
@@ -232,8 +234,10 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
 		readfile.New(), execcmd.New(), webfetch.New(), memory.New(), sessionsearch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
 		// 后者才能形成追加与覆盖的语义；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，
-		// body_sense 再排在 scene 之后：身体感知要有角色与场景在先，才有作用对象
-		roleplay.New(), dualpersona.New(), scene.New(), bodysense.New(), mood.New(),
+		// weather 紧跟 scene：它讲的是舞台之外那个现实地方的天气，与舞台冲突时以舞台为准，
+		// 这条规则得排在舞台设定之后才读得通；
+		// body_sense 再排在其后：身体感知要有角色与场景在先，才有作用对象
+		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), bodysense.New(), mood.New(),
 		heartbeat.New(), scheduler.New(), qqbot.New(), wechatbot.New(),
 	}
 	for _, p := range builtins {
