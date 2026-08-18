@@ -418,6 +418,31 @@ func (m *Manager) SystemPrompts() []string {
 	return out
 }
 
+// StatusLines 返回所有启用插件贡献的状态行（按注册顺序）。
+// 只问启用的插件：被禁用的插件没有运行状况可言，报一行「已停」只是噪声。
+func (m *Manager) StatusLines() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []string
+	for _, name := range m.order {
+		e := m.entries[name]
+		if !e.enabled {
+			continue
+		}
+		r, ok := e.plugin.(StatusReporter)
+		if !ok {
+			continue
+		}
+		for _, line := range r.StatusLines() {
+			if line != "" {
+				out = append(out, line)
+			}
+		}
+	}
+	return out
+}
+
 // DecideScope 裁决本轮对话的可见域。
 //
 // 单所有者：按注册顺序第一个返回非零 Scope 的插件胜出，其余被忽略并记日志。

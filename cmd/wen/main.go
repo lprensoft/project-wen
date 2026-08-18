@@ -62,9 +62,10 @@ func main() {
 	// Agent 与插件互相需要：插件在 Agent 之前构造，故各能力都用闭包延迟到实际使用时取值。
 	// store 也在其后创建，但必须与 Agent 复用同一个实例——两个 Store 的会话锁互不相识。
 	var (
-		ag     *agent.Agent
-		store  *session.Store
-		models *modelcfg.Store
+		ag      *agent.Agent
+		store   *session.Store
+		models  *modelcfg.Store
+		plugins *plugin.Manager
 	)
 	ictx := plugin.InitContext{
 		Workdir:    workdir,
@@ -105,6 +106,9 @@ func main() {
 				Provider: provider, Model: model, Thinking: thinking,
 				ContextLength: contextLength, MeasuredTokens: -1,
 			}
+			if plugins != nil {
+				info.PluginLines = plugins.StatusLines()
+			}
 			if sessionID == "" {
 				return info, nil
 			}
@@ -125,7 +129,7 @@ func main() {
 			return info, nil
 		},
 	}
-	plugins := buildPlugins(cfg, ictx)
+	plugins = buildPlugins(cfg, ictx)
 
 	store, err = session.NewStore(cfg.SessionDir())
 	if err != nil {

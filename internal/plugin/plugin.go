@@ -58,6 +58,9 @@ type StatusInfo struct {
 	MessageCount   int
 	MeasuredTokens int // 最近一轮实测上下文用量；<0 表示无实测值，退用 EstTokens
 	EstTokens      int // 全量历史估算
+	// PluginLines 是启用插件贡献的状态行（见 StatusReporter），已按注册顺序排好，
+	// 直接逐行输出即可。核心不解释其内容。
+	PluginLines []string
 }
 
 // StatusFunc 见 InitContext.Status。sessionID 可为空（只要模型配置部分）。
