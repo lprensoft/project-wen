@@ -36,7 +36,7 @@
 14. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、Manager 持锁时调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始。界面入口统一在齿轮的配置弹窗内（有操作或有配置项都会出齿轮，卡片上不单独摆按钮），点击操作转入进展弹窗；关闭弹窗只停轮询不打断流程。
 15. **插件状态行**（`StatusReporter`，`internal/plugin/statusline.go`）—— 插件向状态命令贡献一行运行状况（如心跳报当前节奏与下次时机），`Manager.StatusLines` 按注册顺序只收**启用**插件的非空行（禁用的插件报一行「已停」只是噪声）；与 `SystemPrompt` 同契约（廉价、无副作用、Manager 持锁时调用，因此实现里不得反向调 Manager、也不能在 `Init` 内查状态，那是写锁内）。措辞由插件自己负责，核心不解释内容；三处输出（Web UI、QQ、微信）统一从 `StatusInfo.PluginLines` / `/api/status` 的 `plugin_lines` 取同一份数据，接在会话行之后。
 
-任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「身体」「危险命令」「心跳」「定时」「QQ」或「微信」这回事。
+任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「身体」「心情」「危险命令」「心跳」「定时」「QQ」或「微信」这回事。
 
 远程 IM 插件目前有两个同构实现：`qq_bot`（QQ 官方开放平台，WebSocket 网关）与 `wechat_bot`（微信官方 ClawBot 插件，iLink HTTP 长轮询，扫码绑定走「插件操作入口」）。共同约定：每个远端用户映射一个普通会话、命令集 /new /status /compact /help /apply /deny、`WithInteractive` + 自带确认通道、白名单外一律拒绝只记日志、markdown 转纯文本共用 `internal/mdtext`。两者都实现 `TurnObserver`：**后台轮次**（`Origin` 非空且非自身，如心跳、定时任务）落在 IM 绑定的会话上时，把助手最终文本推送给绑定用户——否则结果只进会话文件，远端永远看不到；前台轮次与自己发起的轮次不推（各有回复渠道）。QQ 推送走主动消息（无 msg_id，受限容忍）；微信必须回带 context_token，故按用户持久化最近一次入站消息的 token（`tokens.json`，0600），没有 token 的用户只记日志。推送 goroutine 用插件自己的 ctx——广播的 ctx 在发起方轮次结束后立即被取消。
 
