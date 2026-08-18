@@ -1,4 +1,9 @@
-# Wen Agent
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="internal/server/webui/assets/logo-lockup-dark.png">
+    <img src="internal/server/webui/assets/logo-lockup-light.png" alt="Wen Agent" width="300">
+  </picture>
+</p>
 
 用 Go 编写的轻量通用 Agent（MVP）：对接 DeepSeek（OpenAI 兼容协议），自带 Web UI 聊天界面、工具调用循环与本地 Session 管理，单二进制部署。
 
