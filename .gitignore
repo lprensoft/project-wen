@@ -16,5 +16,6 @@ models.json
 *.log
 /wen.exe~
 
-# 分发打包产物
+# 分发打包产物（发布 workflow 在这两处落地，本地跑同一套脚本时也一样）
 /dist/
+/build/
