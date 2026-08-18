@@ -1,0 +1,5 @@
+# CI 脚本必须是 LF：YAML 里的 run: 块在 Linux runner 上交给 bash 执行，
+# 行尾的 CR 会变成命令的一部分（`then` 这种），报错还很难看出原因。
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf

@@ -1,0 +1,142 @@
+name: 发布
+
+# 推送 vX.Y.Z 形式的 tag 时构建六个平台的包并创建 Release。
+# 也可以手动触发（Actions 页面的 Run workflow）：那时只构建、不发布，
+# 产物挂在这次运行下面，用来在真正打 tag 之前验证整条流水线。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # 创建 Release 需要
+
+jobs:
+  release:
+    # 全部目标都从这一台机器交叉编译：本项目没有 cgo，平台差异靠 //go:build 分文件，
+    # .syso 资源文件名带 GOOS_GOARCH 后缀只在对应目标上链接。
+    # 不用 windows/macos runner 还省额度（它们分别按 2 倍、10 倍计费）。
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 版本号的唯一来源是 internal/version，tag 与它对不上的话，
+      # exe 属性里的版本会和界面显示的分叉——这种错发现得越晚越麻烦。
+      - name: 核对 tag 与版本号
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          code_version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          tag_version="${GITHUB_REF_NAME%%-*}"
+          echo "代码里的版本: $code_version"
+          echo "tag: $GITHUB_REF_NAME（比对用 $tag_version）"
+          if [ "$code_version" != "$tag_version" ]; then
+            echo "::error::tag 与 internal/version/version.go 不一致，请先改版本号再打 tag"
+            exit 1
+          fi
+
+      - name: 检查与测试
+        run: |
+          go vet ./...
+          go test ./...
+
+      # 生成物（.ico 与 .syso）随库提交，这里只验证它们与当前版本号一致：
+      # 重新生成后如果有 diff，说明提交时漏了 go generate 那一步。
+      - name: 核对生成物
+        run: |
+          go generate ./cmd/wen
+          if ! git diff --quiet; then
+            echo "::error::生成物与版本号不一致，请在本地跑 go generate ./cmd/wen 后重新提交"
+            git diff --stat
+            exit 1
+          fi
+
+      - name: 构建六个平台
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          # 注意：这里跑的是 bash -e，`[ 条件 ] && 赋值` 在条件不成立时会中断整个步骤，
+          # 所以判断一律写成 if。
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="dev-${GITHUB_SHA::7}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          mkdir -p dist
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%%/*}"
+            goarch="${target##*/}"
+            name="wen-${version}-${goos}-${goarch}"
+            work="build/${name}"
+            mkdir -p "$work"
+
+            binary="wen"
+            if [ "$goos" = "windows" ]; then
+              binary="wen.exe"
+            fi
+            echo "==> $goos/$goarch"
+            GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w" -o "$work/$binary" ./cmd/wen
+
+            # 只给二进制的话，用户拿到手不知道配置从哪来
+            cp config.example.yaml README.md CHANGELOG.md LICENSE "$work/"
+
+            if [ "$goos" = "windows" ]; then
+              (cd build && zip -qr "../dist/${name}.zip" "$name")
+            else
+              tar -czf "dist/${name}.tar.gz" -C build "$name"
+            fi
+          done
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -lh dist
+
+      # Release 正文取 CHANGELOG 里对应版本那一节：tag 本来就压在 CHANGELOG 提交上，
+      # 不必再手写一遍发布说明。
+      - name: 摘出本版本的更新日志
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          {
+            awk -v ver="## [${GITHUB_REF_NAME}]" '
+              index($0, ver) == 1 { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "### 下载哪个"
+            echo ""
+            echo "| 系统 | 文件 |"
+            echo "|---|---|"
+            echo "| Windows | \`windows-amd64\`（Intel/AMD）、\`windows-arm64\` |"
+            echo "| macOS | \`darwin-arm64\`（M 系列）、\`darwin-amd64\`（Intel） |"
+            echo "| Linux | \`linux-amd64\`、\`linux-arm64\` |"
+            echo ""
+            echo "解压后把 \`config.example.yaml\` 复制为 \`config.yaml\`，填上 API Key 再运行。"
+            echo "校验和见 \`SHA256SUMS.txt\`。"
+            echo ""
+            echo "macOS 与 Linux 上首次运行需要加执行权限：\`chmod +x wen\`。"
+            echo "macOS 的二进制没有签名，系统会拦一次，执行 \`xattr -d com.apple.quarantine wen\` 后即可运行。"
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: 创建 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: dist/*
+          # 带后缀的 tag（如 v0.1.3-rc1）标记为预发布
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: 手动触发时把产物挂在这次运行下
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
