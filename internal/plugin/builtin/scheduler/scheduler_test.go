@@ -31,6 +31,12 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc) (*Plugin, *session.Stor
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Stop)
+	// Init 起的后台循环立刻停掉：本包的用例都是直接调内部方法来驱动的，循环留着跑
+	// 只会和它们抢同一份状态。它第一轮什么时候被调度是不确定的——本地通常在这里就
+	// 算好了下一次到期时刻然后 park 住，CI 机器忙时会晚一步，那时用例已经把「早就
+	// 到期」的状态塞了进去，于是循环立刻多跑一次，断言的计数就多了一。
+	// 要测循环本身的话另起一个不停的 helper，别把这里改回去。
+	p.Stop()
 	return p, store
 }
 
