@@ -436,3 +436,50 @@ func TestToolsRegisterWithoutConflict(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigFieldsRoundTripThroughSettingsPage(t *testing.T) {
+	p := New()
+	fields := plugin.ConfigFieldsOf(p)
+
+	// 设置页提交的是表单值：数字与开关都以字符串到达，清空的数字框是空串
+	cfg, err := plugin.NormalizeConfig(fields, map[string]any{
+		"turn_extract":       "true",
+		"turn_extract_every": "12",
+		"decay":              "true",
+		"decay_blur_days":    "",
+		"decay_forget_days":  "120",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+
+	s := p.snapshot()
+	if !s.turnExtract || s.turnEvery != 12 {
+		t.Errorf("定期提炼配置未生效: %+v", s)
+	}
+	if !s.decay || s.blurDays != defaultBlurDays || s.forgetDays != 120 {
+		t.Errorf("淡忘配置未生效（清空的数字框应取默认值）: %+v", s)
+	}
+}
+
+func TestConfigRejectsIntervalBelowFloor(t *testing.T) {
+	fields := plugin.ConfigFieldsOf(New())
+	if _, err := plugin.NormalizeConfig(fields, map[string]any{"turn_extract_every": 3}); err == nil {
+		t.Error("提炼间隔低于下限时应拒绝")
+	}
+}
+
+func TestSystemPromptMentionsDecayOnlyWhenEnabled(t *testing.T) {
+	off := newPluginWithComplete(t, nil, nil)
+	if strings.Contains(off.SystemPrompt(), "decay") {
+		t.Error("关闭淡忘时不该注入这段提示词")
+	}
+	on := newPluginWithComplete(t, nil, decayCfg(30, 90))
+	if !strings.Contains(on.SystemPrompt(), "decay") {
+		t.Error("开启淡忘后应告诉模型怎么标记")
+	}
+}

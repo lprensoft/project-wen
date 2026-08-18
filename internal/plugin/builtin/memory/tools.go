@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"wen/internal/plugin"
 )
@@ -114,24 +115,39 @@ type saveTool struct{ p *Plugin }
 func (t *saveTool) Name() string { return "save_memory" }
 
 func (t *saveTool) Description() string {
-	return "保存一条长期记忆，之后的每次对话都会看到它的标题与摘要。" +
+	base := "保存一条长期记忆，之后的每次对话都会看到它的标题与摘要。" +
 		"标题要短且唯一，摘要一句话说清这条记忆讲什么，正文写完整内容。" +
-		"默认不覆盖同名记忆；确实要更新已有记忆时把 mode 设为 replace。"
+		"已有记忆的结论被推翻时，用同一个标题、把 mode 设为 replace 修订它，" +
+		"并在正文里交代被推翻的旧结论——不要换个标题另存一条，那会让两条互相打架的记忆同时留着。"
+	if t.p.snapshot().decay {
+		base += "会随时间失去意义的内容（近况、心情、当下的处境与安排）把 decay 设为 true，" +
+			"它们久未提及会逐步淡忘；长期有效的内容不要设。"
+	}
+	return base
 }
 
 func (t *saveTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
+	prop := ""
+	if t.p.snapshot().decay {
+		prop = decayProp
+	}
+	return json.RawMessage(fmt.Sprintf(`{
 		"type": "object",
 		"properties": {
 			"name": {"type": "string", "description": "标题，简短且唯一"},
 			"description": {"type": "string", "description": "一句话摘要，会出现在记忆索引里，过长会被截断"},
 			"type": {"type": "string", "description": "分类", "enum": ["偏好", "约定", "事实", "踩坑"]},
 			"content": {"type": "string", "description": "完整内容"},
-			"mode": {"type": "string", "description": "同名记忆已存在时的处理方式，默认拒绝", "enum": ["create", "replace"]}
+			"mode": {"type": "string", "description": "同名记忆已存在时的处理方式，默认拒绝", "enum": ["create", "replace"]}%s
 		},
 		"required": ["name", "description", "type", "content"]
-	}`)
+	}`, prop))
 }
+
+// decayProp 只在开启淡忘时出现在参数表里：关着的时候它没有任何作用，
+// 摆在那里只会让模型多花一次判断。
+const decayProp = `,
+			"decay": {"type": "boolean", "description": "这条记忆是否会随时间淡忘，久未提及后先只剩要点、最终移出记忆库；长期有效的内容不要设"}`
 
 func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
@@ -140,6 +156,7 @@ func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		Type        string `json:"type"`
 		Content     string `json:"content"`
 		Mode        string `json:"mode"`
+		Decay       bool   `json:"decay"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("参数格式错误: %w", err)
@@ -147,7 +164,8 @@ func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 	if strings.TrimSpace(a.Content) == "" {
 		return "", fmt.Errorf("记忆内容不能为空")
 	}
-	if t.p.snapshot().store == nil {
+	cfg := t.p.snapshot()
+	if cfg.store == nil {
 		return "", errNotReady
 	}
 	// 写入本轮的可见域。同名检查也只在这个库内进行——若跨域检查，
@@ -162,6 +180,7 @@ func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, e
 		Description: a.Description,
 		Type:        a.Type,
 		Content:     a.Content,
+		Decay:       cfg.decay && a.Decay,
 	}, a.Mode == "replace")
 	if err != nil {
 		return "", err
@@ -252,9 +271,13 @@ func (t *recallTool) Execute(ctx context.Context, args json.RawMessage) (string,
 	if s.store == nil {
 		return "", errNotReady
 	}
-	e, _, err := t.p.findVisible(ctx, a.Name)
+	e, store, err := t.p.findVisible(ctx, a.Name)
 	if err != nil {
 		return "", err
+	}
+	// 读到就算用到：不刷新的话，一条天天被翻出来看的记忆照样会走到淡忘
+	if s.decay {
+		_, _ = store.Touch(e.Name, time.Now())
 	}
 
 	var b strings.Builder

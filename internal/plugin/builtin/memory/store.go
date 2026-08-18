@@ -28,6 +28,10 @@ const (
 	descMaxRunes = 40
 	// slugMaxRunes 远离各文件系统的长度边界（NTFS 上限为 255 个 UTF-16 单元）。
 	slugMaxRunes = 60
+	// forgottenDir 存放被自动遗忘的记忆，位于记忆库目录之下，不进索引。
+	forgottenDir = "forgotten"
+	// blurNote 附在塌缩后的正文末尾，让读到它的一方知道这里本来还有细节。
+	blurNote = "（更早的细节已经记不清了。）"
 )
 
 // typeRank 返回分类的展示序，未知分类排在最后。
@@ -47,6 +51,15 @@ type Entry struct {
 	Created     time.Time
 	Updated     time.Time
 	Content     string // 正文
+	// LastUsed 是这条记忆最后一次被用到的时间（读取、修订、或在对话中被提及）。
+	// 遗忘的两个时限都从它起算——「一直没有再提及」说的就是这个。
+	// 旧文件没有该字段时读作 Updated，使升级前的记忆从最后一次改动起算。
+	LastUsed time.Time
+	// Decay 表示这条记忆会随时间淡忘。默认为 false（永久保留），
+	// 由保存方按内容性质决定，与记忆分类正交。
+	Decay bool
+	// Blurred 表示正文已经塌缩成摘要，只剩要点。
+	Blurred bool
 	// Domain 是这条记忆所属的可见域标签，不落盘：它由所在的库决定，
 	// 在跨库合并后用于把 recall / delete 送回正确的库。
 	Domain string
@@ -211,9 +224,15 @@ func (s *Store) Save(e Entry, replace bool) (Entry, error) {
 
 	now := time.Now()
 	e.Updated = now
+	e.LastUsed = now  // 写入本身就是一次「用到」
+	e.Blurred = false // 正文是刚写进来的，不再是塌缩后的残余
 	if exists {
 		e.Slug = old.Slug // 沿用原文件名，避免标题大小写变化产生第二个文件
 		e.Created = old.Created
+		// 淡忘标记只增不减。自动提炼在修订一条记忆时未必会重复带上这个标记，
+		// 若按缺省值覆盖，一条本该淡忘的记忆会被一次无关的修订变成永久记忆。
+		// 确实要取消淡忘，删掉重存或直接改文件头。
+		e.Decay = e.Decay || old.Decay
 	} else {
 		e.Created = now
 	}
@@ -264,6 +283,123 @@ func (s *Store) Delete(name string) (Entry, error) {
 	return e, nil
 }
 
+// Touch 把一条记忆的最后使用时间刷成 now，不改动正文与更新时间。
+// 已经是同一天的直接返回 false 不写盘：Store 的缓存靠目录指纹（含文件修改时间），
+// 每次提及都改写会让整个记忆库的每一次读取都重新扫盘。
+func (s *Store) Touch(name string, now time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := s.listLocked()
+	if err != nil {
+		return false, err
+	}
+	e, ok := findEntry(entries, name)
+	if !ok {
+		return false, fmt.Errorf("没有名为 %q 的记忆", name)
+	}
+	if sameDay(e.LastUsed, now) {
+		return false, nil
+	}
+	e.LastUsed = now
+	if err := s.writeLocked(e); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Blur 把正文塌缩成摘要，只留要点，并标记为已淡忘。
+//
+// 刻意不调模型：摘要是保存时就写好的一句话概括，直接拿来用是确定的、零成本的，
+// 也更接近真实的遗忘——细节先掉、要点还在。也刻意不改 Updated 与 LastUsed：
+// 淡忘是时间流逝的结果而不是一次使用，改了这条记忆就永远等不到归档。
+func (s *Store) Blur(name string) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := s.listLocked()
+	if err != nil {
+		return Entry{}, err
+	}
+	e, ok := findEntry(entries, name)
+	if !ok {
+		return Entry{}, fmt.Errorf("没有名为 %q 的记忆", name)
+	}
+	if e.Blurred {
+		return e, nil
+	}
+	gist := e.Description
+	if gist == "" {
+		gist = truncateRunes(firstLine(e.Content), descMaxRunes)
+	}
+	e.Content = strings.TrimSpace(gist + "\n\n" + blurNote)
+	e.Blurred = true
+	if err := s.writeLocked(e); err != nil {
+		return Entry{}, err
+	}
+	return e, nil
+}
+
+// Archive 把一条记忆移出记忆库，落到 forgotten/ 子目录。
+//
+// 不用 os.Remove：自动遗忘是这套机制里唯一不可逆、而且误删完全无从察觉的动作——
+// 用户根本不会知道曾经有过这条。扫描只认本级目录下的 .md，子目录天然不进索引。
+func (s *Store) Archive(name string, now time.Time) (Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := s.listLocked()
+	if err != nil {
+		return Entry{}, err
+	}
+	e, ok := findEntry(entries, name)
+	if !ok {
+		return Entry{}, fmt.Errorf("没有名为 %q 的记忆", name)
+	}
+	src, err := s.path(e.Slug)
+	if err != nil {
+		return Entry{}, err
+	}
+	dir := filepath.Join(s.dir, forgottenDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Entry{}, fmt.Errorf("创建遗忘目录失败: %w", err)
+	}
+	// 文件名带归档日期：同一条记忆被遗忘后又重新记起、再被遗忘是正常路径，
+	// 只用 slug 的话第二次归档会覆盖掉第一次。
+	dst := filepath.Join(dir, fmt.Sprintf("%s.%s.md", e.Slug, now.Format("20060102")))
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			break
+		}
+		dst = filepath.Join(dir, fmt.Sprintf("%s.%s-%d.md", e.Slug, now.Format("20060102"), i))
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return Entry{}, fmt.Errorf("归档记忆失败: %w", err)
+	}
+	s.dirty = true
+	return e, nil
+}
+
+// writeLocked 按当前字段重写一条已存在记忆的文件。调用方需持有写锁。
+func (s *Store) writeLocked(e Entry) error {
+	p, err := s.path(e.Slug)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(p, render(e)); err != nil {
+		return err
+	}
+	s.dirty = true
+	return nil
+}
+
+// sameDay 判断两个时刻是否落在同一个本地日期。
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
+}
+
 // ---------- 文件读写 ----------
 
 // frontmatter 是记忆文件头部的 YAML 结构。时间用字符串承载，格式不合法时退回文件时间而不是报错。
@@ -273,6 +409,11 @@ type frontmatter struct {
 	Type        string `yaml:"type"`
 	Created     string `yaml:"created"`
 	Updated     string `yaml:"updated"`
+	// 以下三项都带 omitempty：不参与遗忘的记忆（绝大多数）文件头里不该多出
+	// 三行恒为假的字段，这些文件是给人直接看和改的。
+	LastUsed string `yaml:"last_used,omitempty"`
+	Decay    bool   `yaml:"decay,omitempty"`
+	Blurred  bool   `yaml:"blurred,omitempty"`
 }
 
 // read 解析一个记忆文件。缺少或损坏 frontmatter 时按纯 Markdown 兜底，
@@ -314,6 +455,14 @@ func (s *Store) read(fname string) (Entry, error) {
 		if t, err := time.Parse(time.RFC3339, fm.Updated); err == nil {
 			e.Updated = t
 		}
+		e.Decay = fm.Decay
+		e.Blurred = fm.Blurred
+		if t, err := time.Parse(time.RFC3339, fm.LastUsed); err == nil {
+			e.LastUsed = t
+		}
+	}
+	if e.LastUsed.IsZero() {
+		e.LastUsed = e.Updated // 旧文件没有该字段，从最后一次改动起算
 	}
 	if e.Description == "" {
 		e.Description = truncateRunes(firstLine(e.Content), descMaxRunes)
@@ -353,13 +502,20 @@ func render(e Entry) []byte {
 	b.WriteString("---\n")
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	_ = enc.Encode(frontmatter{
+	fm := frontmatter{
 		Name:        e.Name,
 		Description: e.Description,
 		Type:        e.Type,
 		Created:     e.Created.Format(time.RFC3339),
 		Updated:     e.Updated.Format(time.RFC3339),
-	})
+		Decay:       e.Decay,
+		Blurred:     e.Blurred,
+	}
+	// last_used 只在与 updated 不同时写出，省掉绝大多数文件里的一行重复信息
+	if !e.LastUsed.IsZero() && !e.LastUsed.Equal(e.Updated) {
+		fm.LastUsed = e.LastUsed.Format(time.RFC3339)
+	}
+	_ = enc.Encode(fm)
 	_ = enc.Close()
 	b.WriteString("---\n\n")
 	b.WriteString(e.Content)
