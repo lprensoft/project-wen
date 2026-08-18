@@ -36,17 +36,20 @@ func (b *confirmBroker) release(openid string) {
 	delete(b.pending, openid)
 }
 
-// resolve 投递答复；没有等待中的确认时返回 false。
-func (b *confirmBroker) resolve(openid string, approved bool) bool {
+// take 取出该用户正在等的那次确认，答复由调用方投递；没有等待中的确认时返回 false。
+//
+// 取出与投递分成两步，是为了让回执能排在放行前面：答复一旦投出去，被解开的那一轮
+// 立刻继续往下跑，它的最终回复可能抢在回执之前发到用户那里——用户会先看到执行
+// 结果、再看到「已允许」。
+func (b *confirmBroker) take(openid string) (chan<- bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ch, ok := b.pending[openid]
 	if !ok {
-		return false
+		return nil, false
 	}
 	delete(b.pending, openid)
-	ch <- approved
-	return true
+	return ch, true
 }
 
 // confirmerFor 构造该 openid 本轮对话的确认通道：把确认请求文案发到 QQ，阻塞等

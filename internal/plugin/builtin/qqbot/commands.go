@@ -35,19 +35,20 @@ func (p *Plugin) handleInbound(ctx context.Context, msg inbound) {
 	}
 
 	switch strings.TrimSpace(msg.content) {
-	case "/apply":
-		if broker.resolve(msg.openid, true) {
+	case "/apply", "/deny":
+		approved := strings.TrimSpace(msg.content) == "/apply"
+		ch, ok := broker.take(msg.openid)
+		if !ok {
+			p.send(ctx, msg.openid, "当前没有等待确认的操作。", msg.msgID)
+			return
+		}
+		// 先回执、再投答复：反过来的话，被解开的那一轮可能抢在回执前面把结果发出去
+		if approved {
 			p.send(ctx, msg.openid, "✅ 已允许，继续执行。", msg.msgID)
 		} else {
-			p.send(ctx, msg.openid, "当前没有等待确认的操作。", msg.msgID)
-		}
-		return
-	case "/deny":
-		if broker.resolve(msg.openid, false) {
 			p.send(ctx, msg.openid, "🚫 已拒绝该操作。", msg.msgID)
-		} else {
-			p.send(ctx, msg.openid, "当前没有等待确认的操作。", msg.msgID)
 		}
+		ch <- approved
 		return
 	}
 

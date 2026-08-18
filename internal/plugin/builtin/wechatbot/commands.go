@@ -47,19 +47,20 @@ func (p *Plugin) handleInbound(ctx context.Context, msg inbound, dedupKey string
 	}
 
 	switch strings.TrimSpace(msg.text) {
-	case "/apply":
-		if broker.resolve(msg.userID, true) {
+	case "/apply", "/deny":
+		approved := strings.TrimSpace(msg.text) == "/apply"
+		ch, ok := broker.take(msg.userID)
+		if !ok {
+			p.send(ctx, msg.userID, "当前没有等待确认的操作。", msg.contextToken)
+			return
+		}
+		// 先回执、再投答复：反过来的话，被解开的那一轮可能抢在回执前面把结果发出去
+		if approved {
 			p.send(ctx, msg.userID, "✅ 已允许，继续执行。", msg.contextToken)
 		} else {
-			p.send(ctx, msg.userID, "当前没有等待确认的操作。", msg.contextToken)
-		}
-		return
-	case "/deny":
-		if broker.resolve(msg.userID, false) {
 			p.send(ctx, msg.userID, "🚫 已拒绝该操作。", msg.contextToken)
-		} else {
-			p.send(ctx, msg.userID, "当前没有等待确认的操作。", msg.contextToken)
 		}
+		ch <- approved
 		return
 	}
 

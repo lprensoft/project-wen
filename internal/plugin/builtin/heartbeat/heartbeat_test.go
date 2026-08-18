@@ -2,7 +2,10 @@ package heartbeat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -205,6 +208,31 @@ func TestJudgeAdjust(t *testing.T) {
 	}
 }
 
+// judge 返回时状态必须已经落盘。写盘若另起 goroutine，就会脱离插件的生命周期——
+// 停掉插件之后才写，甚至在测试的临时目录被清理之后才写（CI 上表现为
+// 「TempDir RemoveAll cleanup: directory not empty」，且只在 Linux 上偶发）。
+func TestJudgeSavesBeforeReturning(t *testing.T) {
+	dir := t.TempDir()
+	p := &Plugin{
+		minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 30 * time.Minute,
+		stateDir: dir, wake: make(chan struct{}, 1), adjusting: true,
+	}
+	complete := func(context.Context, string) (string, error) { return "加快", nil }
+	p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
+
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("judge 返回时状态还没落盘: %v", err)
+	}
+	var s state
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("状态文件解析失败: %v", err)
+	}
+	if s.IntervalSeconds != int(15*time.Minute/time.Second) {
+		t.Errorf("落盘的间隔 = %d 秒，期望 900", s.IntervalSeconds)
+	}
+}
+
 // 判定失败不改节奏。
 func TestJudgeErrorKeepsPace(t *testing.T) {
 	p := &Plugin{
@@ -221,6 +249,9 @@ func TestJudgeErrorKeepsPace(t *testing.T) {
 // 真人交互的轮次结束后心跳时钟重置：下一次心跳从这一刻起重新计时，聊天途中不会被心跳打断。
 func TestTurnEndResetsClock(t *testing.T) {
 	p, _ := newInited(t, noTurn, map[string]any{"interval_minutes": 30, "dynamic": false})
+	// 先停掉循环再断言唤醒信号：循环自己就阻塞在 p.wake 上，不停的话信号会被它抢走，
+	// 这条断言就变成看调度时序的运气（在 CI 上尤其容易翻车）
+	p.Stop()
 
 	p.mu.Lock()
 	p.lastBeat = time.Now().Add(-29 * time.Minute) // 差一分钟就要心跳了
