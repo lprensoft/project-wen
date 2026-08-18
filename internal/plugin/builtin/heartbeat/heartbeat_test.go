@@ -208,6 +208,69 @@ func TestJudgeErrorKeepsPace(t *testing.T) {
 	}
 }
 
+// 真人交互的轮次结束后心跳时钟重置：下一次心跳从这一刻起重新计时，聊天途中不会被心跳打断。
+func TestTurnEndResetsClock(t *testing.T) {
+	p, _ := newInited(t, noTurn, map[string]any{"interval_minutes": 30, "dynamic": false})
+
+	p.mu.Lock()
+	p.lastBeat = time.Now().Add(-29 * time.Minute) // 差一分钟就要心跳了
+	p.mu.Unlock()
+
+	end := time.Now()
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, StartedAt: end.Add(-time.Minute), EndedAt: end})
+
+	p.mu.Lock()
+	beat, active := p.lastBeat, p.lastActive
+	p.mu.Unlock()
+	if !beat.Equal(end) {
+		t.Fatalf("真人轮次结束后心跳时钟应重置到 %v，得到 %v", end, beat)
+	}
+	if !active.Equal(end) {
+		t.Fatalf("活跃时间应刷新到 %v，得到 %v", end, active)
+	}
+	select { // 循环挂在旧的到期时刻上，必须被叫醒重算
+	case <-p.wake:
+	default:
+		t.Fatal("重置心跳时钟后应唤醒循环重算下一次心跳时刻")
+	}
+}
+
+// 后台轮次（心跳自己、定时任务等）不重置心跳时钟，否则背景活动会把心跳无限推后。
+func TestTurnEndBackgroundKeepsClock(t *testing.T) {
+	p, _ := newInited(t, noTurn, map[string]any{"dynamic": false})
+	before := time.Now().Add(-20 * time.Minute)
+	p.mu.Lock()
+	p.lastBeat = before
+	p.mu.Unlock()
+
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Origin: "scheduler", EndedAt: time.Now()})
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{EndedAt: time.Now()}) // 非交互
+
+	p.mu.Lock()
+	beat := p.lastBeat
+	p.mu.Unlock()
+	if !beat.Equal(before) {
+		t.Fatalf("后台轮次不该重置心跳时钟，得到 %v", beat)
+	}
+}
+
+// 时钟只前推不回拨：时间戳缺失或落后于当前起点时保持原值。
+func TestResetClockNeverRewinds(t *testing.T) {
+	now := time.Now()
+	p := &Plugin{lastBeat: now, wake: make(chan struct{}, 1)}
+
+	p.resetClockLocked(now.Add(-time.Hour))
+	if !p.lastBeat.Equal(now) {
+		t.Fatalf("过去的时间戳不该回拨时钟，得到 %v", p.lastBeat)
+	}
+
+	p.lastBeat = time.Time{}
+	p.resetClockLocked(time.Time{}) // 零值当作「现在」
+	if p.lastBeat.IsZero() {
+		t.Fatal("零值时间戳应回落到当前时刻")
+	}
+}
+
 // 持久化的间隔在重启后生效并按新配置限幅。
 func TestIntervalPersistence(t *testing.T) {
 	stateDir := t.TempDir()
