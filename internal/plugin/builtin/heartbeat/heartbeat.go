@@ -188,17 +188,25 @@ func (p *Plugin) loadIntervalLocked() time.Duration {
 	return p.clamp(time.Duration(st.IntervalSeconds) * time.Second)
 }
 
-// saveInterval 持久化当前间隔。失败只影响下次启动的初值，不值得让调用方失败。
-func (p *Plugin) saveInterval(iv time.Duration) {
-	p.mu.Lock()
-	dir := p.stateDir
-	p.mu.Unlock()
+// persistInterval 把间隔写进状态文件。不碰锁：目录与间隔由调用方在锁内取好，
+// 写盘在锁外做——否则持锁的调用方只能另起 goroutine 来绕开自锁，而那种写会脱离
+// 插件的生命周期，在插件停掉之后才落地（测试里表现为临时目录清理时「目录非空」）。
+func persistInterval(dir string, iv time.Duration) {
 	if dir == "" {
 		return
 	}
 	_ = os.MkdirAll(dir, 0o755)
 	raw, _ := json.Marshal(state{IntervalSeconds: int(iv / time.Second)})
 	_ = os.WriteFile(filepath.Join(dir, "state.json"), raw, 0o644)
+}
+
+// saveInterval 持久化当前间隔，供未持锁的调用方使用。
+// 失败只影响下次启动的初值，不值得让调用方失败。
+func (p *Plugin) saveInterval(iv time.Duration) {
+	p.mu.Lock()
+	dir := p.stateDir
+	p.mu.Unlock()
+	persistInterval(dir, iv)
 }
 
 func (p *Plugin) clamp(iv time.Duration) time.Duration {

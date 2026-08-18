@@ -144,14 +144,20 @@ func gapNote(prompt string, lastActive, now time.Time) string {
 // 直到最慢间隔。动态心跳关闭时不衰减——那是「固定节奏」的含义。
 func (p *Plugin) maybeDecay() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if !p.dynamic || p.cur >= p.maxIv {
+		p.mu.Unlock()
 		return
 	}
 	if !p.lastActive.IsZero() && time.Since(p.lastActive) < p.cur {
+		p.mu.Unlock()
 		return
 	}
 	p.cur = p.clamp(p.cur * 3 / 2)
-	go p.saveInterval(p.cur)
-	log.Printf("heartbeat: 无人聊天，心跳放缓至 %v", p.cur)
+	next, dir := p.cur, p.stateDir
+	p.mu.Unlock()
+
+	// 写盘放在锁外：持锁时调 saveInterval 会自锁，而为了绕开自锁另起 goroutine
+	// 就会让这次写脱离循环的生命周期（Stop 等不到它）
+	persistInterval(dir, next)
+	log.Printf("heartbeat: 无人聊天，心跳放缓至 %v", next)
 }

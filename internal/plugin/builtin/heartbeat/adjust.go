@@ -97,9 +97,12 @@ func (p *Plugin) judge(ctx context.Context, complete plugin.CompleteFunc, ev plu
 	}
 	next := p.cur
 	wake := p.wake
+	dir := p.stateDir
 	p.mu.Unlock()
 
-	go p.saveInterval(next)
+	// 同步写：judge 本身就跑在自己的 goroutine 里，再起一个只会让这次写盘脱离
+	// 插件的生命周期——停掉插件、甚至进程退出之后才落地
+	persistInterval(dir, next)
 	log.Printf("heartbeat: 动态判定「%s」，心跳间隔调整为 %v", verdict, next)
 	select { // 唤醒循环重算下一次心跳时刻
 	case wake <- struct{}{}:
