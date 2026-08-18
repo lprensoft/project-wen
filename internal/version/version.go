@@ -3,4 +3,4 @@
 package version
 
 // Version 当前版本。发布时在此处更新。
-const Version = "v0.1.2"
+const Version = "v0.1.3"
