@@ -38,6 +38,23 @@ func (p *Plugin) loop(ctx context.Context) {
 	}
 }
 
+// resetClockLocked 把心跳倒计时的起点推到 at，并唤醒循环重算下一次心跳时刻。
+// 只前推不回拨：事件时间戳缺失或落后于已记录的起点时保持原值，避免把倒计时拨回过去
+// 反而立刻触发一次心跳。调用方需持有 p.mu。
+func (p *Plugin) resetClockLocked(at time.Time) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if !at.After(p.lastBeat) {
+		return
+	}
+	p.lastBeat = at
+	select { // 循环正挂在旧的到期时刻上，不叫醒它这次重置要到下次心跳后才生效
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
 // beat 执行一次心跳：挑最近活跃的会话（没有就新建），以心跳提示词跑一轮对话。
 // 会话忙时跳过本次——心跳排队毫无意义，下个周期自然会再来。
 func (p *Plugin) beat(ctx context.Context) {

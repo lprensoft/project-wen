@@ -13,8 +13,8 @@ import (
 // judgeTimeout 是单次动态判定的时长上限。
 const judgeTimeout = 2 * time.Minute
 
-// OnTurnEnd 观察每轮对话：真人交互的轮次刷新活跃时间，动态心跳开启时另起 goroutine
-// 让辅助模型判定聊天热度并调整间隔。后台轮次（含心跳自己）一律忽略。
+// OnTurnEnd 观察每轮对话：真人交互的轮次刷新活跃时间并重置心跳时钟，动态心跳开启时
+// 另起 goroutine 让辅助模型判定聊天热度并调整间隔。后台轮次（含心跳自己）一律忽略。
 // 本方法在轮次收尾的同步路径上被调用，必须快速返回。
 func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	if ev.Origin != "" || !ev.Interactive {
@@ -23,6 +23,9 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	p.mu.Lock()
 	prevActive := p.lastActive
 	p.lastActive = ev.EndedAt
+	// 真人刚聊完，心跳倒计时从此刻重新开始：心跳是「没人说话时才主动开口」的机制，
+	// 聊天途中插进来的心跳既打断对话，也让间隔配置失去意义。
+	p.resetClockLocked(ev.EndedAt)
 	dynamic, complete, busy := p.dynamic, p.complete, p.adjusting
 	ctx := p.ctx
 	if dynamic && complete != nil && !busy && ctx != nil {

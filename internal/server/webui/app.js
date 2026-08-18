@@ -528,7 +528,7 @@ async function sendMessage() {
 // ---------- 命令菜单（输入 / 时弹出，随输入筛选） ----------
 
 const COMMANDS = [
-  { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量、会话 ID" },
+  { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量、会话 ID、插件状态" },
   { cmd: "/compact", desc: "压缩当前会话为摘要" },
 ];
 const cmdMenu = $("#cmd-menu");
@@ -633,6 +633,8 @@ async function runStatus() {
     } else {
       lines.push("当前会话：无");
     }
+    // 插件贡献的状态行（如心跳节奏），没有插件可报时字段不存在
+    if (Array.isArray(st.plugin_lines)) lines.push(...st.plugin_lines);
     addSysBlock(lines.join("\n"));
   } catch (e) {
     addError("获取状态失败：" + e.message);

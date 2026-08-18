@@ -232,6 +232,7 @@ func (p *Plugin) cmdStatus(ctx context.Context, msg inbound) {
 	} else {
 		lines = append(lines, "当前会话：无")
 	}
+	lines = append(lines, info.PluginLines...) // 插件贡献的状态行，与 Web UI 同源同序
 	p.send(ctx, msg.userID, strings.Join(lines, "\n"), msg.contextToken)
 }
 
