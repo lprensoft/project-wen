@@ -74,6 +74,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID string `json:"session_id"`
 		Message   string `json:"message"`
+		// DebugPrompt 打开时逐次发回实际提交给模型的请求体，供界面调试查看。
+		// 默认关闭：整轮的完整上下文可能有数 MB，不看的时候不该付这份代价。
+		DebugPrompt bool `json:"debug_prompt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -97,6 +100,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	ctx := plugin.WithConfirmer(r.Context(), s.confirmerFor(emitRaw))
 	// 前台界面的轮次有真人在交互：更新会话活跃时间，供后台功能判定「最近活跃会话」
 	ctx = plugin.WithInteractive(ctx)
+	if req.DebugPrompt {
+		ctx = agent.WithPromptTrace(ctx)
+	}
 	s.agent.Run(ctx, req.SessionID, req.Message, emit)
 }
 

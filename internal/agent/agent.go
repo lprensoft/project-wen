@@ -23,6 +23,7 @@ const (
 	EventCompactStart EventType = "compact_start" // 自动压缩开始
 	EventCompactDelta EventType = "compact_delta" // 自动压缩摘要增量
 	EventCompactDone  EventType = "compact_done"  // 自动压缩结束（Error 非空表示失败）
+	EventPrompt       EventType = "prompt"        // 本次 LLM 调用的完整请求体（仅在开启提示词追踪时发出）
 	EventDone         EventType = "done"          // 本轮请求结束
 	EventError        EventType = "error"
 )
@@ -39,6 +40,7 @@ type Event struct {
 	ToolArgs   json.RawMessage `json:"tool_args,omitempty"`
 	ToolResult string          `json:"tool_result,omitempty"`
 	Error      string          `json:"error,omitempty"`
+	Prompt     json.RawMessage `json:"prompt,omitempty"` // EventPrompt 专用：序列化后的请求体
 }
 
 type Options struct {
@@ -324,14 +326,21 @@ type turnResult struct {
 // stream 发起一次 LLM 调用，转发文本与思考增量，返回本轮完整产出。
 func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options, msgs []llm.Message, pinned []bool, emit func(Event)) (turnResult, error) {
 	var r turnResult
-	events, err := provider.ChatStream(ctx, llm.ChatRequest{
+	req := llm.ChatRequest{
 		Model:       opts.Model,
 		Messages:    trimToBudget(opts, msgs, pinned),
 		Tools:       a.toolSpecs(),
 		Temperature: opts.Temperature,
 		MaxTokens:   opts.MaxTokens,
 		Thinking:    opts.Thinking,
-	})
+	}
+	// 调试用：发出本次调用的完整请求体。序列化失败不影响对话，静默跳过即可
+	if promptTraceEnabled(ctx) {
+		if raw, err := marshalPromptTrace(req); err == nil {
+			emit(Event{Type: EventPrompt, Prompt: raw})
+		}
+	}
+	events, err := provider.ChatStream(ctx, req)
 	if err != nil {
 		return turnResult{}, err
 	}

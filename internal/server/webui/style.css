@@ -20,7 +20,14 @@
   --pre-text: #e2e8f0;
   --scrollbar-thumb: rgba(0, 0, 0, 0.22);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.38);
+  --chat-width: 740px;
 }
+
+/* 聊天栏宽度三档。取值只写在这里：首屏脚本与设置页都只认 data-chat-width 这个标记，
+   不在 JS 里重复任何数值，改档位宽度只需改这三行。 */
+:root[data-chat-width="narrow"] { --chat-width: 600px; }
+:root[data-chat-width="medium"] { --chat-width: 740px; }
+:root[data-chat-width="wide"] { --chat-width: 920px; }
 
 :root[data-theme="dark"] {
   --bg: #12151a;
@@ -102,7 +109,15 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.logo { font-weight: 700; font-size: 15px; }
+/* Logo 用背景图而非 <img>：明暗两版靠 [data-theme] 切换，浏览器只会去取当前
+   主题用到的那一张；换成两个 <img> 靠 display 隐藏的话，两张都会被下载，
+   读屏也会把同一个名字念两遍。宽度由原图比例算出，不写死数值。 */
+.logo {
+  height: 32px; /* 与「＋ 新会话」按钮的高度相称；再大就与它挤在一起了 */
+  aspect-ratio: 558 / 132;
+  background: url("assets/logo-lockup-light.png") left center / contain no-repeat;
+}
+[data-theme="dark"] .logo { background-image: url("assets/logo-lockup-dark.png"); }
 
 .header-actions { display: flex; align-items: center; gap: 6px; }
 
@@ -219,13 +234,24 @@ body {
 .session-item .btn-del:hover { color: var(--danger); background: var(--danger-bg); }
 
 /* ---------- 聊天区 ---------- */
-.chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* 消息区与输入框共用一个栏宽：定宽居中而非百分比内边距——按百分比算，
+   超宽屏上行长仍然失控。两者取同一个变量，保证左右永远对齐。 */
+.chat {
+  --chat-gutter: max(16px, calc((100% - var(--chat-width)) / 2));
+  --composer-h: 96px; /* 由 JS 按输入框实测高度覆盖，这里只是首屏前的初值 */
+  flex: 1;
+  position: relative; /* 悬浮输入框的定位基准 */
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 
 .messages {
   flex: 1;
   overflow-y: auto;
   scrollbar-gutter: stable; /* 内容从不满一屏长到超出时不再横向抖动 */
-  padding: 24px clamp(16px, 8%, 120px);
+  /* 底部留出输入框的高度，否则最后一条消息会被悬浮框压住 */
+  padding: 24px var(--chat-gutter) calc(var(--composer-h) + 16px);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -392,6 +418,41 @@ body {
 }
 .tool-detail .label { color: var(--text-dim); font-family: inherit; }
 
+/* 提示词块：本次调用实际提交给模型的请求体，仅调试时显示 */
+.prompt-block {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--tool-bg);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.prompt-block summary {
+  cursor: pointer;
+  padding: 7px 12px;
+  color: var(--text-dim);
+  user-select: none;
+}
+.prompt-block summary .prompt-size { color: var(--text-dim); opacity: 0.75; }
+.prompt-block .prompt-content {
+  padding: 0 12px 10px;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+/* 显示内容筛选：整块开关，对历史与流式输出一视同仁。
+   按 data-kind 而不是 class 选择——.thinking-block 这个类同时被历史摘要与
+   自动压缩块复用，按类选会把它们一起藏掉。 */
+.messages.hide-thinking [data-kind="thinking"],
+.messages.hide-tools [data-kind="tool"],
+.messages.hide-heartbeat [data-kind="heartbeat"],
+.messages.hide-prompt [data-kind="prompt"] { display: none; }
+
 /* 系统信息块（命令输出等，本地展示） */
 .sys-block {
   align-self: center;
@@ -470,23 +531,66 @@ body {
 .confirm-block.confirm-allowed .confirm-head,
 .confirm-block.confirm-denied .confirm-head { color: var(--text-dim); font-weight: 500; }
 
-/* ---------- 输入区 ---------- */
+/* ---------- 输入区（悬浮卡片） ---------- */
+/* 输入框脱离文档流浮在消息区之上，消息从它下面滚过。为免文字在边缘生硬截断，
+   卡片上方铺一层由背景色渐变到透明的遮罩；遮罩不接收指针事件，否则会挡住
+   下面那条消息上的按钮（确认块的允许/拒绝就在那儿）。 */
+/* 输入卡片刻意比消息栏两侧各宽出一段（--composer-bleed）。等宽时消息气泡的左右边缘
+   与卡片边缘重合，滚动经过卡片圆角时，气泡的颜色会从圆角缺口里透出来，那个角看上去
+   一会儿是圆的一会儿是方的。宽出去之后卡片四角背后只有页面底色，不再有这种干扰。
+   右侧还要再让出一个滚动条的宽度（消息区的 scrollbar-gutter 预留的那段，JS 实测下发），
+   否则卡片会压住滚动条。 */
 .composer {
-  display: flex;
-  gap: 10px;
-  padding: 14px clamp(16px, 8%, 120px) 20px;
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-  position: relative;
+  --composer-bleed: 20px;
+  --composer-side: max(12px, calc(var(--chat-gutter) - var(--composer-bleed)));
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 calc(var(--composer-side) + var(--scrollbar-w, 0px)) 20px var(--composer-side);
+  pointer-events: none; /* 只有卡片本身可交互，两侧留白让位给下面的内容 */
+}
+/* 右边同样让开滚动条那一段：遮罩铺满整宽会把消息区的滚动条盖掉一截 */
+.composer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: var(--scrollbar-w, 0px);
+  bottom: 100%;
+  height: 32px;
+  background: linear-gradient(to top, var(--bg), transparent);
+  pointer-events: none;
 }
 
-/* 命令菜单：悬浮于输入框上方 */
+.composer-box {
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 10px 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition: border-color 0.15s;
+}
+[data-theme="dark"] .composer-box { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4); }
+.composer-box:focus-within { border-color: var(--accent); }
+
+/* 底部工具条：左侧筛选与模型切换，右侧圆形收发按钮 */
+.composer-bar { display: flex; align-items: center; gap: 8px; }
+.composer-anchor { position: relative; }
+/* 筛选留在左端，模型切换与发送按钮一起靠右 */
+.composer-anchor.anchor-right { margin-left: auto; }
+
+/* 命令菜单：悬浮于输入卡片上方 */
 .cmd-menu {
   position: absolute;
-  bottom: calc(100% + 8px);
-  left: clamp(16px, 8%, 120px);
+  bottom: calc(100% + 10px);
+  left: 0;
   min-width: 340px;
-  max-width: 60%;
+  max-width: 100%;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -508,21 +612,67 @@ body {
 .cmd-name { color: var(--accent); font-family: Consolas, "Courier New", monospace; flex-shrink: 0; }
 .cmd-desc { color: var(--text-dim); font-size: 12px; }
 
+/* 输入框本身不再有边框：边框已经画在外层卡片上，套两层会显得笨重 */
 .composer textarea {
-  flex: 1;
   resize: none;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border: none;
+  padding: 6px 4px 0;
   font: inherit;
   font-size: 14px;
   line-height: 1.5;
   outline: none;
-  background: var(--panel);
+  background: transparent;
   color: var(--text);
   overflow-y: hidden; /* 默认无滚动条，超过 3 行后由 JS 打开 */
 }
-.composer textarea:focus { border-color: var(--accent); }
+.composer textarea::placeholder { color: var(--text-dim); }
+
+/* 工具条上的胶囊按钮：筛选与模型切换共用 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover { background: var(--bg); color: var(--text); }
+.chip.open { border-color: var(--accent); color: var(--accent); }
+.chip svg { width: 14px; height: 14px; flex-shrink: 0; }
+.chip .chip-caret { width: 12px; height: 12px; opacity: 0.7; }
+.chip > span { overflow: hidden; text-overflow: ellipsis; }
+/* 有筛选项被改动过时点亮，避免「明明藏了东西却看不出来」 */
+.chip.filtered { color: var(--accent); border-color: var(--accent); }
+
+/* 圆形收发按钮：发送为上箭头，等待回复期间变为实心方块可中断本轮生成 */
+.btn-send {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-send:hover { background: var(--accent-hover); }
+.btn-send:disabled { background: #9ca3af; cursor: not-allowed; }
+.btn-send svg { width: 17px; height: 17px; }
+.btn-send .icon-stop, .btn-send.stop .icon-send { display: none; }
+.btn-send.stop .icon-stop { display: block; }
+.btn-send.stop { background: var(--danger); }
+.btn-send.stop:hover { filter: brightness(0.92); }
 
 .btn-primary {
   border: none;
@@ -536,9 +686,73 @@ body {
 }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
-/* 等待回复期间发送按钮变为「停止」，可中断本轮生成 */
-.btn-primary.stop { background: var(--danger); }
-.btn-primary.stop:hover { filter: brightness(0.9); }
+
+/* ---------- 工具条弹出菜单（筛选 / 模型切换） ---------- */
+.popup-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 210px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+  z-index: 20;
+}
+.popup-menu.hidden { display: none; }
+/* 靠右的入口，菜单也向左展开，免得顶出可视区 */
+.popup-menu.align-right { left: auto; right: 0; }
+.popup-title {
+  padding: 6px 10px 4px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu-item:hover, .menu-item.active { background: var(--active-bg); }
+.menu-item[disabled] { color: var(--text-dim); cursor: not-allowed; }
+.menu-item[disabled]:hover { background: transparent; }
+.menu-item .menu-check { width: 15px; height: 15px; flex-shrink: 0; color: var(--accent); }
+.menu-item .menu-grow { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.menu-item .menu-note { color: var(--text-dim); font-size: 11.5px; }
+.menu-item .menu-arrow { width: 13px; height: 13px; opacity: 0.6; flex-shrink: 0; }
+
+/* 模型二级菜单：贴在提供商项右侧向上展开 */
+.menu-sub {
+  position: absolute;
+  left: calc(100% + 4px);
+  bottom: 0;
+  min-width: 190px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+  z-index: 21;
+}
+/* 本项目的 .hidden 一律按组件各写一条，没有全局兜底的那条，漏写等于不隐藏 */
+.menu-sub.hidden { display: none; }
+/* 右侧放不下时翻到左侧展开 */
+.menu-sub.flip { left: auto; right: calc(100% + 4px); }
+.menu-row { position: relative; }
 
 /* ---------- 设置页（全屏覆盖） ---------- */
 .settings-view {
@@ -905,6 +1119,29 @@ body {
   white-space: pre-wrap;
 }
 .field-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* 三档分段选择器（设置页用，与侧栏底部的主题滑块是两码事：那个是图标按钮） */
+.seg-group {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  background: var(--panel);
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 18px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.seg-btn:hover { color: var(--text); background: var(--bg); }
+.seg-btn.active { background: var(--active-bg); color: var(--accent); font-weight: 600; }
 
 /* 数字输入：隐藏系统默认的上下箭头，换成与其余控件同风格的按钮 */
 .field input[type="number"] { appearance: textfield; -moz-appearance: textfield; }

@@ -1,5 +1,7 @@
-// 版本资源：改动 internal/version 后执行 go generate ./cmd/wen 重新生成 .syso
-// （生成器说明见 tools/genwinres），go build 会自动链入本目录的 .syso。
+// 版本资源与程序图标：改动 internal/version 或 logo 图源后执行 go generate ./cmd/wen
+// 重新生成 .syso（生成器说明见 tools/genwinres 与 tools/genicon），go build 会自动
+// 链入本目录的 .syso。两条指令有先后依赖——genicon 先出 .ico，genwinres 才编得进去。
+//go:generate go run wen/tools/genicon
 //go:generate go run wen/tools/genwinres
 
 package main

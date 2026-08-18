@@ -1,10 +1,11 @@
-// genwinres 从 internal/version 生成 Windows 可执行文件的版本资源（.syso）。
+// genwinres 从 internal/version 生成 Windows 可执行文件的版本资源与程序图标（.syso）。
 //
 // 版本号的唯一来源是 internal/version.Version，本工具把它写进 VERSIONINFO 资源，
 // 使 wen.exe 的「属性 → 详细信息」里显示同一个版本——发布产物的版本与界面、
-// /status、启动日志由此保持一致。生成的 .syso 放在 cmd/wen/ 下随包入库，
+// /status、启动日志由此保持一致。资源里同时编入程序图标，取 tools/genicon 生成的
+// 那份 .ico——与浏览器标签页图标同源。生成的 .syso 放在 cmd/wen/ 下随包入库，
 // go build 会自动把同目录的 .syso 链入，因此日常构建命令不变；
-// 只有改动版本号后需要重新执行 go generate ./cmd/wen。
+// 只有改动版本号或换了图标后需要重新执行 go generate ./cmd/wen。
 package main
 
 import (
@@ -53,6 +54,8 @@ func main() {
 		VarFileInfo: goversioninfo.VarFileInfo{
 			Translation: goversioninfo.Translation{LangID: 0x0804, CharsetID: 0x04B0}, // 简体中文 / Unicode
 		},
+		// 与 Web UI 的浏览器标签页图标同一个文件，由 tools/genicon 从 logo 图源生成
+		IconPath: "../../internal/server/webui/favicon.ico",
 	}
 	vi.Build()
 	vi.Walk()

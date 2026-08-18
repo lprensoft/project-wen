@@ -10,12 +10,13 @@ let currentSession = null; // 当前 session id
 let busy = false;          // 正在等待回复
 let chatAbort = null;      // 进行中对话的中断控制器，非 null 表示可停止
 
-// 发送按钮在等待回复期间变为「停止」，点击可中断本轮生成
+// 发送按钮在等待回复期间变为「停止」，点击可中断本轮生成。
+// 两个图标都在 DOM 里，由 .stop 决定显示哪个，因此这里只需切类。
 function setSending(on) {
   busy = on;
-  sendBtn.textContent = on ? "停止" : "发送";
   sendBtn.classList.toggle("stop", on);
-  sendBtn.title = on ? "停止生成" : "";
+  sendBtn.title = on ? "停止生成" : "发送";
+  sendBtn.setAttribute("aria-label", sendBtn.title);
 }
 
 // ---------- 主题（三段滑块：跟随系统 / 浅色 / 深色） ----------
@@ -44,6 +45,291 @@ darkMedia.addEventListener("change", () => {
   if (themeSetting === "system") applyTheme();
 });
 applyTheme();
+
+// ---------- 通用设置：聊天栏宽度 ----------
+// 与主题同一套做法：JS 只写 data-chat-width 标记，三档的具体宽度写在 style.css 里，
+// 免得同一组数值散在两处。首屏前由 index.html 的内联脚本先套上，避免布局跳动。
+
+const chatWidthSeg = $("#chat-width-seg");
+const chatWidthDesc = $("#chat-width-desc");
+
+function applyChatWidth(name) {
+  document.documentElement.dataset.chatWidth = name;
+  localStorage.setItem("wen-chat-width", name);
+  for (const btn of chatWidthSeg.querySelectorAll(".seg-btn")) {
+    btn.classList.toggle("active", btn.dataset.width === name);
+  }
+  // 实际宽度取自计算样式而不是 JS 里的常量，改 CSS 就会跟着变
+  const px = getComputedStyle(document.documentElement).getPropertyValue("--chat-width").trim();
+  chatWidthDesc.textContent = `消息与输入框所占的栏宽，窗口不够宽时自动收窄。当前 ${px}。`;
+}
+
+chatWidthSeg.addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (btn) applyChatWidth(btn.dataset.width);
+});
+applyChatWidth(localStorage.getItem("wen-chat-width") || "medium");
+
+// ---------- 输入框工具条上的弹出菜单 ----------
+// 筛选与模型切换共用一套开合逻辑：同时最多开一个，点击别处或按 Esc 关闭。
+
+const openPopups = new Set();
+
+function closePopups(except) {
+  for (const p of openPopups) {
+    if (p.menu === except) continue;
+    p.menu.classList.add("hidden");
+    p.chip.classList.remove("open");
+    openPopups.delete(p);
+  }
+}
+
+function togglePopup(chip, menu, build) {
+  const willOpen = menu.classList.contains("hidden");
+  closePopups(willOpen ? menu : null);
+  if (!willOpen) {
+    menu.classList.add("hidden");
+    chip.classList.remove("open");
+    return;
+  }
+  build();
+  menu.classList.remove("hidden");
+  chip.classList.add("open");
+  openPopups.add({ chip, menu });
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".composer-anchor")) closePopups(null);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closePopups(null);
+});
+
+const checkIconSVG =
+  '<svg class="menu-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const blankIconSVG = '<span class="menu-check"></span>';
+const arrowIconSVG =
+  '<svg class="menu-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>';
+
+// ---------- 显示内容筛选 ----------
+// 纯展示开关：加在消息区上的类由 CSS 决定藏什么，因此对历史与正在流式输出的
+// 内容一视同仁，切换时不需要重新渲染，也不会跟轮询的指纹比对打架。
+// 唯一的例外是「提示词」——它还要让服务端开始采集，见 sendMessage。
+
+const FILTERS = [
+  { key: "prompt", label: "发给模型的提示词", note: "调试用" },
+  { key: "tools", label: "工具调用" },
+  { key: "thinking", label: "思考过程" },
+  { key: "heartbeat", label: "心跳唤醒" },
+];
+const FILTER_DEFAULTS = { prompt: false, tools: true, thinking: true, heartbeat: true };
+
+const filterChip = $("#btn-filter");
+const filterMenu = $("#filter-menu");
+let filters = loadFilters();
+
+function loadFilters() {
+  const saved = { ...FILTER_DEFAULTS };
+  try {
+    Object.assign(saved, JSON.parse(localStorage.getItem("wen-filters") || "{}"));
+  } catch {
+    // 存档损坏时退回默认值，不值得为此打断使用
+  }
+  return saved;
+}
+
+function applyFilters() {
+  for (const f of FILTERS) {
+    messagesEl.classList.toggle("hide-" + f.key, !filters[f.key]);
+  }
+  // 有项被关掉时点亮入口，否则「东西藏起来了」这件事本身看不出来
+  const changed = FILTERS.some((f) => filters[f.key] !== FILTER_DEFAULTS[f.key]);
+  filterChip.classList.toggle("filtered", changed);
+  localStorage.setItem("wen-filters", JSON.stringify(filters));
+}
+
+function buildFilterMenu() {
+  filterMenu.textContent = "";
+  const title = document.createElement("div");
+  title.className = "popup-title";
+  title.textContent = "聊天区显示以下内容";
+  filterMenu.appendChild(title);
+
+  for (const f of FILTERS) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "menu-item";
+    item.innerHTML = filters[f.key] ? checkIconSVG : blankIconSVG;
+    const label = document.createElement("span");
+    label.className = "menu-grow";
+    label.textContent = f.label;
+    item.appendChild(label);
+    if (f.note) {
+      const note = document.createElement("span");
+      note.className = "menu-note";
+      note.textContent = f.note;
+      item.appendChild(note);
+    }
+    item.addEventListener("click", () => {
+      filters[f.key] = !filters[f.key];
+      applyFilters();
+      buildFilterMenu(); // 就地重建，菜单保持展开便于连续勾选
+    });
+    filterMenu.appendChild(item);
+  }
+}
+
+filterChip.addEventListener("click", () => togglePopup(filterChip, filterMenu, buildFilterMenu));
+applyFilters();
+
+// ---------- 模型快捷切换 ----------
+// 与设置页的模型配置互不相干：这里只读提供商与模型清单、只写「当前选中项」，
+// 各自持有自己的一份数据，免得两个视图共用一份状态互相踩。
+
+const modelChip = $("#btn-model");
+const modelMenu = $("#model-menu");
+const modelLabel = $("#model-label");
+let switcherDoc = null; // 快捷切换用的 /api/models 副本
+let subTimer = null;
+
+async function loadModelSwitcher() {
+  try {
+    switcherDoc = await fetch("/api/models").then((r) => r.json());
+    renderModelLabel();
+  } catch {
+    modelLabel.textContent = "模型不可用";
+  }
+}
+
+function renderModelLabel() {
+  const cur = (switcherDoc && switcherDoc.current) || {};
+  if (!cur.provider) {
+    modelLabel.textContent = "未选择模型";
+    modelChip.title = "切换当前使用的模型";
+    return;
+  }
+  const p = switcherDoc.providers.find((x) => x.name === cur.provider);
+  const m = p && (p.models || []).find((x) => x.id === cur.model);
+  const text = cur.provider + " / " + ((m && m.name) || cur.model || "—");
+  modelLabel.textContent = text;
+  modelChip.title = text + "（点击切换）";
+}
+
+function buildModelMenu() {
+  modelMenu.textContent = "";
+  if (!switcherDoc) {
+    const tip = document.createElement("div");
+    tip.className = "popup-title";
+    tip.textContent = "模型清单加载中…";
+    modelMenu.appendChild(tip);
+    loadModelSwitcher().then(() => {
+      if (!modelMenu.classList.contains("hidden")) buildModelMenu();
+    });
+    return;
+  }
+  const cur = switcherDoc.current || {};
+  const title = document.createElement("div");
+  title.className = "popup-title";
+  title.textContent = "切换模型";
+  modelMenu.appendChild(title);
+
+  for (const p of switcherDoc.providers) {
+    const row = document.createElement("div");
+    row.className = "menu-row";
+
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "menu-item";
+    item.innerHTML = p.name === cur.provider ? checkIconSVG : blankIconSVG;
+    const name = document.createElement("span");
+    name.className = "menu-grow";
+    name.textContent = p.name;
+    item.appendChild(name);
+
+    // 不可用的提供商置灰保留而非隐藏——不然会以为配置丢了
+    const models = p.models || [];
+    const reason = models.length === 0 ? "无模型" : !p.has_api_key ? "未配置密钥" : "";
+    if (reason) {
+      item.disabled = true;
+      const note = document.createElement("span");
+      note.className = "menu-note";
+      note.textContent = reason;
+      item.appendChild(note);
+    } else {
+      item.insertAdjacentHTML("beforeend", arrowIconSVG);
+    }
+    row.appendChild(item);
+
+    if (!reason) {
+      const sub = buildModelSubmenu(p, cur);
+      sub.classList.add("hidden");
+      row.appendChild(sub);
+      const open = () => {
+        clearTimeout(subTimer);
+        for (const s of modelMenu.querySelectorAll(".menu-sub")) s.classList.add("hidden");
+        sub.classList.remove("hidden");
+        // 右侧放不下时翻到左边展开
+        sub.classList.toggle("flip", sub.getBoundingClientRect().right > window.innerWidth - 8);
+      };
+      // 悬停展开，离开留一点余量：鼠标斜着移向子菜单时不该被判成「离开」
+      row.addEventListener("mouseenter", open);
+      row.addEventListener("mouseleave", () => {
+        subTimer = setTimeout(() => sub.classList.add("hidden"), 220);
+      });
+      item.addEventListener("click", open); // 触摸设备没有悬停，点击也能展开
+    }
+    modelMenu.appendChild(row);
+  }
+}
+
+function buildModelSubmenu(p, cur) {
+  const sub = document.createElement("div");
+  sub.className = "menu-sub";
+  for (const m of p.models || []) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "menu-item";
+    const active = p.name === cur.provider && m.id === cur.model;
+    btn.innerHTML = active ? checkIconSVG : blankIconSVG;
+    const label = document.createElement("span");
+    label.className = "menu-grow";
+    label.textContent = m.name || m.id;
+    btn.appendChild(label);
+    btn.title = m.id;
+    btn.addEventListener("click", () => quickSwitchModel(p.name, m.id));
+    sub.appendChild(btn);
+  }
+  return sub;
+}
+
+// 名字不能叫 switchModel：设置页的模型配置那节已经有一个同名函数，
+// 而函数声明同名时后写的会覆盖先写的，两处都会调到设置页那个版本。
+async function quickSwitchModel(provider, model) {
+  const prev = modelLabel.textContent;
+  modelLabel.textContent = "切换中…";
+  closePopups(null);
+  try {
+    const res = await fetch("/api/models/current", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, model }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "HTTP " + res.status);
+    }
+    switcherDoc = await res.json();
+    renderModelLabel();
+  } catch (e) {
+    modelLabel.textContent = prev;
+    addError("切换模型失败：" + e.message);
+  }
+}
+
+modelChip.addEventListener("click", () => togglePopup(modelChip, modelMenu, buildModelMenu));
+loadModelSwitcher();
 
 // ---------- Markdown 渲染 ----------
 
@@ -185,10 +471,12 @@ function addBubble(role, text) {
   return bubble;
 }
 
-function addSysBlock(text) {
+// kind 供显示内容筛选按块过滤；不传表示不受筛选影响（如「已停止生成」这类提示）
+function addSysBlock(text, kind) {
   hideHint();
   const div = document.createElement("div");
   div.className = "sys-block";
+  if (kind) div.dataset.kind = kind;
   div.textContent = text;
   messagesEl.appendChild(div);
   scrollBottom();
@@ -215,6 +503,7 @@ function addThinkingBlock(text, open) {
   hideHint();
   const details = document.createElement("details");
   details.className = "thinking-block";
+  details.dataset.kind = "thinking";
   if (open) details.open = true;
   const summary = document.createElement("summary");
   summary.textContent = "🧠 思考过程";
@@ -232,6 +521,7 @@ function addToolBlock(name, args, result) {
   hideHint();
   const details = document.createElement("details");
   details.className = "tool-block";
+  details.dataset.kind = "tool";
 
   const summary = document.createElement("summary");
   summary.innerHTML = `🔧 调用工具 <span class="tool-name"></span>`;
@@ -267,6 +557,46 @@ function setToolDetail(detailEl, args, result) {
     running.textContent = "执行中…";
     detailEl.appendChild(running);
   }
+}
+
+// addPromptBlock 展示本次调用实际提交给模型的请求体。内容可能有几十万字，
+// 因此默认折叠且延迟到展开那一刻才格式化并写进 DOM——每轮都渲染一遍会明显卡顿。
+function addPromptBlock(payload) {
+  hideHint();
+  const details = document.createElement("details");
+  details.className = "prompt-block";
+  details.dataset.kind = "prompt";
+
+  const text = JSON.stringify(payload, null, 2);
+  const summary = document.createElement("summary");
+  summary.textContent = "📤 发给模型的提示词 ";
+  const size = document.createElement("span");
+  size.className = "prompt-size";
+  const msgCount = (payload && payload.messages && payload.messages.length) || 0;
+  size.textContent = `（${msgCount} 条消息，${formatSize(text.length)}）`;
+  summary.appendChild(size);
+  details.appendChild(summary);
+
+  const content = document.createElement("div");
+  content.className = "prompt-content";
+  details.appendChild(content);
+
+  let filled = false;
+  details.addEventListener("toggle", () => {
+    if (!details.open || filled) return;
+    filled = true;
+    content.textContent = text;
+  });
+
+  messagesEl.appendChild(details);
+  scrollBottom();
+  return details;
+}
+
+function formatSize(chars) {
+  if (chars < 1000) return chars + " 字符";
+  if (chars < 1000000) return (chars / 1000).toFixed(1) + "k 字符";
+  return (chars / 1000000).toFixed(2) + "M 字符";
 }
 
 function formatArgs(args) {
@@ -371,7 +701,9 @@ function renderHistory(messages) {
     } else if (m.role === "user" && (m.kind === "ephemeral" || m.origin === "heartbeat")) {
       // 机器注入的一次性输入：不渲染成用户气泡，只留一行来源提示。
       // origin=heartbeat 的兜底覆盖标记机制上线前落盘的旧心跳。
-      addSysBlock(m.origin === "heartbeat" ? "💓 心跳唤醒" : "⏱ 后台唤醒（" + (m.origin || "系统") + "）");
+      addSysBlock(
+        m.origin === "heartbeat" ? "💓 心跳唤醒" : "⏱ 后台唤醒（" + (m.origin || "系统") + "）",
+        m.origin === "heartbeat" ? "heartbeat" : "");
     } else if (m.role === "user") {
       addBubble("user", m.content);
     } else if (m.role === "assistant") {
@@ -427,7 +759,13 @@ async function sendMessage() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: currentSession, message: text }),
+      // 提示词采集由界面开关驱动：关着时服务端不组装也不下发，
+      // 代价是它只对开启之后的轮次生效，回溯不了之前的
+      body: JSON.stringify({
+        session_id: currentSession,
+        message: text,
+        debug_prompt: !!filters.prompt,
+      }),
       signal: chatAbort.signal,
     });
     if (!res.ok) {
@@ -436,7 +774,11 @@ async function sendMessage() {
     }
 
     for await (const ev of sseEvents(res.body)) {
-      if (ev.type === "thinking") {
+      if (ev.type === "prompt") {
+        finishBubble();   // 属于下一次调用，先给上一段文本定稿
+        finishThinking();
+        addPromptBlock(ev.prompt);
+      } else if (ev.type === "thinking") {
         if (!thinkingBlock) thinkingBlock = addThinkingBlock("", true);
         thinkingBlock.querySelector(".thinking-content").textContent += ev.content || "";
         scrollBottom();
@@ -727,6 +1069,8 @@ $("#settings-nav").addEventListener("click", (e) => {
 
 function closeSettings() {
   settingsView.classList.add("hidden");
+  // 设置页里也能改当前模型，回到聊天界面时把工具条上的显示对齐
+  loadModelSwitcher();
 }
 
 // 与 internal/plugin 的 SourceBuiltin / SourceExternal 对应
@@ -1737,7 +2081,30 @@ function autoGrow() {
   inputEl.style.height = "auto";
   inputEl.style.height = Math.min(inputEl.scrollHeight, inputMaxHeight) + "px";
   inputEl.style.overflowY = inputEl.scrollHeight > inputMaxHeight ? "auto" : "hidden";
+  syncComposerHeight(); // 输入框高度一变，悬浮卡片给消息区让出的空白也要跟着变
 }
+
+// 输入框是悬浮的，消息区得留出与它等高的底部空白，否则最后一条消息被压在下面。
+// 高度随输入内容变化，所以量出来写进 CSS 变量，而不是在样式里写死一个值。
+const composerBox = $(".composer-box");
+const chatEl = $(".chat");
+
+function syncComposerHeight() {
+  // 原本贴着底就继续贴着，不因输入框变高而"浮起"
+  const stuck = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 8;
+  chatEl.style.setProperty("--composer-h", composerBox.offsetHeight + 20 + "px"); // 20 = 卡片下方留白
+  // 消息区为滚动条预留的宽度，输入框要让出同样一段才能与上方内容对齐。
+  // 各系统与缩放比例下取值不同，只能实测
+  chatEl.style.setProperty("--scrollbar-w", messagesEl.offsetWidth - messagesEl.clientWidth + "px");
+  if (stuck) scrollBottom();
+}
+
+// 输入时同步调用而不是只靠观察器：观察器要等到下一帧才回调，
+// 且页面不在前台时可能一直不回调，留出的空白会停在旧值上。
+// 观察器仍然保留，兜住窗口缩放、工具条文字换行这些非输入引起的变化。
+syncComposerHeight();
+new ResizeObserver(syncComposerHeight).observe(composerBox);
+new ResizeObserver(syncComposerHeight).observe(messagesEl); // 窗口缩放改变栏宽时重新对齐
 
 inputEl.addEventListener("input", () => {
   autoGrow();
