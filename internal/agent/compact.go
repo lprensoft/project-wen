@@ -181,7 +181,11 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 			History:   messagesOf(g.msgs),
 			Summary:   summary,
 		})
-		content := summaryPrefix + summary
+		// 摘要是 pinned 的、永不参与裁剪，因此它里面的时段描述会一直留在上下文里。
+		// 不带时间锚的话，那些描述会被当成「现在」，压缩越多这种错位越顽固。
+		now := time.Now()
+		content := summaryPrefix + summary +
+			fmt.Sprintf("\n\n（以上对话发生在 %s 之前）", formatNow(now))
 		if len(notes) > 0 {
 			content += "\n\n" + strings.Join(notes, "\n")
 		}
@@ -189,7 +193,7 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 			Message: llm.Message{Role: llm.RoleUser, Content: content},
 			Kind:    session.KindSummary,
 			Tag:     g.tag,
-			TS:      time.Now(),
+			TS:      now,
 		})
 	}
 

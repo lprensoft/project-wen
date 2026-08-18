@@ -415,7 +415,7 @@ func (p *Plugin) lastReport(loc string) (Report, bool, string) {
 // renderConditions 渲染天气本身（不含地名）。地名与「谁所在」由调用方拼，
 // 因为同城与分处两地的措辞不一样，而措辞正是这条注入起不起作用的关键。
 //
-// 不注入「几分钟前采集」：当前时间由核心的环境块每轮给出，再加一个逐轮变化的
+// 不注入「几分钟前采集」：当前时间由核心的本轮状态块每轮给出，再加一个逐轮变化的
 // 采集间隔只是噪声；数据够不够新已经由过期时限判过了。
 func renderConditions(r Report) string {
 	var b strings.Builder

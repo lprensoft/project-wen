@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
@@ -142,52 +141,21 @@ func TestNoTools(t *testing.T) {
 	}
 }
 
-func TestTurnPromptReportsGap(t *testing.T) {
+// 间隔本身由核心每轮给出（<本轮状态> 的「距上一条消息」与历史里的间隔标记），
+// 这里只负责说清该拿它怎么办——两处都报一遍只会让措辞慢慢漂移。
+func TestTimeRulesTellsWhatToDoWithGap(t *testing.T) {
 	p := newTestPlugin(t, map[string]any{"persona": "角色"})
-	ev := plugin.TurnEvent{History: []plugin.TaggedMessage{
-		{Message: llm.Message{Role: llm.RoleUser, Content: "旧的"}, TS: time.Now().Add(-50 * time.Hour)},
-	}}
-
-	got, err := p.TurnPrompt(context.Background(), ev)
-	if err != nil {
-		t.Fatal(err)
+	got := p.SystemPrompt()
+	if !strings.Contains(got, "距上一条消息") {
+		t.Errorf("时间规则应当接住核心给出的间隔:\n%s", got)
 	}
-	if !strings.Contains(got, "2 天") {
-		t.Errorf("应报告间隔量级: %q", got)
+	if !strings.Contains(got, "场景与两人的状态应当相应推进") {
+		t.Errorf("应当说明间隔足够长时该怎么演:\n%s", got)
 	}
-
-	// 连续对话中说「刚刚」是废话
-	ev.History[0].TS = time.Now().Add(-5 * time.Second)
-	if got, _ := p.TurnPrompt(context.Background(), ev); got != "" {
-		t.Errorf("间隔很短时不该注入: %q", got)
-	}
-	// 空会话没有间隔可言
-	if got, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{}); got != "" {
-		t.Errorf("空会话不该注入: %q", got)
-	}
-	// 关掉时间约束后不再注入
+	// 关掉时间约束后整段都不注入
 	q := newTestPlugin(t, map[string]any{"time_rules": false})
-	ev.History[0].TS = time.Now().Add(-50 * time.Hour)
-	if got, _ := q.TurnPrompt(context.Background(), ev); got != "" {
-		t.Errorf("关掉时间约束后不该注入: %q", got)
-	}
-}
-
-func TestHumanizeGap(t *testing.T) {
-	cases := []struct {
-		d    time.Duration
-		want string
-	}{
-		{90 * time.Second, "1 分钟"},
-		{3 * time.Hour, "3 小时"},
-		{50 * time.Hour, "2 天"},
-		{45 * 24 * time.Hour, "1 个月"},
-		{400 * 24 * time.Hour, "1 年"},
-	}
-	for _, c := range cases {
-		if got := humanizeGap(c.d); got != c.want {
-			t.Errorf("humanizeGap(%v) = %q, want %q", c.d, got, c.want)
-		}
+	if strings.Contains(q.SystemPrompt(), "距上一条消息") {
+		t.Error("关掉时间约束后不该出现")
 	}
 }
 

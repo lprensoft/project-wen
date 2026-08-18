@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"wen/internal/plugin"
 )
@@ -90,7 +89,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "time_rules", Label: "启用时间一致性约束", Type: plugin.FieldBool,
-			Description: "要求涉及时间的表述与系统环境中的当前时间一致，并把运行环境信息排除在角色自我认知之外。",
+			Description: "要求涉及时间的表述与本轮状态中的当前时间一致（而不是沿用历史里出现过的时刻），并把运行环境信息排除在角色自我认知之外。",
 			Default:     defaultTimeRules,
 		},
 		{
@@ -153,7 +152,7 @@ func (p *Plugin) snapshot() settings {
 }
 
 // SystemPrompt 拼装各段设定与规则。全部内容都是静态的——设定来自配置、规则是常量、
-// 当前时间由核心的环境块每轮提供——因此不需要按轮生成。
+// 当前时间由核心的本轮状态块每轮提供——因此不需要按轮生成。
 func (p *Plugin) SystemPrompt() string {
 	s := p.snapshot()
 	var parts []string
@@ -180,24 +179,6 @@ func (p *Plugin) SystemPrompt() string {
 		parts = append(parts, memoryRules)
 	}
 	return strings.Join(parts, "\n\n")
-}
-
-// TurnPrompt 注入距上次对话的间隔。这一条既服务时间一致性，也服务场景的连续性：
-// 隔了三分钟还是隔了三天，场景该不该延续完全不同，而模型从历史里看不出这个间隔。
-func (p *Plugin) TurnPrompt(_ context.Context, ev plugin.TurnEvent) (string, error) {
-	if !p.snapshot().timeRules {
-		return "", nil
-	}
-	last, ok := lastTS(ev.History)
-	if !ok {
-		return "", nil
-	}
-	gap := time.Since(last)
-	if gap < time.Minute {
-		return "", nil // 连续对话中，说「刚刚」是废话
-	}
-	return "[对话间隔]\n距上次对话已过去 " + humanizeGap(gap) +
-		"。若这段间隔足够长，场景与两人的状态应当相应推进，而不是接着上一句继续。", nil
 }
 
 // OnCompact 在历史被物理删除前抽出最后一处【】原文，作为注记留在摘要末尾。
