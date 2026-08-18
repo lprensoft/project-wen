@@ -18,6 +18,8 @@
   --code-bg: rgba(0, 0, 0, 0.06);
   --pre-bg: #0f172a;
   --pre-text: #e2e8f0;
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.38);
 }
 
 :root[data-theme="dark"] {
@@ -38,6 +40,8 @@
   --code-bg: rgba(255, 255, 255, 0.1);
   --pre-bg: #0b1017;
   --pre-text: #d7e0ec;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);
 }
 
 html, body { height: 100%; }
@@ -46,6 +50,36 @@ body {
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   color: var(--text);
   background: var(--bg);
+}
+
+/* ---------- 滚动条 ---------- */
+/* 自绘滚动条：细窄、圆角、悬停才变明显。适用于所有滚动容器（会话列表、
+   消息区、设置页、弹窗、两处 textarea），故用通配符而非逐个选择器——漏一处就会
+   在那里突冒出一根原生滚动条。
+   ::-webkit-scrollbar 与标准属性（scrollbar-width / scrollbar-color）**不能叠着写**当渐进增强：
+   Chromium 一旦在元素上看到标准属性，就会整体忽略 ::-webkit- 那一套，两边都写反而只剩
+   “细一点的原生滚动条”。因此用 @supports 把两条路互斥开，只有不认识 ::-webkit-scrollbar 的
+   浏览器（Firefox）才走标准属性。
+   滑块一律用 background-color 而非 background 简写：后者会把 background-clip 重置回 border-box，
+   悬停时滑块会突然变胖。 */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background-color: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 2px solid transparent; /* 透明边框：视觉上滑块只有 6px，可点区域仍是 10px */
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-corner { background-color: transparent; }
+
+/* 代码块两个主题下都是深色底，跟随主题的深色滑块在浅色主题里会看不见 */
+.bubble.md pre::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.22); }
+.bubble.md pre::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.38); }
+
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+  .bubble.md pre { scrollbar-color: rgba(255, 255, 255, 0.22) transparent; }
 }
 
 .app { display: flex; height: 100vh; }
@@ -102,7 +136,6 @@ body {
 
 .sidebar-footer {
   padding: 10px 12px;
-  border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -191,6 +224,7 @@ body {
 .messages {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable; /* 内容从不满一屏长到超出时不再横向抖动 */
   padding: 24px clamp(16px, 8%, 120px);
   display: flex;
   flex-direction: column;
