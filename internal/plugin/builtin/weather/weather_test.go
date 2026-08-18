@@ -10,22 +10,89 @@ import (
 	"wen/internal/plugin"
 )
 
-func TestRenderReport(t *testing.T) {
-	got := renderReport(Report{
-		Place: "杭州 · 浙江省 · 中国", Condition: "小雨",
-		TempC: 18.4, FeelsC: 16.9, Humidity: 82, WindKmh: 9.3,
-	})
-	want := "杭州 · 浙江省 · 中国：小雨，18℃（体感 17℃），湿度 82%，风速 9 km/h。"
+// setObs 直接往缓存里塞一份观测，免得每个测试都去过一遍网络。
+func setObs(p *Plugin, loc string, rep Report) {
+	p.dataMu.Lock()
+	defer p.dataMu.Unlock()
+	o := p.entryLocked(loc)
+	o.cur, o.curOK = rep, true
+}
+
+func report(place, cond string, temp float64, age time.Duration) Report {
+	return Report{Place: place, Condition: cond, TempC: temp, Fetched: time.Now().Add(-age)}
+}
+
+func TestRenderConditions(t *testing.T) {
+	got := renderConditions(Report{Condition: "小雨", TempC: 18.4, FeelsC: 16.9, Humidity: 82, WindKmh: 9.3})
+	want := "小雨，18℃（体感 17℃），湿度 82%，风速 9 km/h。"
 	if got != want {
 		t.Errorf("渲染 = %q\n期望 = %q", got, want)
 	}
 }
 
 // 体感与气温差不到一度时不写体感：一行里两个一样的数字只是噪声。
-func TestRenderReportOmitsCloseApparent(t *testing.T) {
-	got := renderReport(Report{Place: "杭州", Condition: "晴", TempC: 18, FeelsC: 18.2, Humidity: 40, WindKmh: 3})
+func TestRenderConditionsOmitsCloseApparent(t *testing.T) {
+	got := renderConditions(Report{Condition: "晴", TempC: 18, FeelsC: 18.2, Humidity: 40, WindKmh: 3})
 	if strings.Contains(got, "体感") {
 		t.Errorf("体感与气温接近时不应写出来: %q", got)
+	}
+}
+
+// ---------- 两处地点的归一化 ----------
+
+func TestNormalizeLocations(t *testing.T) {
+	cases := []struct {
+		name        string
+		cfg         map[string]any
+		wantPersona string
+		wantUser    string
+		wantSame    bool
+	}{
+		{
+			name:        "同城时忽略我所在的城市",
+			cfg:         map[string]any{"persona_location": "杭州", "same_city": true, "user_location": "上海"},
+			wantPersona: "杭州", wantUser: "", wantSame: true,
+		},
+		{
+			name:        "分处两地各算各的",
+			cfg:         map[string]any{"persona_location": "杭州", "same_city": false, "user_location": "上海"},
+			wantPersona: "杭州", wantUser: "上海", wantSame: false,
+		},
+		{
+			// 否则会注入两行一模一样的天气，读起来像两个地方碰巧天气相同
+			name:        "两处填了同一个地方就是同城",
+			cfg:         map[string]any{"persona_location": "杭州", "same_city": false, "user_location": "杭州"},
+			wantPersona: "杭州", wantUser: "", wantSame: true,
+		},
+		{
+			name:        "只填我所在的城市也合法",
+			cfg:         map[string]any{"persona_location": "", "same_city": false, "user_location": "上海"},
+			wantPersona: "", wantUser: "上海", wantSame: false,
+		},
+		{
+			name:        "两侧空白被裁掉",
+			cfg:         map[string]any{"persona_location": "  杭州  ", "same_city": true},
+			wantPersona: "杭州", wantUser: "", wantSame: true,
+		},
+	}
+	for _, c := range cases {
+		persona, user, same := normalizeLocations(c.cfg)
+		if persona != c.wantPersona || user != c.wantUser || same != c.wantSame {
+			t.Errorf("%s: = (%q, %q, %v)，期望 (%q, %q, %v)",
+				c.name, persona, user, same, c.wantPersona, c.wantUser, c.wantSame)
+		}
+	}
+}
+
+func TestWantedLocationsDedups(t *testing.T) {
+	if got := wantedLocations("杭州", ""); len(got) != 1 || got[0] != "杭州" {
+		t.Errorf("= %v", got)
+	}
+	if got := wantedLocations("杭州", "杭州"); len(got) != 1 {
+		t.Errorf("同一个城市不该取两次: %v", got)
+	}
+	if got := wantedLocations("", ""); len(got) != 0 {
+		t.Errorf("都为空时不该有目标: %v", got)
 	}
 }
 
@@ -35,36 +102,38 @@ func TestInitRejectsStaleShorterThanRefresh(t *testing.T) {
 	p := New()
 	defer p.Stop()
 	err := p.Init(plugin.InitContext{}, map[string]any{
-		"location": "杭州", "refresh_minutes": 60, "stale_minutes": 30,
+		"persona_location": "杭州", "refresh_minutes": 60, "stale_minutes": 30,
 	})
 	if err == nil {
 		t.Fatal("过期时限小于刷新间隔时应当拒绝：那样刚取到的天气也立刻过期，等于永不注入")
 	}
 }
 
-func TestInitDefaultsAreConsistent(t *testing.T) {
-	var refresh, stale int
-	for _, f := range New().ConfigFields() {
-		switch f.Key {
-		case "refresh_minutes":
-			refresh, _ = f.Default.(int)
-		case "stale_minutes":
-			stale, _ = f.Default.(int)
+func TestConfigDefaults(t *testing.T) {
+	fields := New().ConfigFields()
+	byKey := map[string]plugin.ConfigField{}
+	for _, f := range fields {
+		byKey[f.Key] = f
+	}
+	for _, k := range []string{"persona_location", "same_city", "user_location", "refresh_minutes", "stale_minutes"} {
+		if _, ok := byKey[k]; !ok {
+			t.Fatalf("缺少配置项 %q", k)
 		}
 	}
-	if refresh == 0 || stale == 0 {
-		t.Fatal("刷新间隔与过期时限都应当有默认值")
+	if byKey["same_city"].Default != true {
+		t.Error("默认应当同城：角色扮演多数发生在用户自己的世界里，也省掉一次请求")
 	}
-	if stale < refresh {
-		t.Fatalf("默认值自相矛盾：过期时限 %d < 刷新间隔 %d", stale, refresh)
+	if byKey["stale_minutes"].Default.(int) < byKey["refresh_minutes"].Default.(int) {
+		t.Fatal("默认值自相矛盾：过期时限小于刷新间隔")
 	}
 }
 
-// 没填城市时不起后台循环，也不注入任何东西——包括那段讲天气怎么用的规则。
+// 一个城市都没填时不起后台循环，也不注入任何东西——包括那段讲天气怎么用的规则。
+// 奇幻舞台就该是这个状态。
 func TestNoLocationInjectsNothing(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": ""}); err != nil {
+	if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "", "user_location": ""}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if got := p.SystemPrompt(); got != "" {
@@ -80,54 +149,105 @@ func TestSystemPromptWithLocation(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "杭州"}); err != nil {
+	if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "杭州"}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if !strings.Contains(p.SystemPrompt(), "[天气感知]") {
-		t.Error("设置了城市后应当注入使用规则")
+	prompt := p.SystemPrompt()
+	if !strings.Contains(prompt, "[天气感知]") {
+		t.Fatal("设置了城市后应当注入使用规则")
+	}
+	// 规则的要害在于给角色自己的天气一个出口：进环境描写，而不是变成话题
+	if !strings.Contains(prompt, "场景与动作的描写") {
+		t.Error("规则里必须写明自己那边的天气进入环境描写，否则模型对它无事可做")
 	}
 }
 
-// ---------- 过期 ----------
+// ---------- 注入 ----------
 
-func TestFreshRespectsStale(t *testing.T) {
+func TestTurnPromptSameCity(t *testing.T) {
 	p := New()
 	defer p.Stop()
 	if err := p.Init(plugin.InitContext{}, map[string]any{
-		"location": "", "refresh_minutes": 10, "stale_minutes": 60,
+		"persona_location": "杭州", "same_city": true, "stale_minutes": 60,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	now := time.Now()
-	p.cur, p.curOK = Report{Condition: "晴", Fetched: now.Add(-30 * time.Minute)}, true
-	if _, ok := p.fresh(now); !ok {
-		t.Error("30 分钟前的数据在 60 分钟时限内，应当可用")
-	}
-	p.cur.Fetched = now.Add(-90 * time.Minute)
-	if _, ok := p.fresh(now); ok {
-		t.Error("超过时限的数据不该注入：让角色不知道天气，好过把旧天气当成现在的")
-	}
-}
+	p.Stop()
+	setObs(p, "杭州", report("杭州 · 浙江 · 中国", "小雨", 18, 0))
 
-func TestTurnPromptStaleInjectsNothing(t *testing.T) {
-	p := New()
-	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "", "stale_minutes": 60}); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	p.cur, p.curOK = Report{Place: "杭州", Condition: "晴", TempC: 20, Fetched: time.Now().Add(-3 * time.Hour)}, true
 	out, err := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
 	if err != nil {
 		t.Fatalf("TurnPrompt: %v", err)
 	}
-	if out != "" {
-		t.Errorf("过期数据不应注入，实际 %q", out)
+	if !strings.Contains(out, "你与对方同在") {
+		t.Errorf("同城时措辞应当合成一处，实际 %q", out)
 	}
+	if strings.Count(out, "\n") != 1 {
+		t.Errorf("同城时只该有一行天气，实际 %q", out)
+	}
+}
 
-	p.cur.Fetched = time.Now()
-	out, _ = p.TurnPrompt(context.Background(), plugin.TurnEvent{})
-	if !strings.Contains(out, "[当前天气]") || !strings.Contains(out, "杭州") {
-		t.Errorf("新鲜数据应当注入，实际 %q", out)
+func TestTurnPromptTwoCities(t *testing.T) {
+	p := New()
+	defer p.Stop()
+	if err := p.Init(plugin.InitContext{}, map[string]any{
+		"persona_location": "杭州", "same_city": false, "user_location": "上海", "stale_minutes": 60,
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	p.Stop()
+	setObs(p, "杭州", report("杭州 · 浙江 · 中国", "小雨", 18, 0))
+	setObs(p, "上海", report("上海 · 上海市 · 中国", "阴", 27, 0))
+
+	out, err := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if err != nil {
+		t.Fatalf("TurnPrompt: %v", err)
+	}
+	// 「你所在的」必须是角色那一处：角色自己的天气才进得了它的环境
+	if !strings.Contains(out, "你所在的杭州") {
+		t.Errorf("角色那处应当写成「你所在的」，实际 %q", out)
+	}
+	if !strings.Contains(out, "对方所在的上海") {
+		t.Errorf("用户那处应当写成「对方所在的」，实际 %q", out)
+	}
+}
+
+// 一边取到、一边取不到时注入取到的那一边——半边可用不该让整块消失。
+func TestTurnPromptOneSideStale(t *testing.T) {
+	p := New()
+	defer p.Stop()
+	if err := p.Init(plugin.InitContext{}, map[string]any{
+		"persona_location": "杭州", "same_city": false, "user_location": "上海", "stale_minutes": 60,
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	p.Stop()
+	setObs(p, "杭州", report("杭州 · 浙江 · 中国", "小雨", 18, 0))
+	setObs(p, "上海", report("上海 · 上海市 · 中国", "阴", 27, 3*time.Hour))
+
+	out, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if !strings.Contains(out, "你所在的杭州") {
+		t.Errorf("新鲜的那一边应当照常注入，实际 %q", out)
+	}
+	if strings.Contains(out, "上海") {
+		t.Errorf("过期的那一边不该注入，实际 %q", out)
+	}
+}
+
+func TestTurnPromptAllStaleInjectsNothing(t *testing.T) {
+	p := New()
+	defer p.Stop()
+	if err := p.Init(plugin.InitContext{}, map[string]any{
+		"persona_location": "杭州", "stale_minutes": 60,
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	p.Stop()
+	setObs(p, "杭州", report("杭州", "晴", 20, 3*time.Hour))
+
+	out, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if out != "" {
+		t.Errorf("全部过期时不该注入：让角色不知道天气，好过把旧天气当成此刻。实际 %q", out)
 	}
 }
 
@@ -137,9 +257,9 @@ func TestRefreshOncePopulatesCache(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
 	p := New()
 	defer p.Stop()
-	p.refreshOnce(context.Background(), http.DefaultClient, "杭州")
+	p.refreshOne(context.Background(), http.DefaultClient, "杭州")
 
-	rep, ok, _ := p.lastReport()
+	rep, ok, _ := p.lastReport("杭州")
 	if !ok {
 		t.Fatal("刷新成功后应当有观测")
 	}
@@ -154,7 +274,7 @@ func TestGeocodeResultIsCached(t *testing.T) {
 	p := New()
 	defer p.Stop()
 	for i := 0; i < 3; i++ {
-		p.refreshOnce(context.Background(), http.DefaultClient, "杭州")
+		p.refreshOne(context.Background(), http.DefaultClient, "杭州")
 	}
 	if *hits != 1 {
 		t.Errorf("地名解析发生了 %d 次，应当只有 1 次", *hits)
@@ -166,11 +286,11 @@ func TestRefreshFailureKeepsLastReport(t *testing.T) {
 	stubServer(t, geoOK, "")
 	p := New()
 	defer p.Stop()
-	p.cur, p.curOK = Report{Place: "杭州", Condition: "晴", TempC: 20, Fetched: time.Now()}, true
+	setObs(p, "杭州", report("杭州", "晴", 20, 0))
 
-	p.refreshOnce(context.Background(), http.DefaultClient, "杭州")
+	p.refreshOne(context.Background(), http.DefaultClient, "杭州")
 
-	rep, ok, lastErr := p.lastReport()
+	rep, ok, lastErr := p.lastReport("杭州")
 	if !ok || rep.Condition != "晴" {
 		t.Error("取数失败不该丢掉上一份观测")
 	}
@@ -185,7 +305,7 @@ func TestInitIsReentrant(t *testing.T) {
 	p := New()
 	defer p.Stop()
 	for i := 0; i < 3; i++ {
-		if err := p.Init(plugin.InitContext{}, map[string]any{"location": "杭州"}); err != nil {
+		if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "杭州"}); err != nil {
 			t.Fatalf("第 %d 次 Init: %v", i, err)
 		}
 	}
@@ -193,31 +313,32 @@ func TestInitIsReentrant(t *testing.T) {
 	p.Stop() // 重复 Stop 不应 panic
 }
 
-// 换了城市要丢掉旧观测；只改刷新间隔则保留——那份数据仍然是对的。
-func TestCacheClearedOnlyWhenLocationChanges(t *testing.T) {
-	stubServer(t, geoOK, fcOK)
+// 只丢掉不再需要的城市的缓存：留下的那一处仍然是对的，扔掉它可能白白空窗一段。
+func TestInitKeepsCacheForStillWantedCities(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "杭州"}); err != nil {
+	if err := p.Init(plugin.InitContext{}, map[string]any{
+		"persona_location": "杭州", "same_city": false, "user_location": "上海",
+	}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	p.refreshOnce(context.Background(), http.DefaultClient, "杭州")
+	p.Stop()
+	setObs(p, "杭州", report("杭州", "小雨", 18, 0))
+	setObs(p, "上海", report("上海", "阴", 27, 0))
 
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "杭州", "refresh_minutes": 20}); err != nil {
+	// 改成同城：上海不再需要
+	if err := p.Init(plugin.InitContext{}, map[string]any{
+		"persona_location": "杭州", "same_city": true,
+	}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if _, ok, _ := p.lastReport(); !ok {
-		t.Error("只改刷新间隔不该丢掉已有观测")
-	}
+	p.Stop()
 
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "北京"}); err != nil {
-		t.Fatalf("Init: %v", err)
+	if _, ok, _ := p.lastReport("杭州"); !ok {
+		t.Error("仍在用的城市不该丢缓存")
 	}
-	p.dataMu.RLock()
-	resolved := p.placeOK
-	p.dataMu.RUnlock()
-	if resolved {
-		t.Error("换了城市后旧的地名解析结果必须作废")
+	if _, ok, _ := p.lastReport("上海"); ok {
+		t.Error("不再需要的城市应当从缓存里清掉")
 	}
 }
 
@@ -237,7 +358,6 @@ func TestPluginContract(t *testing.T) {
 	if len(p.Tools()) != 0 {
 		t.Error("本插件不提供工具：它注入的是环境状态，不是一个可调用的能力")
 	}
-	// Init 不发网络请求：启动时断网不该让插件启用失败
 	var _ plugin.Stoppable = p
 	var _ plugin.TurnPrompter = p
 	var _ plugin.Actionable = p

@@ -2,6 +2,8 @@ package weather
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -9,16 +11,35 @@ import (
 	"wen/internal/plugin"
 )
 
+// askedStub 记录每次地名解析问到的城市，并按城市返回不同的解析结果。
+func askedStub(t *testing.T) *[]string {
+	t.Helper()
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "search") {
+			name := r.URL.Query().Get("name")
+			asked = append(asked, name)
+			_, _ = w.Write([]byte(`{"results":[{"name":"` + name + `","latitude":30.1,"longitude":120.1,"country":"中国"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(fcOK))
+	}))
+	pointAt(t, srv.URL)
+	t.Cleanup(srv.Close)
+	return &asked
+}
+
 // 测试按钮读的是配置弹窗里尚未保存的草稿值：先验后存正是它存在的理由。
-func TestActionUsesDraftLocation(t *testing.T) {
-	_, asked := countingStub(t)
+func TestActionUsesDraftLocations(t *testing.T) {
+	asked := askedStub(t)
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "已保存的城市"}); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	// 直接写已保存的配置，不走 Init：Init 会起后台循环，它自己那次取数会混进计数里
+	p.personaLoc, p.sameCity = "已保存的城市", true
 
-	ctx := plugin.WithActionValues(context.Background(), map[string]any{"location": "苏州"})
+	ctx := plugin.WithActionValues(context.Background(), map[string]any{
+		"persona_location": "苏州", "same_city": false, "user_location": "南京",
+	})
 	if err := p.StartAction(ctx, actionTest); err != nil {
 		t.Fatalf("StartAction: %v", err)
 	}
@@ -26,30 +47,72 @@ func TestActionUsesDraftLocation(t *testing.T) {
 	if st.Status != plugin.ActionDone {
 		t.Fatalf("测试应当成功，实际 %+v", st)
 	}
-	if *asked != "苏州" {
-		t.Errorf("查询的是 %q，应当用草稿里的城市", *asked)
+	if len(*asked) != 2 || (*asked)[0] != "苏州" || (*asked)[1] != "南京" {
+		t.Errorf("查询的城市 = %v，应当用草稿里的两处", *asked)
 	}
-	if !strings.Contains(st.Message, "解析到") || !strings.Contains(st.Message, "小雨") {
-		t.Errorf("结果应当同时给出解析到的地方与当时的天气，实际 %q", st.Message)
+	for _, want := range []string{"角色所在", "我所在", "两处都可用"} {
+		if !strings.Contains(st.Message, want) {
+			t.Errorf("结果里缺少 %q：%s", want, st.Message)
+		}
 	}
 }
 
-// 草稿里没填时回落到已保存的城市。
-func TestActionFallsBackToSavedLocation(t *testing.T) {
-	_, asked := countingStub(t)
+// 同城时只查一次：这正是这个开关存在的理由。
+func TestActionSameCityQueriesOnce(t *testing.T) {
+	asked := askedStub(t)
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"location": "杭州"}); err != nil {
-		t.Fatalf("Init: %v", err)
+
+	ctx := plugin.WithActionValues(context.Background(), map[string]any{
+		"persona_location": "杭州", "same_city": true, "user_location": "上海",
+	})
+	if err := p.StartAction(ctx, actionTest); err != nil {
+		t.Fatalf("StartAction: %v", err)
 	}
+	st := waitAction(t, p)
+	if st.Status != plugin.ActionDone {
+		t.Fatalf("测试应当成功，实际 %+v", st)
+	}
+	if len(*asked) != 1 || (*asked)[0] != "杭州" {
+		t.Errorf("同城时只该查一次角色的城市，实际 %v", *asked)
+	}
+	if !strings.Contains(st.Message, "角色与我同在") {
+		t.Errorf("同城时的措辞不对：%s", st.Message)
+	}
+}
+
+// 两处填了同一个地方也只查一次。
+func TestActionIdenticalCitiesQueryOnce(t *testing.T) {
+	asked := askedStub(t)
+	p := New()
+	defer p.Stop()
+
+	ctx := plugin.WithActionValues(context.Background(), map[string]any{
+		"persona_location": "杭州", "same_city": false, "user_location": "杭州",
+	})
+	if err := p.StartAction(ctx, actionTest); err != nil {
+		t.Fatalf("StartAction: %v", err)
+	}
+	waitAction(t, p)
+	if len(*asked) != 1 {
+		t.Errorf("同一个城市不该查两次，实际 %v", *asked)
+	}
+}
+
+// 草稿里没带时回落到已保存的配置。
+func TestActionFallsBackToSavedConfig(t *testing.T) {
+	asked := askedStub(t)
+	p := New()
+	defer p.Stop()
+	p.personaLoc, p.sameCity = "杭州", true // 同上：绕开 Init 的后台循环
 	if err := p.StartAction(context.Background(), actionTest); err != nil {
 		t.Fatalf("StartAction: %v", err)
 	}
 	if st := waitAction(t, p); st.Status != plugin.ActionDone {
 		t.Fatalf("测试应当成功，实际 %+v", st)
 	}
-	if *asked != "杭州" {
-		t.Errorf("查询的是 %q，应当回落到已保存的城市", *asked)
+	if len(*asked) != 1 || (*asked)[0] != "杭州" {
+		t.Errorf("应当回落到已保存的城市，实际 %v", *asked)
 	}
 }
 
@@ -91,7 +154,7 @@ func TestActionReportsGeocodeFailure(t *testing.T) {
 	stubServer(t, `{}`, fcOK)
 	p := New()
 	defer p.Stop()
-	ctx := plugin.WithActionValues(context.Background(), map[string]any{"location": "并不存在的地方"})
+	ctx := plugin.WithActionValues(context.Background(), map[string]any{"persona_location": "并不存在的地方"})
 	if err := p.StartAction(ctx, actionTest); err != nil {
 		t.Fatalf("StartAction: %v", err)
 	}
@@ -104,20 +167,53 @@ func TestActionReportsGeocodeFailure(t *testing.T) {
 	}
 }
 
-// 测试不该动到正在使用的观测缓存：它测的是一个还没保存的城市。
+// 一处失败不跳过另一处：一次点击就该把两处的结论都给出来。
+func TestActionReportsBothWhenOneFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "search") {
+			if r.URL.Query().Get("name") == "坏地名" {
+				_, _ = w.Write([]byte(`{}`)) // 查不到
+				return
+			}
+			_, _ = w.Write([]byte(geoOK))
+			return
+		}
+		_, _ = w.Write([]byte(fcOK))
+	}))
+	defer srv.Close()
+	pointAt(t, srv.URL)
+
+	p := New()
+	defer p.Stop()
+	ctx := plugin.WithActionValues(context.Background(), map[string]any{
+		"persona_location": "坏地名", "same_city": false, "user_location": "上海",
+	})
+	if err := p.StartAction(ctx, actionTest); err != nil {
+		t.Fatalf("StartAction: %v", err)
+	}
+	st := waitAction(t, p)
+	if st.Status != plugin.ActionError {
+		t.Fatalf("有一处失败就该报错，实际 %+v", st)
+	}
+	if !strings.Contains(st.Message, "查询失败") || !strings.Contains(st.Message, "我所在") {
+		t.Errorf("两处的结论都该给出来，实际 %q", st.Message)
+	}
+}
+
+// 测试不该动到正在使用的观测缓存：它测的是还没保存的城市。
 func TestActionDoesNotTouchLiveCache(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
 	p := New()
 	defer p.Stop()
-	p.cur, p.curOK = Report{Place: "北京", Condition: "晴", TempC: 25, Fetched: time.Now()}, true
+	setObs(p, "北京", report("北京", "晴", 25, 0))
 
-	ctx := plugin.WithActionValues(context.Background(), map[string]any{"location": "杭州"})
+	ctx := plugin.WithActionValues(context.Background(), map[string]any{"persona_location": "杭州"})
 	if err := p.StartAction(ctx, actionTest); err != nil {
 		t.Fatalf("StartAction: %v", err)
 	}
 	waitAction(t, p)
 
-	if rep, _, _ := p.lastReport(); rep.Place != "北京" {
+	if rep, _, _ := p.lastReport("北京"); rep.Condition != "晴" {
 		t.Errorf("测试污染了正在使用的观测：%+v", rep)
 	}
 }
