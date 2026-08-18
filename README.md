@@ -26,7 +26,7 @@
 ## 快速开始
 
 ```bash
-# 1. 准备配置：复制示例并填入 providers.deepseek.api_key
+# 1. 准备配置：复制示例并填入所用提供商的 api_key（示例里是 providers.deepseek）
 cp config.example.yaml config.yaml
 
 # 2. 运行
@@ -57,7 +57,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | `agent.workdir` | 插件与环境块共用的工作目录，空 = 进程当前目录 |
 | `session.dir` | 会话存储目录，默认 `<配置目录>/sessions` |
 
-插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用；必须先配置才有意义的插件（`roleplay`、`dual_persona`）默认关闭，配好再打开。插件自身的数据落在 `<配置目录>/plugins/<插件名>/`。
+插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用，以下八个除外：`roleplay`、`dual_persona`（不填角色设定与触发词就不成其为功能）、`scene`、`body_sense`、`mood`（自带默认参数就能工作，只因硬依赖默认关闭的 `roleplay` 而一同默认关闭）、`heartbeat`（无人值守持续消耗额度的功能应由用户显式打开）、`qq_bot`、`wechat_bot`（不填凭证或不扫码绑定就没法工作）。插件自身的数据落在 `<配置目录>/plugins/<插件名>/`。
 
 （早期版本支持在 config.yaml 写 `plugins:` 段。两处都能配的时候，哪一份在生效需要记住一条优先级规则，而设置页的改动又不回写配置文件，于是文件里的内容会慢慢变成误导。现在该段已不再生效，启动时会提示一句，可以直接删掉。）
 
@@ -114,7 +114,10 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 - **存储**：一条记忆一个文件，YAML frontmatter（标题 / 摘要 / 分类 / 时间）+ Markdown 正文，可直接用编辑器增删改；手工放进去的普通 Markdown 也能被索引到。位置由 `scope` 决定：`global`（默认）存 `<配置目录>/plugins/memory/memories/`，`project` 存 `<工作目录>/.wen/memories/`。启用可见域隔离（见 `dual_persona`）后，带标签的库落在同级目录 `memories-<标签>/`。
 - **索引**：每条用户消息注入一次，形如 `- 2026-05-10 约定/接口命名规范 — REST 路径用小写连字符`。索引**不落盘**，由各文件头部实时生成，因此不会与正文脱节。
 - **工具**：`save_memory`（分类限 `偏好`/`约定`/`事实`/`踩坑`；默认拒绝覆盖同名条目，需显式 `mode: replace`，覆盖前留 `.bak`）、`recall_memory`、`list_memories`（可按关键词或分类过滤）、`delete_memory`。
-- **压缩时自动提炼**：历史被摘要替换**之前**，用一次独立的模型调用从其中挑出值得长期保留的结论并直接落盘，已存在同名条目则跳过而不覆盖。做成真正的提取而不是提示模型稍后自己保存，是因为自动压缩无人值守、历史随即被删，「稍后」可能永远不会到来。代价是每次压缩多一次模型调用，可用 `auto_extract` 关掉。原始历史的保全由 `session_search` 的归档负责。
+- **自动提炼**：两条路径。一是**对话进行中**每隔若干轮真人对话（默认 10）用一次独立的模型调用提炼一次——大部分对话走不到压缩就结束了，只靠压缩那一次会白丢很多结论；二是**历史被摘要替换之前**再提炼一次，那次拿得到含工具调用的完整历史，也兜住进程重启丢掉的窗口。做成真正的提取而不是提示模型稍后自己保存，是因为自动压缩无人值守、历史随即被删，「稍后」可能永远不会到来。两条都可单独关掉，原始历史的保全由 `session_search` 的归档负责。
+- **矛盾修订**：提炼时会拿到已有记忆的标题**与摘要**，新结论推翻旧记忆时就地修订那一条（覆盖前留 `.bak`），并要求在正文里交代被推翻的旧说法与大致时间。给清单只看标题认不出「饮食禁忌」与「喜欢香菜」说的是同一件事，于是两条互相打架的记忆会一起留在库里——那比漏记一条更糟。
+- **逐步遗忘**（默认关）：保存时可逐条标记一条记忆会不会随时间失去意义，只有标记过的才会淡忘。久未提及先把正文塌缩成那句摘要（细节没了、要点还在，也更像真实的遗忘），更久之后移出记忆库——移进库内的 `forgotten/` 子目录而不是删除，因为自动遗忘是这里唯一不可逆、且误删完全无从察觉的动作。两个时限都从**最后一次被用到**起算（读取命中、被修订、或在对话中被提到），常被提起的记忆因此永远走不到淡忘。塌缩不调模型。
+- **界面上看得见**：对话进行中的提炼跑在轮次收尾之后，那时这一轮的事件流已经关闭，结果本来只能进日志。因此提炼完会在会话里留一行「🧠 记忆提炼：新增「事实/构建命令」，修订「偏好/饮食禁忌」」——实时出现、可事后回看，而**模型永远看不到它**。修订尤其需要说出来：它会覆盖已有记忆，虽然留了 `.bak`，但没人会想到去翻。
 
 **索引开销**：索引在一次工具循环的**每一轮**都会完整发送（系统消息永不被上下文裁剪），因此有硬上限。实测一条约 31 token，100 条约 3100 token。超出字节上限时先省略各条摘要只留标题，仍超出才按最近更新截断并注明剩余条数——优先保住标题，模型才知道这条记忆存在、还能按名读取。
 
@@ -124,8 +127,13 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | `max_index_entries` | 200 | 索引最多列出的条数 |
 | `max_index_bytes` | 16384 | 索引字节上限（约 170 条带摘要） |
 | `max_entry_bytes` | 8192 | 读取单条记忆的返回上限 |
-| `auto_extract` | 开 | 压缩时自动提炼记忆（每次压缩多一次模型调用） |
-| `max_extract` | 5 | 单次压缩最多提炼条数 |
+| `auto_extract` | 开 | 压缩前自动提炼（每次压缩多一次模型调用） |
+| `turn_extract` | 开 | 对话中定期提炼（每个提炼窗口多一次模型调用） |
+| `turn_extract_every` | 10 | 每多少轮真人对话提炼一次，下限 5；机器自发的轮次（心跳、定时任务）不计入 |
+| `max_extract` | 5 | 单次最多提炼条数 |
+| `decay` | 关 | 记忆逐步淡忘（只作用于被标记过的记忆） |
+| `decay_blur_days` | 30 | 多少天未提及后正文塌缩成一句要点 |
+| `decay_forget_days` | 90 | 多少天未提及后移出记忆库，须大于上一项 |
 
 ## 历史检索（session_search 插件）
 
@@ -153,6 +161,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 - **`[互动演绎]`** — 每次回复以一段 `【】` 开头，先写此刻的场景、动作与表情，再写角色说的话。`【】`里只写能被观察到的东西；场景必须承接历史中最近一处`【】`给出的位置、姿态与氛围，不凭空转场；一轮回复中可以多次插入，让动作与对话交替推进而不是把动作全堆在开头。
 - **`[体型与动作]`** — 仅当角色设定与我的信息**都**给出身高时注入：视线高低、俯身还是抬头、伸手能否够到，都按实际差值写。只有一方给出时不注入，避免凭空假设。
 - **`[自然表达]`** — 抑制中文里真正会暴露机械感的模式：三段式、否定对举（「不是 X，而是 Y」）、强凑三项并列、过渡套话、无来源的「专家认为」、宣传腔形容词、emoji、滥用加粗、客套收尾、谄媚开场、过度对冲。这一段只约束话语部分，`【】`里的演绎有自己的笔调。思路取自 [blader/humanizer](https://github.com/blader/humanizer) 的 AI 文风模式清单，但按中文语境重写——英文特有的那些（em dash、Title Case、弯引号、`delve` 之类的词）对中文输出没有意义。
+- **`[记忆与回想]`** — 两件事：给保存下来的记忆标上会不会淡忘、结论被推翻时修订旧记忆而不是另存一条；以及不去翻历史对话的原文复述细节，被提起时按「想起来」的样子说要点，记不清就直说。后一条不加，遗忘就是白做的——记忆淡忘了、归档了，模型照样能用 `session_search` 把当时的原文一把捞出来逐字念一遍。出戏的从来不是「想起来了」（被提醒后能回想起来本就是人的特征），而是想起来的方式。
 - **`[时间一致性]`** — 环境块里的当前时间是唯一可信基准；同时明确环境块的其余项（操作系统、Shell、工作目录）只是运行环境事实，不构成角色的自我认知。不加这条，模型会被那个块稳定地拽回「我是一个跑在 Windows 上的助手」。
 
 另有两个钩子：每轮注入**距上次对话的间隔**（隔三分钟还是隔三天，场景该不该延续完全不同，而模型从历史里看不出这个间隔）；压缩前把**最后一处`【】`的原文**留在摘要末尾（摘要会丢掉场景与姿态这类细节，压缩一次场景就断了）。
@@ -164,6 +173,7 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | `interaction` | 开 | `【】`互动演绎 |
 | `humanize` | 开 | 自然表达规则 |
 | `time_rules` | 开 | 时间一致性约束 |
+| `memory_rules` | 开 | 记忆与回想约束 |
 | `max_text_bytes` | 8192 | 前两段自由文本的合计上限，超出截断（角色设定优先） |
 
 ## 表里人格（dual_persona 插件）
@@ -192,10 +202,15 @@ wen -c /path/to/config.yaml -p 9000   # 指定配置与端口
 | GET | `/api/sessions/{id}` | 会话历史消息 |
 | DELETE | `/api/sessions/{id}` | 删除会话 |
 | POST | `/api/chat` | `{"session_id","message"}` → SSE 流（`delta` / `thinking` / `tool_start` / `tool_result` / `confirm_request` / `confirm_done` / `compact_*` / `done` / `error`） |
+| POST | `/api/sessions/{id}/compact` | 手动压缩该会话的历史（SSE 流，帧同 `/api/chat` 的 `compact_*`） |
 | POST | `/api/confirmations/{id}` | `{"approved": bool}` 回答一次操作确认（id 取自 `confirm_request` 帧）。已超时或已回答过时返回 409 |
 | GET | `/api/plugins` | 插件列表与状态（含来源 `source`、可配置项声明 `config_fields` 与当前生效值 `config`） |
 | PUT | `/api/plugins/{name}` | `{"enabled": bool}` 运行时开关插件 |
 | PUT | `/api/plugins/{name}/config` | `{"config": {...}}` 保存插件配置，校验通过后立即生效并持久化 |
+| POST | `/api/plugins/{name}/actions/{key}` | 触发插件声明的操作（如微信扫码绑定），立即返回，流程在后台跑 |
+| GET | `/api/plugins/{name}/actions/{key}` | 轮询该操作的进展：状态、说明文字与一张可选 PNG（只经内存下发，不落盘） |
+| GET | `/api/status` | 模型配置与插件状态行；带 `session_id` 查询参数时附上该会话的用量 |
+| GET | `/api/events` | 常驻 SSE 流，推送会话注记（后台任务在会话里留下的、模型看不到的一行说明） |
 | GET | `/api/models` | 提供商与模型配置（`api_key` 只返回掩码） |
 | PUT | `/api/models` | 整档保存；请求里 `api_key` 留空表示不修改 |
 | PUT | `/api/models/current` | `{"provider","model"}` 切换当前模型，立即热生效 |
@@ -210,9 +225,14 @@ internal/llm/            Provider 接口 + OpenAI 兼容 / Anthropic 实现
 internal/modelcfg/       模型与提供商配置（models.json 覆盖层，热切换）
 internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下文预算）
 internal/plugin/         插件协议（Plugin / Tool / Configurable / Lifecycle / 可见域 / 依赖）+ Manager（开关与聚合）
-internal/plugin/builtin/ 内置系统插件：readfile / execcmd / webfetch / memory / sessionsearch / roleplay / dualpersona
+internal/plugin/builtin/ 内置系统插件（注册顺序即提示词拼接顺序）：
+                         readfile / execcmd / webfetch / memory / sessionsearch /
+                         roleplay / dualpersona / scene / bodysense / mood /
+                         heartbeat / scheduler / qqbot / wechatbot
 internal/session/        JSONL 会话存储
 internal/server/         HTTP API + SSE + 内嵌 Web UI
+internal/version/        版本号的唯一来源（界面、/status、启动日志与 exe 属性共用）
+tools/                   构建期生成器：genicon（favicon）、genwinres（Windows 版本资源）
 ```
 
 ## 编写插件
@@ -227,8 +247,14 @@ internal/server/         HTTP API + SSE + 内嵌 Web UI
 - 操作确认：用 `plugin.ConfirmerFrom(ctx)` 取确认通道，在执行不可逆操作前问一次。第二个返回值为 false 表示当前没有可交互的用户，**不要当作已获同意**；返回 error 同理，拿不到答复不等于得到许可。
 - `Dependent`（`Requires()`）——声明必须同时启用的插件。依赖未满足时拒绝启用（开关在界面上置灰），被依赖的插件也无法在依赖方仍启用时关闭。
 - `Conflicting`（`Conflicts()`）——声明能力相抵的插件。只告警不阻止。
+- `Stoppable`（`Stop()`）——停掉自己起的后台活动。禁用、以新配置重新 `Init`、进程退出三处会调用；只做取消与有界等待，不得等整轮对话跑完。起 goroutine 的插件必须实现它，并保证 `Init` 可重入。
+- `TurnObserver`（`OnTurnEnd()`）——观察每轮对话的结束。在收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
+- `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用、Manager 持锁时调用）。
+- `Actionable`（`Actions()` / `StartAction()` / `ActionState()`）——声明可在设置页触发的流程（如扫码绑定），状态含说明文字与一张可选 PNG。`StartAction` 应立即返回，长流程放后台并自带超时。
 
-`InitContext` 提供四样运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`SessionDir`（会话目录，只读用）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）。后三者为空/nil 表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 每次调用都产生真实开销，只放在低频路径上。
+`InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`SessionDir`（会话目录，只读用）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`Notice`（往会话里留一行只给人看的说明）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
+
+`RunTurn` 与 `Notice` 由 Manager 包一层自动注入发起方标记，插件无法伪装成前台；`RunTurn` 在会话忙时立即返回 `ErrSessionBusy` 而不排队——后台任务堆在锁上，只会在解锁瞬间连环轰炸同一个会话。`Notice` 写出的内容落盘、在界面实时展示，但永不进入模型上下文，也不进压缩摘要：后台工作在轮次收尾之后才跑完，那时事件流已经关闭，结果否则只能进日志。
 
 ### 可见域
 
