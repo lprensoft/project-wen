@@ -33,15 +33,23 @@ func nextBeatDesc(next time.Time) string {
 	return "下次约 " + humanDur(left) + "后"
 }
 
-// humanDur 按分钟粒度描述时长：心跳的配置单位就是分钟，秒级精度只会让输出抖动。
+// humanDur 描述时长：心跳的配置单位是分钟，秒级精度只会让输出抖动。
+// 逐级降精度——隔了三天还报到分钟（“72 小时 13 分钟”）既难读也没有意义。
 func humanDur(d time.Duration) string {
 	mins := int(d.Round(time.Minute) / time.Minute)
 	if mins < 60 {
 		return fmt.Sprintf("%d 分钟", mins)
 	}
 	h, m := mins/60, mins%60
-	if m == 0 {
-		return fmt.Sprintf("%d 小时", h)
+	if h < 24 {
+		if m == 0 {
+			return fmt.Sprintf("%d 小时", h)
+		}
+		return fmt.Sprintf("%d 小时 %d 分钟", h, m)
 	}
-	return fmt.Sprintf("%d 小时 %d 分钟", h, m)
+	days, rh := h/24, h%24
+	if rh == 0 {
+		return fmt.Sprintf("%d 天", days)
+	}
+	return fmt.Sprintf("%d 天 %d 小时", days, rh)
 }

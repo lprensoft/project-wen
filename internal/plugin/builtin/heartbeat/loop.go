@@ -63,7 +63,7 @@ func (p *Plugin) beat(ctx context.Context) {
 	runTurn, prompt := p.runTurn, p.prompt
 	p.mu.Unlock()
 
-	sid, err := p.pickSession()
+	sid, lastActive, err := p.pickSession()
 	if err != nil {
 		log.Printf("heartbeat: 找不到可用会话，本次心跳跳过: %v", err)
 		return
@@ -72,7 +72,7 @@ func (p *Plugin) beat(ctx context.Context) {
 	defer cancel()
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
 	tctx = plugin.WithEphemeralInput(tctx)
-	if _, err := runTurn(tctx, sid, prompt); err != nil {
+	if _, err := runTurn(tctx, sid, gapNote(prompt, lastActive, time.Now())); err != nil {
 		if errors.Is(err, plugin.ErrSessionBusy) {
 			log.Printf("heartbeat: 会话 %s 忙，本次心跳跳过", sid)
 		} else if ctx.Err() == nil { // 停止时的取消错误不值得记
@@ -83,17 +83,21 @@ func (p *Plugin) beat(ctx context.Context) {
 
 // pickSession 返回最近活跃的会话：LastActiveAt 最大者；旧会话没有该字段回落 CreatedAt。
 // 一个会话都没有时新建一个。
-func (p *Plugin) pickSession() (string, error) {
+//
+// 第二个返回值是该会话最近一次**真人对话**的时间，零值表示未知。这里只认
+// LastActiveAt，不拿 CreatedAt 充数：拿不到就说不知道，总好过拿“会话创建时间”
+// 当成“上次聊天时间告诉模型”。
+func (p *Plugin) pickSession() (string, time.Time, error) {
 	p.mu.Lock()
 	sessions, newSession := p.sessions, p.newSession
 	p.mu.Unlock()
 
 	metas, err := sessions.List()
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	bestID := ""
-	var bestAt time.Time
+	var bestAt, bestActive time.Time
 	for _, m := range metas {
 		at := m.CreatedAt
 		if m.LastActiveAt != nil {
@@ -101,15 +105,39 @@ func (p *Plugin) pickSession() (string, error) {
 		}
 		if bestID == "" || at.After(bestAt) {
 			bestID, bestAt = m.ID, at
+			bestActive = time.Time{}
+			if m.LastActiveAt != nil {
+				bestActive = *m.LastActiveAt
+			}
 		}
 	}
 	if bestID != "" {
-		return bestID, nil
+		return bestID, bestActive, nil
 	}
 	if newSession == nil {
-		return "", errors.New("没有会话且当前环境不支持新建")
+		return "", time.Time{}, errors.New("没有会话且当前环境不支持新建")
 	}
-	return newSession()
+	sid, err := newSession()
+	return sid, time.Time{}, err // 刚建的会话没有“上次对话”可言
+}
+
+// gapNote 在心跳提示词末尾附上距上次真人对话的时长。
+//
+// 模型能从环境块知道“现在几点”，却无从得知“上一条消息是什么时候”——历史消息
+// 进上下文时只带 role 与 content，时间戳留在了盘上。没有这一行，提示词只能写“很久
+// 没聊了”这类写死的模糊措辞，而刚聊完五分钟与隔了一夜显然该说不同的话。
+//
+// 时间未知或不足一分钟时不附：“未知”只是噪声，而刚聊完就心跳本就不应发生（真人
+// 轮次会重置心跳时钟）。
+func gapNote(prompt string, lastActive, now time.Time) string {
+	if lastActive.IsZero() {
+		return prompt
+	}
+	gap := now.Sub(lastActive)
+	if gap < time.Minute {
+		return prompt
+	}
+	return prompt + "\n\n【距上次对话】" + humanDur(gap)
 }
 
 // maybeDecay 空闲衰减：距最近真人交互超过一个当前间隔时，把间隔放缓一档（×1.5），
