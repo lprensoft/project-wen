@@ -1235,8 +1235,10 @@ function renderActionState(st) {
   actionMessageEl.classList.toggle("action-error", st.status === "error");
 }
 
-// 触发插件操作并弹出进展窗；长流程由插件在后台推进，这里只轮询展示
-async function startPluginAction(pluginName, actionDef) {
+// 触发插件操作并弹出进展窗；长流程由插件在后台推进，这里只轮询展示。
+// draft 是配置弹窗里当前填写、尚未保存的值，随请求带给插件，使「测试」类操作
+// 能验证还没保存的配置。
+async function startPluginAction(pluginName, actionDef, draft) {
   actionTitleEl.textContent = pluginName + " · " + actionDef.label;
   renderActionState({ message: "正在开始…" });
   actionModal.classList.remove("hidden");
@@ -1244,7 +1246,11 @@ async function startPluginAction(pluginName, actionDef) {
     "/api/plugins/" + encodeURIComponent(pluginName) +
     "/actions/" + encodeURIComponent(actionDef.key);
   try {
-    const res = await fetch(url, { method: "POST" });
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config: draft || {} }),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || "HTTP " + res.status);
@@ -1326,10 +1332,9 @@ function openPluginConfig(p) {
     btn.type = "button";
     btn.className = "btn-ghost";
     btn.textContent = a.label;
-    btn.addEventListener("click", () => {
-      closePluginConfig();
-      startPluginAction(p.name, a);
-    });
+    // 配置弹窗不关：进展窗盖在它上面，测试完回到原处，填了一半的内容还在。
+    // 「测试」类操作正是为「保存之前先验一下」而存在的，关掉就等于要求先保存。
+    btn.addEventListener("click", () => startPluginAction(p.name, a, readConfigValues()));
     row.appendChild(btn);
     if (a.description) {
       const desc = document.createElement("div");

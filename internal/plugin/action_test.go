@@ -91,3 +91,46 @@ func TestManagerActionRejections(t *testing.T) {
 		}
 	}
 }
+
+// ---------- 操作的草稿配置值 ----------
+
+func TestActionValuesRoundTrip(t *testing.T) {
+	ctx := WithActionValues(context.Background(), map[string]any{"city": "杭州"})
+	got := ActionValuesFrom(ctx)
+	if got["city"] != "杭州" {
+		t.Errorf("取回的草稿值 = %v", got)
+	}
+}
+
+// 没带草稿值时返回 nil，不是空 map——调用方按「没有」处理即可。
+func TestActionValuesAbsent(t *testing.T) {
+	if got := ActionValuesFrom(context.Background()); got != nil {
+		t.Errorf("未附带时应为 nil，实际 %v", got)
+	}
+	ctx := WithActionValues(context.Background(), nil)
+	if got := ActionValuesFrom(ctx); got != nil {
+		t.Errorf("空草稿不该占位，实际 %v", got)
+	}
+}
+
+// 草稿里填了就用草稿的，没填（或填了空白）就回落到已保存的值。
+func TestActionValueOr(t *testing.T) {
+	saved := "已保存"
+	cases := []struct {
+		name   string
+		values map[string]any
+		want   string
+	}{
+		{"没有草稿", nil, saved},
+		{"草稿里没这一项", map[string]any{"other": "x"}, saved},
+		{"草稿是空串", map[string]any{"city": ""}, saved},
+		{"草稿只有空白", map[string]any{"city": "   "}, saved},
+		{"草稿有值", map[string]any{"city": "苏州"}, "苏州"},
+		{"草稿两侧有空白", map[string]any{"city": " 苏州 "}, "苏州"},
+	}
+	for _, c := range cases {
+		if got := ActionValueOr(c.values, "city", saved); got != c.want {
+			t.Errorf("%s: = %q，期望 %q", c.name, got, c.want)
+		}
+	}
+}
