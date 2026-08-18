@@ -66,7 +66,7 @@ func Default() *Config {
 		Server: ServerConfig{Host: "127.0.0.1", Port: 8080},
 		Model: ModelConfig{
 			Provider:      "deepseek",
-			Name:          "deepseek-chat",
+			Name:          "deepseek-v4-flash",
 			Temperature:   0.7,
 			MaxTokens:     4096,
 			Thinking:      "high",

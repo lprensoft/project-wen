@@ -11,7 +11,7 @@ server:
 # 不会回写本文件；未在界面上改过的条目仍跟随这里。
 model:
   provider: deepseek
-  name: deepseek-chat
+  name: deepseek-v4-flash
   temperature: 0.7           # 思考模式开启时不生效
   max_tokens: 4096
   thinking: high             # 思考模式：off / low / medium / high / xhigh / max（默认 high）

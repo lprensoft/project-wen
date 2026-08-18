@@ -13,7 +13,7 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Server.Port != 8080 || cfg.Model.Name != "deepseek-chat" {
+	if cfg.Server.Port != 8080 || cfg.Model.Name != "deepseek-v4-flash" {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
 	if got := cfg.Providers["deepseek"].APIKey; got != "sk-test-default" {

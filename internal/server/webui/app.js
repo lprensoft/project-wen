@@ -1546,7 +1546,7 @@ function openModelModal(provider, id) {
 
   const isAnthropic = p.type === "anthropic";
   modelForm.append(
-    fieldEl("模型 ID", idInput, "传给 API 的模型 id，例如 deepseek-chat。"),
+    fieldEl("模型 ID", idInput, "传给 API 的模型 id，例如 deepseek-v4-flash。"),
     fieldEl("显示名", nameInput, "列表中显示的名字，留空则显示模型 ID。"),
     fieldEl("上下文窗口", ctxInput, "token 数，用于裁剪与自动压缩阈值。留空则使用 config.yaml 的全局值。"),
     fieldEl("最大输出 tokens", maxInput, "单次回复的输出上限。留空则使用全局值。"),
