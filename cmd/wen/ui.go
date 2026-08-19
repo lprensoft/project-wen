@@ -51,16 +51,22 @@ func pad(s string, width int) string {
 	return runewidth.FillRight(s, width)
 }
 
-// listHeight 返回列表的可视高度：项数与屏幕能容纳的行数取小。
-// 等于项数时 huh 不会滚动，这是想要的常态；项数真的超过屏幕才滚，那时滚动是必要的。
-func listHeight(items int) int {
+// listHeight 返回交给 huh Select 的字段高度；chrome 是该字段自己的标题与说明行数。
+//
+// huh 的 Height 是**含标题与说明**的字段总高度：它在 updateViewportHeight 里先扣掉
+// 这两块，剩下的才是选项视口。此前这里把高度设成裸的项数，视口于是比项数少
+// chrome 行，最后几项永远在视口外——光标一往下走就滚动，第一项被顶出屏幕。
+//
+// 全部装得下时返回 0（= 不设高度）：huh 会自动把视口设成选项总数，从机制上杜绝
+// 滚动，而不是靠把行数算得刚刚好。真装不下才返回屏幕可用行数，那时滚动是必要的。
+func listHeight(items, chrome int) int {
 	_, h := termSize()
-	avail := h - 6 // 标题、说明、帮助行与上下留白
-	if avail < 5 {
-		avail = 5
+	avail := h - 3 // 帮助行与上下留白（标题与说明已计入 chrome）
+	if items+chrome <= avail {
+		return 0
 	}
-	if items < avail {
-		return items
+	if minTotal := chrome + 5; avail < minTotal {
+		return minTotal
 	}
 	return avail
 }

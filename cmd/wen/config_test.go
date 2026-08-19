@@ -226,11 +226,20 @@ func TestFitTruncatesByDisplayWidth(t *testing.T) {
 }
 
 // 装得下就不该滚动——滚动正是问题的来源。
+//
+// huh 的 Height 是含标题与说明的字段总高度，视口 = 总高度 - chrome。装得下时必须
+// 返回 0（不设高度，huh 自动视口=选项数）；设成裸项数的话视口比项数少 chrome 行，
+// 光标一往下走第一项就被顶出屏幕。
 func TestListHeightDoesNotScrollWhenItFits(t *testing.T) {
-	if got := listHeight(3); got != 3 {
-		t.Errorf("3 项时高度 = %d, want 3（等于项数即不滚动）", got)
+	if got := listHeight(3, 2); got != 0 {
+		t.Errorf("装得下时高度 = %d, want 0（不设高度即不滚动）", got)
 	}
-	if got := listHeight(1000); got >= 1000 {
+	got := listHeight(1000, 2)
+	if got >= 1000 {
 		t.Errorf("项数远超屏幕时应受限于屏幕高度，得到 %d", got)
+	}
+	// 真要滚动时，总高度至少容得下 chrome 与几行选项，否则视口会被挤到没有
+	if got < 2+5 {
+		t.Errorf("滚动时总高度 = %d，小于 chrome+5", got)
 	}
 }
