@@ -51,6 +51,52 @@ type variant struct {
 	consoleURL  string // 开发者后台地址，写进配置项说明
 }
 
+// joinCN 把片段拼成一句中文，只在拉丁文与中日韩文字相邻处补一个空格。
+//
+// 产品名一个是「飞书」一个是「Lark」，同一句模板套两边：不补空格 Lark 会
+// 挤在汉字中间（「接入Lark机器人」），无条件补又会让飞书两侧多出空格、
+// 标点后面也跟着漏一个。按相邻字符的类别决定才两边都对。
+func joinCN(parts ...string) string {
+	var b strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if b.Len() > 0 && needSpace(lastRune(b.String()), firstRune(part)) {
+			b.WriteByte(' ')
+		}
+		b.WriteString(part)
+	}
+	return b.String()
+}
+
+// needSpace 判定两个相邻字符之间要不要空格：一边是拉丁字母或数字、另一边是
+// 中日韩文字时才要。标点两侧一律不补。
+func needSpace(a, b rune) bool {
+	return (isLatin(a) && isCJK(b)) || (isCJK(a) && isLatin(b))
+}
+
+func isLatin(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+func isCJK(r rune) bool { return r >= 0x4E00 && r <= 0x9FFF }
+
+func firstRune(s string) rune {
+	for _, r := range s {
+		return r
+	}
+	return 0
+}
+
+func lastRune(s string) rune {
+	var last rune
+	for _, r := range s {
+		last = r
+	}
+	return last
+}
+
 var (
 	feishuVariant = variant{
 		name: "feishu_bot", label: "飞书",
@@ -106,8 +152,8 @@ func (p *Plugin) Name() string { return p.v.name }
 func (p *Plugin) Category() string { return plugin.CategoryChannel }
 
 func (p *Plugin) Description() string {
-	return "接入" + p.v.label + "机器人实现单聊远程会话（长连接收事件，无需公网地址），" +
-		"支持 /new /status /compact /help 命令与危险操作远程确认"
+	return joinCN("接入", p.v.label, "机器人实现单聊远程会话（长连接收事件，无需公网地址），"+
+		"支持 /new /status /compact /help 命令与危险操作远程确认")
 }
 
 func (p *Plugin) SystemPrompt() string { return "" }
@@ -119,12 +165,12 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
 		{
 			Key: "app_id", Label: "App ID", Type: plugin.FieldString, Default: "",
-			Description: "在" + label + "开发者后台（" + p.v.consoleURL + "）建一个自建应用后获得，形如 cli_xxx",
+			Description: joinCN("在", label, "开发者后台（"+p.v.consoleURL+"）建一个自建应用后获得，形如 cli_xxx"),
 		},
 		{
 			Key: "app_secret", Label: "App Secret", Type: plugin.FieldString, Default: "",
-			Description: "应用凭证，仅存于本机的插件状态文件（0600 权限），不入库。" +
-				"注意" + label + "与另一版的应用凭证互不通用",
+			Description: joinCN("应用凭证，仅存于本机的插件状态文件（0600 权限），不入库。注意",
+				label, "与另一版的应用凭证互不通用"),
 		},
 		{
 			Key: "whitelist", Label: "open_id 白名单", Type: plugin.FieldText, Default: "",
@@ -146,12 +192,12 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 				{Value: formatCard, Label: "卡片（推荐，渲染格式）"},
 				{Value: formatPlain, Label: "纯文本"},
 			},
-			Description: label + "的普通文本消息不渲染 markdown，直发会满屏星号。" +
-				"卡片：用富文本卡片发送，加粗、链接、代码等照常渲染；纯文本：发送前转成可读纯文本",
+			Description: joinCN(label, "的普通文本消息不渲染 markdown，直发会满屏星号。"+
+				"卡片：用富文本卡片发送，加粗、链接、代码等照常渲染；纯文本：发送前转成可读纯文本"),
 		},
 		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "开启后把每轮的完整思考链推送到" + label + "；关闭（默认）只发最终回复",
+			Description: joinCN("开启后把每轮的完整思考链推送到", label, "；关闭（默认）只发最终回复"),
 		},
 		{
 			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
@@ -165,7 +211,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	appID := strings.TrimSpace(plugin.CfgString(cfg, "app_id", ""))
 	appSecret := strings.TrimSpace(plugin.CfgString(cfg, "app_secret", ""))
 	if appID == "" || appSecret == "" {
-		return fmt.Errorf("请先在配置中填写 App ID 与 App Secret（%s开发者后台：%s）", p.v.label, p.v.consoleURL)
+		return fmt.Errorf("请先在配置中填写 App ID 与 App Secret（%s）",
+			joinCN(p.v.label, "开发者后台："+p.v.consoleURL))
 	}
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录")

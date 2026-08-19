@@ -461,3 +461,26 @@ func TestInitIsReentrant(t *testing.T) {
 		t.Fatalf("重新 Init 后应继续工作: %+v", m)
 	}
 }
+
+// 产品名一个是中文一个是拉丁文，同一句模板套两边，空格得按相邻字符的类别补。
+func TestJoinCN(t *testing.T) {
+	cases := []struct {
+		parts []string
+		want  string
+	}{
+		{[]string{"接入", "飞书", "机器人"}, "接入飞书机器人"},
+		{[]string{"接入", "Lark", "机器人"}, "接入 Lark 机器人"},
+		{[]string{"在", "Lark", "开发者后台（https://x）建应用"}, "在 Lark 开发者后台（https://x）建应用"},
+		{[]string{"Lark", "的普通文本消息"}, "Lark 的普通文本消息"},
+		{[]string{"飞书", "的普通文本消息"}, "飞书的普通文本消息"},
+		// 标点两侧不补：「（」不是汉字，「Lark」前面不该多一个空格
+		{[]string{"（", "Lark", "开发者后台"}, "（Lark 开发者后台"},
+		{[]string{"推送到", "Lark", "；关闭"}, "推送到 Lark；关闭"},
+		{[]string{"", "飞书", ""}, "飞书"},
+	}
+	for _, c := range cases {
+		if got := joinCN(c.parts...); got != c.want {
+			t.Errorf("joinCN(%q)\n= %q\n想要 %q", c.parts, got, c.want)
+		}
+	}
+}
