@@ -22,12 +22,15 @@ const (
 )
 
 // ActionState 是操作的当前进展，供界面轮询展示。
-// 核心不关心 Image 的内容——它只是「操作过程中需要给用户看的一张图」（如二维码），
+// 核心不关心 Image 与 Link 的内容——它们只是「操作过程中需要给用户看的东西」，
 // 只经内存下发，不落盘。
 type ActionState struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"` // 人类可读的进展或结果说明
 	Image   []byte `json:"image,omitempty"`   // 可选 PNG，界面渲染为 data URI
+	// Link 是操作涉及的一个链接原文（如编码进二维码的 URL）。图形界面用 Image，
+	// 终端界面拿它自行渲染（如字符二维码）——同一内容的两种呈现。
+	Link string `json:"link,omitempty"`
 }
 
 // Actionable 由需要「用户在界面上主动触发一段流程」的插件实现（可选）。
