@@ -30,22 +30,24 @@ func TestTranslateFailureSingleOwner(t *testing.T) {
 		}
 	}
 
+	// 逆注册序征询：靠后注册的转译者（叠加语义里的最上层）先拿到机会
 	text, ok := m.TranslateFailure(context.Background(), TurnFailure{SessionID: "s", Err: errors.New("boom")})
-	if !ok || text != "第一句" {
-		t.Fatalf("TranslateFailure = %q, %v", text, ok)
+	if !ok || text != "第二句" {
+		t.Fatalf("TranslateFailure = %q, %v，应由后注册者胜出", text, ok)
 	}
-	// 单所有者但不 break：后来者仍被调用（以便记日志），只是结果被忽略
-	if !second.called {
-		t.Error("second translator should still be consulted")
+	// 单所有者但不 break：其余转译者仍被调用（以便记日志），只是结果被忽略
+	if !first.called {
+		t.Error("first translator should still be consulted")
 	}
 }
 
 func TestTranslateFailureSkipsDecliners(t *testing.T) {
 	m := NewManager(InitContext{}, "")
-	decline := &fakeTranslator{fakePlugin: fakePlugin{name: "decline"}, ok: false}
-	emptyText := &fakeTranslator{fakePlugin: fakePlugin{name: "empty_text"}, text: "  ", ok: true}
+	// accept 注册在最前：逆序征询下它最后被问到，前两个都不接手时才轮到它
 	accept := &fakeTranslator{fakePlugin: fakePlugin{name: "accept"}, text: " 接住了 ", ok: true}
-	for _, p := range []*fakeTranslator{decline, emptyText, accept} {
+	emptyText := &fakeTranslator{fakePlugin: fakePlugin{name: "empty_text"}, text: "  ", ok: true}
+	decline := &fakeTranslator{fakePlugin: fakePlugin{name: "decline"}, ok: false}
+	for _, p := range []*fakeTranslator{accept, emptyText, decline} {
 		if err := m.Register(p, PluginConfig{Enabled: true}); err != nil {
 			t.Fatal(err)
 		}

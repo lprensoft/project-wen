@@ -22,7 +22,7 @@
 
 插件可选声明 `Dependent`（`Requires() []string`）与 `Conflicting`（`Conflicts() []string`）。依赖是硬性的：依赖未满足时拒绝启用（校验放在 `Init` **之前**，避免产生副作用），被依赖的插件也无法在依赖方仍启用时关闭——拒绝而非级联关闭，因为界面没有确认或提示通道，级联只会表现为「另一个开关自己变灰了」。冲突只告警不阻止。依赖校验必须在**全部 `Register` 之后**由 `Manager.Resolve()` 统一做（register 是逐个进行的，依赖方可能先注册），且要显式检出依赖环。被强制关闭的插件记在 `entry.forcedOff` 而不是直接改 `enabled`：状态文件是全量重写的，直接改会把强制关闭固化成用户意图，依赖恢复后也回不来。
 
-给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十六处按此标准放行：
+给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十八处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
 2. `InitContext.Sessions` —— 会话的只读窄查询（最近活跃的会话、某会话是否还在）；`InitContext.SessionDir` —— 会话目录，只给要读会话**正文**的插件；
@@ -41,6 +41,8 @@
 15. **插件状态行**（`StatusReporter`，`internal/plugin/statusline.go`）—— 插件向状态命令贡献一行运行状况（如心跳报当前节奏与下次时机），`Manager.StatusLines` 按注册顺序只收**启用**插件的非空行（禁用的插件报一行「已停」只是噪声）；与 `SystemPrompt` 同契约（廉价、无副作用）；不得在 `StatusLines` 里回头调 `InitContext.Status`（那条路径又会回到 `StatusLines`，是无限递归），也不能在 `Init` 内查状态，那仍是写锁内。措辞由插件自己负责，核心不解释内容；三处输出（Web UI、QQ、微信）统一从 `StatusInfo.PluginLines` / `/api/status` 的 `plugin_lines` 取同一份数据，接在会话行之后。 状态文本的**措辞**同样只有一份：Go 侧在 `internal/statustext`（QQ 与微信共用，此前是两份逐字节相同的复制品，改一处忘一处就会分叉），Web UI 因为跑在浏览器里另有一份（`app.js` 的 `runStatus`），改措辞时两边要一起动，`internal/statustext` 的测试盯着格式。版面按「一行说一件事」压紧：模型与思考深度同行，上下文窗口并进会话那一行——窗口大小单独占一行时，读的人还得自己拿它和用量做除法，而占用比例本来就在旁边。
 16. **会话注记**（`InitContext.Notice`，`internal/agent/notice.go`）—— 插件往一个会话里留一行只给人看的说明（`session.KindNotice`）：落盘、在界面展示，但**永不进入模型上下文**，也不进压缩摘要、不计入 token 估算（与 `KindEphemeral` 正好相反，那个是「给模型看一轮、界面不当用户消息展示」）。存在的理由是后台工作与轮次不同步——插件发起的活儿在轮次收尾之后才跑完，那时 `/api/chat` 的事件流已经关闭，结果只能进日志。标签取自 ctx 的可见域（「在人格 A 的库里记了什么」也属于人格 A），发起方由 Manager 注入。实时送达经 `Agent.SetNoticeSink` → server 的 `noticeHub` → 常驻的 `GET /api/events`（一条流服务所有会话，前端按当前会话筛；订阅者积压就丢，内容已落盘、刷新即补齐）。`AppendNotice` **刻意不取轮次锁**：工具的 `Execute` 也可能想写一条，而那时本轮正持着锁，取锁就是自锁；代价是与并发压缩的 `Replace` 有极小概率丢一条注记，注记是旁注不是对话内容，丢了不影响任何后续行为。
 17. **操作的草稿配置值**（`WithActionValues` / `ActionValuesFrom` / `ActionValueOr`，`internal/plugin/action.go`）—— 触发插件操作时，把配置弹窗里**尚未保存**的表单值经 ctx 一并交给插件，使「测试」类操作能先验后存（`weather` 测城市能不能解析，同样的形状可用于任何「测试连接」）。走 ctx 而不是给 `StartAction` 加参数，是为了不动已有实现的签名；值未经校验，就是界面原样提交的内容。**必须在 `StartAction` 内同步取出**——ctx 属于那个 HTTP 请求，响应发出后就失效了，而长流程在后台 goroutine 里。
+
+18. **轮次失败转译**（`FailureTranslator`，`internal/plugin/failure.go`）—— 轮次失败时给插件一个把失败转成一句正常回复的机会（roleplay/dual_persona 据此把内容拦截演成角色的走神），核心不知道「拒绝」「拦截」这些概念。单所有者，但征询按**逆注册序**：提示词注入的约定是靠后注册的片段覆盖靠前的（里人格设定「优先于上文的角色设定」），一句台词该由最上层的声音说出——dual_persona 因此先于 roleplay 拿到里人格的轮次。只在真人在场（`WithInteractive`）的轮次尝试：后台轮次没人看，转译白费一次调用，还会把失败伪装成成功、干扰发起方（如心跳）的判断。转译文本以正常助手消息落盘（带本轮可见域标签），**原始错误转入会话注记**，真相不丢；配置类错误（`llm.IsConfigError`：401/403/404）插件必须放行原样报出，那类问题只有看到原文才修得好。
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「天气」「身体」「心情」「危险命令」「心跳」「定时」「技能」「QQ」「微信」「飞书」「Lark」或「Telegram」这回事。
 
