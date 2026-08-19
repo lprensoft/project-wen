@@ -98,11 +98,47 @@ func pluginOptions(list []plugin.Status) []huh.Option[string] {
 	return append(opts, huh.NewOption("← 返回", back))
 }
 
-// editPlugin 展示单个插件的开关与参数表单。
+// editPlugin 展示单个插件的开关、参数表单与操作入口。
 //
 // 表单直接由插件声明的 ConfigFields 生成，与 Web UI 同源——新增插件时两边同时
-// 就有了配置界面，一处都不用改。
+// 就有了配置界面，一处都不用改。声明了操作的插件（如微信的扫码绑定）先出一层
+// 菜单：操作与配置是两条路，混进一张表单里没法表达「点一下就开始跑」。
 func editPlugin(b backend, st plugin.Status) error {
+	if len(st.Actions) > 0 {
+		// 用不会与操作 key 撞车的取值（key 按约定是小写字母开头）
+		const cfgChoice = "*config"
+		choice := cfgChoice
+		opts := []huh.Option[string]{huh.NewOption("修改开关与配置", cfgChoice)}
+		for _, a := range st.Actions {
+			label := "▶ " + a.Label
+			if a.Description != "" {
+				label += "  " + a.Description
+			}
+			opts = append(opts, huh.NewOption(fit(label), a.Key))
+		}
+		opts = append(opts, huh.NewOption("← 返回", back))
+		if err := run(huh.NewSelect[string]().
+			Title(st.Name).
+			Description(fit(st.Description)).
+			Options(opts...).
+			Value(&choice)); err != nil {
+			return err
+		}
+		switch choice {
+		case back:
+			return nil
+		case cfgChoice:
+			// 落到下面的表单
+		default:
+			for _, a := range st.Actions {
+				if a.Key == choice {
+					return runAction(b, st.Name, a)
+				}
+			}
+			return nil
+		}
+	}
+
 	enabled := st.Enabled
 	fields := []huh.Field{
 		huh.NewConfirm().

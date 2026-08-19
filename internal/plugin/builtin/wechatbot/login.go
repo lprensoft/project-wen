@@ -64,6 +64,7 @@ type bindState struct {
 	status  string
 	message string
 	png     []byte
+	link    string // 编码进二维码的 URL 原文，终端界面据此自渲染
 	cancel  context.CancelFunc
 	gen     int
 }
@@ -117,7 +118,7 @@ func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st := plugin.ActionState{Status: p.bind.status, Message: p.bind.message, Image: p.bind.png}
+	st := plugin.ActionState{Status: p.bind.status, Message: p.bind.message, Image: p.bind.png, Link: p.bind.link}
 	if st.Status == "" {
 		st.Status = plugin.ActionIdle
 	}
@@ -125,7 +126,8 @@ func (p *Plugin) ActionState(key string) (plugin.ActionState, error) {
 }
 
 // setBind 更新绑定流程状态（仅当本流程仍是当前代次时——旧流程被替换后不再发声）。
-func (p *Plugin) setBind(gen int, status, message string, png []byte) {
+// png 与 link 是同一个二维码的两种呈现，成对更新。
+func (p *Plugin) setBind(gen int, status, message string, png []byte, link string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.bind.gen != gen {
@@ -133,11 +135,11 @@ func (p *Plugin) setBind(gen int, status, message string, png []byte) {
 	}
 	p.bind.status, p.bind.message = status, message
 	if png != nil {
-		p.bind.png = png
+		p.bind.png, p.bind.link = png, link
 	}
 	if status == plugin.ActionDone || status == plugin.ActionError {
 		p.bind.cancel = nil
-		p.bind.png = nil // 结束后二维码不再有意义，不留在内存里
+		p.bind.png, p.bind.link = nil, "" // 结束后二维码不再有意义，不留在内存里
 	}
 }
 
@@ -163,7 +165,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, gen in
 	fail := func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		log.Printf("wechat_bot: 绑定失败: %s", msg)
-		p.setBind(gen, plugin.ActionError, "绑定失败："+msg, nil)
+		p.setBind(gen, plugin.ActionError, "绑定失败："+msg, nil, "")
 	}
 
 	qr, err := p.fetchQR(ctx, apiBase)
@@ -176,18 +178,18 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, gen in
 		fail("生成二维码图片出错: %v", err)
 		return
 	}
-	p.setBind(gen, plugin.ActionPending, "请用微信扫码并确认（微信 App：我 → 设置 → 插件 → ClawBot）", png)
+	p.setBind(gen, plugin.ActionPending, "请用微信扫码并确认（微信 App：我 → 设置 → 插件 → ClawBot）", png, qr.QrcodeImgContent)
 
 	refreshes := 0
 	for {
 		if ctx.Err() != nil {
-			p.setBind(gen, plugin.ActionError, "绑定超时或已取消，请重新发起。", nil)
+			p.setBind(gen, plugin.ActionError, "绑定超时或已取消，请重新发起。", nil, "")
 			return
 		}
 		st, err := p.pollQRStatus(ctx, apiBase, qr.Qrcode)
 		if err != nil {
 			if ctx.Err() != nil {
-				p.setBind(gen, plugin.ActionError, "绑定超时或已取消，请重新发起。", nil)
+				p.setBind(gen, plugin.ActionError, "绑定超时或已取消，请重新发起。", nil, "")
 				return
 			}
 			fail("查询扫码状态出错: %v", err)
@@ -195,7 +197,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, gen in
 		}
 		switch st.Status {
 		case "scaned":
-			p.setBind(gen, plugin.ActionPending, "已扫码，请在微信中确认连接…", nil)
+			p.setBind(gen, plugin.ActionPending, "已扫码，请在微信中确认连接…", nil, "")
 		case "expired":
 			refreshes++
 			if refreshes > maxQRRefresh {
@@ -213,7 +215,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, gen in
 				return
 			}
 			p.setBind(gen, plugin.ActionPending,
-				fmt.Sprintf("二维码已过期，已自动刷新（%d/%d），请扫描新码", refreshes, maxQRRefresh), png)
+				fmt.Sprintf("二维码已过期，已自动刷新（%d/%d），请扫描新码", refreshes, maxQRRefresh), png, qr.QrcodeImgContent)
 		case "confirmed":
 			if st.BotToken == "" || st.BaseURL == "" {
 				fail("服务端未返回完整凭证")
@@ -237,7 +239,7 @@ func (p *Plugin) bindFlow(ctx context.Context, cancel context.CancelFunc, gen in
 			p.mu.Unlock()
 			log.Printf("wechat_bot: 绑定成功，bot_id=%s 绑定人=%s", creds.BotID, creds.BinderUserID)
 			p.setBind(gen, plugin.ActionDone,
-				"✅ 绑定成功！绑定人 "+creds.BinderUserID+" 已自动放行，现在可以在微信里和助手对话了。", nil)
+				"✅ 绑定成功！绑定人 "+creds.BinderUserID+" 已自动放行，现在可以在微信里和助手对话了。", nil, "")
 			p.startPolling()
 			return
 		}
