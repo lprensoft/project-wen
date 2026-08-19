@@ -1182,3 +1182,34 @@ body {
 }
 .number-step:hover { background: var(--bg); color: var(--text); }
 .number-step svg { width: 11px; height: 11px; }
+
+/* ---------- 访问控制 ---------- */
+
+.access-state {
+  padding: 10px 12px;
+  margin-bottom: 18px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+}
+.access-state.ok { border-color: var(--ok); color: var(--ok); background: var(--ok-bg); }
+.access-state.warn { border-color: var(--danger); color: var(--danger); background: var(--danger-bg); }
+
+.access-form { max-width: 380px; }
+.access-form input[type="password"] {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+}
+.access-form input[type="password"]:focus { border-color: var(--accent); }
+.access-form input[type="password"]:disabled { opacity: .55; }
+
+.access-actions { display: flex; gap: 8px; margin-top: 18px; }

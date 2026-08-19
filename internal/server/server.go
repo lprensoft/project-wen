@@ -14,6 +14,17 @@ import (
 //go:embed webui
 var webuiFS embed.FS
 
+// Options 是 Server 的访问控制参数。
+type Options struct {
+	// Auth 保管访问口令；为 nil 表示不设防（仅用于测试）。
+	Auth *AuthStore
+	// TrustLoopback 决定回环来源是否免认证。套反向代理时必须关掉：
+	// 那种部署下所有请求源都是回环地址。
+	TrustLoopback bool
+	// Exposed 表示实际监听地址覆盖了本机以外的网卡，供界面提示与清除口令的守卫判断。
+	Exposed bool
+}
+
 type Server struct {
 	agent    *agent.Agent
 	store    *session.Store
@@ -21,12 +32,24 @@ type Server struct {
 	models   *modelcfg.Store
 	confirms *confirmBroker
 	notices  *noticeHub
+
+	auth          *AuthStore
+	tokens        *tokenStore
+	gate          *failGate
+	trustLoopback bool
+	exposed       bool
 }
 
-func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *modelcfg.Store) *Server {
+func New(a *agent.Agent, store *session.Store, plugins *plugin.Manager, models *modelcfg.Store, opts Options) *Server {
+	auth := opts.Auth
+	if auth == nil {
+		auth = &AuthStore{} // 无口令 = 不设防
+	}
 	s := &Server{
 		agent: a, store: store, plugins: plugins, models: models,
 		confirms: newConfirmBroker(), notices: newNoticeHub(),
+		auth: auth, tokens: newTokenStore(), gate: newFailGate(),
+		trustLoopback: opts.TrustLoopback, exposed: opts.Exposed,
 	}
 	// 接上会话注记的实时出口。后台工作产生的注记本来只能进日志——轮次的事件流
 	// 在它跑完之前就关了。
@@ -59,5 +82,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/models/current", s.setCurrentModel)
 	mux.HandleFunc("POST /api/models/test", s.testModel)
 
-	return mux
+	mux.HandleFunc("GET /api/auth/status", s.authStatus)
+	mux.HandleFunc("POST /api/auth/login", s.authLogin)
+	mux.HandleFunc("POST /api/auth/logout", s.authLogout)
+	mux.HandleFunc("PUT /api/auth/password", s.authSetPassword)
+
+	return s.guard(mux)
 }
