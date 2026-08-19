@@ -435,6 +435,152 @@ WEN_AUTH_PASSWORD=<口令> wen
 
 此前配了 `host: 0.0.0.0` 的实例，升级后若未设置口令会降级为只监听本机。这是有意的：那些实例此前处于完全开放状态。按上面任一条设置口令并重启即可恢复对外服务。
 
+## 服务器部署（Linux）
+
+两种方式：临时或简单场景用启停脚本，长期跑用 systemd（开机自启、崩溃自动拉起、journald 管日志）。两者的共同点：**工作目录必须是 `config.yaml` 所在目录**——wen 从工作目录读配置，会话与插件状态也落在由它推导的目录里，目录不对的表现是「像全新安装一样什么配置都没有」。
+
+### 启停脚本
+
+放在 wen 二进制与 `config.yaml` 同目录，保存为 `wen.sh` 并 `chmod +x wen.sh`：
+
+```sh
+#!/bin/sh
+# wen 启停脚本：./wen.sh {start|stop|restart|status}
+
+cd "$(dirname "$0")" || exit 1
+
+PIDFILE=./wen.pid
+LOGFILE=./wen.log
+
+running() {
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+start() {
+    if running; then
+        echo "wen 已在运行（pid $(cat "$PIDFILE")）"
+        exit 0
+    fi
+    nohup ./wen >>"$LOGFILE" 2>&1 &
+    echo $! >"$PIDFILE"
+    sleep 1
+    if running; then
+        echo "wen 已启动（pid $(cat "$PIDFILE")），日志: $LOGFILE"
+    else
+        rm -f "$PIDFILE"
+        echo "启动失败，最近日志："
+        tail -n 20 "$LOGFILE"
+        exit 1
+    fi
+}
+
+stop() {
+    if ! running; then
+        echo "wen 没有在运行"
+        rm -f "$PIDFILE"
+        return 0
+    fi
+    pid=$(cat "$PIDFILE")
+    kill "$pid"
+    # 等最多 10 秒让它优雅收尾（停插件、断长连接）
+    i=0
+    while [ $i -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "未在 10 秒内退出，强制结束"
+        kill -9 "$pid"
+    fi
+    rm -f "$PIDFILE"
+    echo "wen 已停止"
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; start ;;
+    status)
+        if running; then
+            echo "wen 运行中（pid $(cat "$PIDFILE")）"
+        else
+            echo "wen 未运行"
+        fi
+        ;;
+    *)
+        echo "用法: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+```
+
+日志会一直追加到 `wen.log`，久跑记得定期清理或配 logrotate。
+
+### systemd
+
+假设部署在 `/opt/wen`（按实际路径替换）。保存为 `/etc/systemd/system/wen.service`：
+
+```ini
+[Unit]
+Description=Wen Agent
+# 等网络真正可用再启动：QQ/微信长连接、模型接口都要出网
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=wen
+Group=wen
+WorkingDirectory=/opt/wen
+ExecStart=/opt/wen/wen
+
+# 崩溃自动拉起；正常 stop 不算失败
+Restart=on-failure
+RestartSec=5
+
+# 优雅停止：默认发 SIGTERM，给 15 秒收尾（停插件、断长连接），超时才 SIGKILL
+TimeoutStopSec=15
+
+# 需要环境变量时在这里给：
+# Environment=WEN_AUTH_PASSWORD=xxxx
+# 或放进单独的文件（记得 chmod 600）：
+# EnvironmentFile=/opt/wen/wen.env
+
+# 可选加固。别开太狠：exec_command 插件本来就要执行命令、读写工作目录，
+# 沙箱开满等于把功能关了。下面这组是不影响功能的底线：
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/wen
+
+[Install]
+WantedBy=multi-user.target
+```
+
+首次部署：
+
+```sh
+# 建专用用户（无登录 shell），并把目录交给它
+sudo useradd --system --home /opt/wen --shell /usr/sbin/nologin wen
+sudo chown -R wen:wen /opt/wen
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now wen
+```
+
+日常操作：
+
+```sh
+sudo systemctl status wen          # 状态
+sudo systemctl restart wen         # 重启
+journalctl -u wen -f               # 跟日志
+journalctl -u wen --since today    # 看今天的日志
+```
+
+两点注意：
+
+- 用了 `User=wen` 之后，终端配置工具要以同一用户、同一目录执行才能连上运行中的实例：`cd /opt/wen && sudo -u wen ./wen config`。
+- `config.yaml` 若放在 `/opt/wen` 之外，把那个目录一并加进 `ReadWritePaths`。
+
 ## 上下文的组织
 
 一轮请求发出去的上下文分两层：
