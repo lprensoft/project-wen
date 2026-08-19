@@ -14,9 +14,13 @@ import (
 // 走不到压缩就结束了，那些结论只能留在原始会话里靠检索兜底。这里每隔若干轮真人
 // 对话提炼一次，代价是每个窗口多一次模型调用。
 //
-// 攒的是内存里的「用户输入 + 助手最终文本」，不是去读会话文件：压缩会用 Replace
-// 物理重写历史，任何基于消息序号的水位在那之后都失效，还要再写一套检测与复位。
-// 代价是丢掉工具调用的细节、进程重启丢缓冲，这两样正好由压缩那条路径兜住。
+// 攒的是「用户输入 + 助手最终文本」，不是去读会话文件：压缩会用 Replace 物理重写
+// 历史，任何基于消息序号的水位在那之后都失效，还要再写一套检测与复位。代价是丢掉
+// 工具调用的细节，这一样由压缩那条路径兜住。
+//
+// 缓冲本身落盘（见 window_state.go）。它原本只在内存里，代价记作「进程重启丢缓冲」
+// 并同样指望压缩兜住，但那兜不住：上下文窗口是百万级，压缩要到九成才触发，大多数
+// 会话一辈子走不到那里。于是重启比提炼间隔更频繁的人，定期提炼一次都不会发生。
 
 // windowKey 把提炼窗口按会话与可见域分开。同一个会话在两个可见域下的对话各攒各的，
 // 提炼时也各写各的库。
@@ -104,10 +108,14 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 	if sweep {
 		p.sweeping, p.lastSweep = true, ev.EndedAt
 	}
-	if ripe == nil && !sweep {
+	if ripe == nil && !sweep && !s.turnExtract {
 		p.turnMu.Unlock()
 		return
 	}
+	// 缓冲进展要落盘，否则重启就归零，「每 N 轮提炼一次」在重启比 N 轮更频繁时
+	// 永远走不完。快照在锁内取，写盘在锁外做。
+	p.windowSeq++
+	dir, snapshot, lastSweep, seq := p.windowDir, p.snapshotWindowsLocked(), p.lastSweep, p.windowSeq
 	// 登记在锁内完成：Stop 会先在同一把锁下置 stopped 再 Wait，
 	// 这样不会出现「刚 Add 完就被略过」的 goroutine
 	p.wg.Add(1)
@@ -115,6 +123,7 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 
 	go func() {
 		defer p.wg.Done()
+		p.persistWindows(dir, snapshot, lastSweep, seq)
 		if ripe != nil {
 			p.runExtract(s, key, ripe)
 		}
@@ -122,6 +131,35 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 			p.runSweep(s)
 		}
 	}()
+}
+
+// persistWindows 串行写盘并丢弃过期的快照。
+func (p *Plugin) persistWindows(dir string, windows map[windowKey]*window, lastSweep time.Time, seq uint64) {
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
+	if seq <= p.savedSeq {
+		return // 已经写过更新的快照了，这一份是旧的
+	}
+	p.savedSeq = seq
+	saveWindowState(dir, windows, lastSweep)
+}
+
+// snapshotWindowsLocked 深拷贝当前缓冲，供锁外写盘使用。
+// 不能把 p.windows 直接交出去：下一轮对话会继续改它，而写盘正在遍历。
+func (p *Plugin) snapshotWindowsLocked() map[windowKey]*window {
+	out := make(map[windowKey]*window, len(p.windows))
+	for k, w := range p.windows {
+		out[k] = &window{
+			scope: plugin.Scope{
+				Write: w.scope.Write,
+				Read:  append([]string(nil), w.scope.Read...),
+			},
+			turns:   append([]windowTurn(nil), w.turns...),
+			bytes:   w.bytes,
+			lastEnd: w.lastEnd,
+		}
+	}
+	return out
 }
 
 // accumulateLocked 把本轮并进对应的窗口，并判断是否该提炼。

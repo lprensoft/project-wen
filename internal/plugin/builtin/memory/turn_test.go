@@ -393,3 +393,108 @@ func waitForNotice(t *testing.T, rec *noticeRecorder, n int) {
 	}
 	t.Fatalf("等不到 %d 条注记", n)
 }
+
+// 提炼窗口要跨重启延续。
+//
+// 这是本次修复的回归测试：窗口原本只在内存里，重启归零，于是重启比「提炼间隔」
+// 更频繁的人，定期提炼一次都不会发生。这里模拟「攒了 4 轮 → 重启 → 再来 1 轮」，
+// 第 5 轮应当触发提炼。
+func TestWindowSurvivesRestart(t *testing.T) {
+	stateDir := t.TempDir()
+
+	p1 := New()
+	if err := p1.Init(plugin.InitContext{StateDir: stateDir, Complete: (&fakeComplete{}).fn},
+		turnCfg(nil)); err != nil {
+		t.Fatal(err)
+	}
+	runTurns(p1, 4)
+	p1.Stop() // Stop 会等在途的写盘结束
+
+	// 新进程：同一个状态目录，重新装回缓冲
+	c := newBlockingComplete()
+	p2 := New()
+	if err := p2.Init(plugin.InitContext{StateDir: stateDir, Complete: c.fn}, turnCfg(nil)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p2.Stop)
+
+	p2.turnMu.Lock()
+	got := len(p2.windows[windowKey{session: "s1"}].turns)
+	p2.turnMu.Unlock()
+	if got != 4 {
+		t.Fatalf("重启后窗口里有 %d 轮，应接着上次的 4 轮", got)
+	}
+
+	runTurns(p2, 1) // 第 5 轮，应到点
+	select {
+	case <-c.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("重启后再来一轮就该到间隔，却没有触发提炼")
+	}
+	close(c.release)
+}
+
+// 落盘的窗口要保住内容与可见域，否则提炼时会读错库、写错库。
+func TestWindowStateRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	end := time.Now().Truncate(time.Second)
+	windows := map[windowKey]*window{
+		{session: "s1", tag: "inner"}: {
+			scope:   plugin.Scope{Write: "inner", Read: []string{"inner"}},
+			turns:   []windowTurn{{user: "问", reply: "答"}},
+			bytes:   6,
+			lastEnd: end,
+		},
+	}
+	saveWindowState(dir, windows, end)
+
+	got, sweep := loadWindowState(dir)
+	w := got[windowKey{session: "s1", tag: "inner"}]
+	if w == nil {
+		t.Fatal("窗口未恢复")
+	}
+	if len(w.turns) != 1 || w.turns[0].user != "问" || w.turns[0].reply != "答" {
+		t.Errorf("对话内容不对: %+v", w.turns)
+	}
+	if w.scope.Write != "inner" || len(w.scope.Read) != 1 || w.scope.Read[0] != "inner" {
+		t.Errorf("可见域丢失: %+v", w.scope)
+	}
+	if w.bytes != 6 {
+		t.Errorf("字节数 = %d, want 6（够不够格提炼靠它判断）", w.bytes)
+	}
+	if !sweep.Equal(end) {
+		t.Errorf("上次清扫日期 = %v, want %v", sweep, end)
+	}
+}
+
+// 重新配置（SetConfig 会再走一次 Init）不该把内存里刚攒的几轮退回盘上的旧值。
+func TestReinitKeepsInMemoryWindow(t *testing.T) {
+	stateDir := t.TempDir()
+	ictx := plugin.InitContext{StateDir: stateDir, Complete: (&fakeComplete{}).fn}
+
+	p := New()
+	if err := p.Init(ictx, turnCfg(nil)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	runTurns(p, 3)
+
+	// 改个无关配置，触发重新 Init
+	if err := p.Init(ictx, turnCfg(map[string]any{"max_extract": 3})); err != nil {
+		t.Fatal(err)
+	}
+	p.turnMu.Lock()
+	got := len(p.windows[windowKey{session: "s1"}].turns)
+	p.turnMu.Unlock()
+	if got != 3 {
+		t.Errorf("重新配置后窗口里有 %d 轮，应保持内存中的 3 轮", got)
+	}
+}
+
+// 没有可用的持久化目录时退化成纯内存缓冲，不报错也不乱写文件。
+func TestWindowNoStateDirDegrades(t *testing.T) {
+	saveWindowState("", map[windowKey]*window{}, time.Time{})
+	if got, _ := loadWindowState(""); got != nil {
+		t.Error("无目录时不该返回窗口")
+	}
+}
