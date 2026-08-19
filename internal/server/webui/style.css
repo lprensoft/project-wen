@@ -865,12 +865,20 @@ body {
   border-top: 1px solid var(--border);
 }
 .plugin-config-action .btn-ghost { align-self: flex-start; }
+/* 说明里可能带目录路径：换行要保留，长路径要能断开而不是把弹窗撑宽 */
+.plugin-config-action .field-desc { white-space: pre-line; overflow-wrap: anywhere; }
 
 /* 插件操作弹窗：图片（如二维码）居中，说明文字在下 */
 .plugin-action-body { align-items: center; text-align: center; }
 .plugin-action-image { max-width: 260px; max-height: 260px; border-radius: 8px; background: #fff; padding: 8px; }
 .plugin-action-message { font-size: 13px; color: var(--text); white-space: pre-wrap; }
 .plugin-action-message.action-error { color: var(--danger, #d33); }
+/* 没有图片时结果是纯文本（如技能清单）：居中的多行列表读起来是乱的，改左对齐 */
+.plugin-action-image.hidden + .plugin-action-message {
+  align-self: stretch;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
 
 /* 卡片右上角的配置齿轮（仅有可配置项的插件显示） */
 .btn-gear {
