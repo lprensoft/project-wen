@@ -119,6 +119,3 @@
 ## [v0.1.0] - 2026-08-18
 
 初始版本。
-
-[v0.1.1]: https://github.com/lprensoft/project-wen/compare/v0.1.0...v0.1.1
-[v0.1.0]: https://github.com/lprensoft/project-wen/releases/tag/v0.1.0
