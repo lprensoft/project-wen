@@ -66,15 +66,22 @@ func runServe(args []string) {
 	}
 
 	// Agent 与插件互相需要：插件在 Agent 之前构造，故各能力都用闭包延迟到实际使用时取值。
-	// store 也在其后创建，但必须与 Agent 复用同一个实例——两个 Store 的会话锁互不相识。
+	// store 是例外，它只依赖配置，因此提前建好直接交给插件——插件的 Init 就要用它
+	// （心跳启动时要读上次真人交互的时间）。整个进程共用这一个实例：两个 Store 的
+	// 会话锁互不相识。
 	var (
 		ag      *agent.Agent
-		store   *session.Store
 		models  *modelcfg.Store
 		plugins *plugin.Manager
 	)
+	store, err := session.NewStore(cfg.SessionDir())
+	if err != nil {
+		log.Fatalf("初始化 session 存储失败: %v", err)
+	}
+
 	ictx := plugin.InitContext{
 		Workdir:    workdir,
+		Sessions:   store,
 		SessionDir: cfg.SessionDir(),
 		Complete: func(ctx context.Context, prompt string) (string, error) {
 			if ag == nil {
@@ -95,9 +102,6 @@ func runServe(args []string) {
 			return ag.AppendNotice(ctx, sessionID, text)
 		},
 		NewSession: func() (string, error) {
-			if store == nil {
-				return "", fmt.Errorf("会话存储尚未就绪")
-			}
 			m, err := store.Create()
 			return m.ID, err
 		},
@@ -109,7 +113,7 @@ func runServe(args []string) {
 		},
 		// 与 server 的 GET /api/status 同源，保证远端界面与 Web UI 的状态输出一致
 		Status: func(sessionID string) (plugin.StatusInfo, error) {
-			if models == nil || store == nil {
+			if models == nil {
 				return plugin.StatusInfo{}, fmt.Errorf("状态尚未就绪")
 			}
 			provider, model, thinking, contextLength := models.Status()
@@ -141,11 +145,6 @@ func runServe(args []string) {
 		},
 	}
 	plugins = buildPlugins(cfg, ictx)
-
-	store, err = session.NewStore(cfg.SessionDir())
-	if err != nil {
-		log.Fatalf("初始化 session 存储失败: %v", err)
-	}
 
 	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
 	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)

@@ -257,8 +257,8 @@ func TestReadArchive(t *testing.T) {
 	}
 }
 
-func TestPluginImplementsLifecycle(t *testing.T) {
-	var _ plugin.Lifecycle = New()
+func TestPluginImplementsCompactObserver(t *testing.T) {
+	var _ plugin.CompactObserver = New()
 
 	base := t.TempDir()
 	sessions := filepath.Join(base, "sessions")

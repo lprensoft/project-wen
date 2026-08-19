@@ -145,30 +145,19 @@ func (p *Plugin) setNote(t *Task, note string) {
 	_ = p.saveLocked()
 }
 
-// pickSession 与心跳插件相同的落点判定：最近活跃（真人交互）的会话，缺字段回落创建
-// 时间，一个会话都没有时新建。
+// pickSession 把任务落在最近活跃的会话上，一个都没有时新建。
+// 判定规则见 SessionQuery.LastActive，与心跳插件共用同一份。
 func (p *Plugin) pickSession() (string, error) {
 	p.mu.Lock()
 	sessions, newSession := p.sessions, p.newSession
 	p.mu.Unlock()
 
-	metas, err := sessions.List()
+	id, _, err := sessions.LastActive()
 	if err != nil {
 		return "", err
 	}
-	bestID := ""
-	var bestAt time.Time
-	for _, m := range metas {
-		at := m.CreatedAt
-		if m.LastActiveAt != nil {
-			at = *m.LastActiveAt
-		}
-		if bestID == "" || at.After(bestAt) {
-			bestID, bestAt = m.ID, at
-		}
-	}
-	if bestID != "" {
-		return bestID, nil
+	if id != "" {
+		return id, nil
 	}
 	if newSession == nil {
 		return "", errors.New("没有会话且当前环境不支持新建")

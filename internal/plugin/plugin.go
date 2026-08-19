@@ -26,7 +26,12 @@ type InitContext struct {
 	// 为空表示当前没有可用的持久化位置，需要落盘的插件应在 Init 中返回错误拒绝启用，
 	// 不要退化到写进程当前目录。
 	StateDir string
-	// SessionDir 是会话存储目录。仅供需要读取会话数据的插件使用，写入请走 StateDir。
+	// Sessions 是会话的只读窄查询（最近活跃的会话、某个会话是否还在）。
+	// 为 nil 表示不可用，需要它的插件应在 Init 中返回错误拒绝启用。
+	Sessions SessionQuery
+	// SessionDir 是会话存储目录，只给需要读会话**正文**的插件（检索、归档）。
+	// 只想知道「该落在哪个会话上」或「会话还在不在」的插件请用 Sessions：
+	// 为一个布尔值换来全部对话的读写权限不划算。写入一律走 StateDir。
 	SessionDir string
 	// Complete 用当前模型做一次一问一答的辅助调用（不带工具、不启用思考、不写入会话），
 	// 供插件完成提炼、归类这类内部工作。为 nil 表示当前不可用，插件应据此降级而不是报错。
@@ -88,9 +93,10 @@ type CompactEvent struct {
 	Summary   string        // 已生成的摘要正文
 }
 
-// Lifecycle 是插件的可选能力：接收会话生命周期事件。
-// 未实现该接口的插件不会收到任何通知。
-type Lifecycle interface {
+// CompactObserver 是插件的可选能力：在会话历史被压缩前收到通知。
+// 未实现该接口的插件不会收到任何通知。与 TurnObserver 同一族：都是「观察核心的
+// 某个时刻」，命名与广播方式保持一致。
+type CompactObserver interface {
 	// OnCompact 在会话历史被摘要替换之前调用，此时 History 尚未被删除。
 	// 返回的非空注记会追加到摘要消息末尾；返回 error 只记录日志，不阻断压缩。
 	OnCompact(ctx context.Context, ev CompactEvent) (string, error)

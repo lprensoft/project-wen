@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"wen/internal/plugin"
-	"wen/internal/session"
 )
 
 // 常量集中在此，便于对照行为。
@@ -34,7 +33,7 @@ type Plugin struct {
 	stateDir   string
 	runTurn    plugin.RunTurnFunc
 	newSession plugin.NewSessionFunc
-	sessions   *session.Store // 只读：挑选最近活跃会话
+	sessions   plugin.SessionQuery // 只读：挑选最近活跃会话
 
 	tasks []*Task
 
@@ -75,9 +74,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	if ictx.RunTurn == nil {
 		return fmt.Errorf("当前环境不支持插件发起对话轮次")
 	}
-	sessions, err := session.NewStore(ictx.SessionDir)
-	if err != nil {
-		return fmt.Errorf("打开会话目录失败: %w", err)
+	if ictx.Sessions == nil {
+		return fmt.Errorf("当前环境不支持会话查询")
 	}
 
 	p.Stop()
@@ -87,7 +85,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, _ map[string]any) error {
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
-	p.sessions = sessions
+	p.sessions = ictx.Sessions
 	if err := p.loadLocked(); err != nil {
 		return fmt.Errorf("加载任务失败: %w", err)
 	}

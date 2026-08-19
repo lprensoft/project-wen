@@ -6,20 +6,6 @@ import (
 	"wen/internal/session"
 )
 
-// taggedOf 把存储态历史转成插件钩子看到的只读形式。
-func taggedOf(stored []session.StoredMessage) []plugin.TaggedMessage {
-	out := make([]plugin.TaggedMessage, 0, len(stored))
-	for _, m := range stored {
-		out = append(out, plugin.TaggedMessage{
-			Message: m.Message,
-			Tag:     m.Tag,
-			Kind:    m.Kind,
-			TS:      m.TS,
-		})
-	}
-	return out
-}
-
 // visibleHistory 取出本轮可见域能读到的历史消息。
 //
 // 标签是按整轮统一分配的（一次 run 内所有落盘消息共用同一个 Write），因此过滤是

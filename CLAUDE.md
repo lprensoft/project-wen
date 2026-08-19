@@ -25,9 +25,9 @@
 给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十六处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
-2. `InitContext.SessionDir` —— 会话目录，只读用；
+2. `InitContext.Sessions` —— 会话的只读窄查询（最近活跃的会话、某会话是否还在）；`InitContext.SessionDir` —— 会话目录，只给要读会话**正文**的插件；
 3. `InitContext.Complete` —— 辅助模型调用；
-4. `Lifecycle` —— 会话生命周期通知；
+4. `CompactObserver` —— 压缩前通知；
 5. **可见域**（`Scope` / `ScopeDecider` / `TurnPrompter`，见下节）；
 6. `Requires` / `Conflicts` —— 插件间的依赖与互斥声明；
 7. **操作确认**（`ConfirmFunc` / `WithConfirmer` / `ConfirmerFrom`，见下节）；
@@ -37,22 +37,26 @@
 11. **交互标记与会话活跃时间**（`WithInteractive` / `Meta.LastActiveAt`，见「插件发起轮次约定」）；
 12. `InitContext.Status` —— 模型配置与会话用量快照，与 Web UI 的状态命令同源，远端界面（如 QQ 的 /status）据此保持一致输出。
 13. **轮次过程通知**（`WithTurnNotes` / `TurnNotesFrom`，`internal/plugin/turn.go`）—— 发起方按需安装回调，核心在每轮模型响应后送出完整思考链与工具名批次（**只有名字**：参数与结果可能载有隐私，转发与否不由核心替接收方决定）；不安装零开销。IM 插件的「展示思考过程 / 展示工具调用」开关（默认都关）据此把过程转发到远端，措辞与 Web UI 对齐（🧠 思考过程 / 🔧 调用工具）。
-14. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、Manager 持锁时调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始。界面入口统一在齿轮的配置弹窗内（有操作或有配置项都会出齿轮，卡片上不单独摆按钮），点击操作弹出进展窗盖在配置弹窗之上、**配置弹窗不关**（否则填了一半的内容会丢，「测试」类操作就等于要求先保存）；关闭进展窗只停轮询不打断流程。
-15. **插件状态行**（`StatusReporter`，`internal/plugin/statusline.go`）—— 插件向状态命令贡献一行运行状况（如心跳报当前节奏与下次时机），`Manager.StatusLines` 按注册顺序只收**启用**插件的非空行（禁用的插件报一行「已停」只是噪声）；与 `SystemPrompt` 同契约（廉价、无副作用、Manager 持锁时调用，因此实现里不得反向调 Manager、也不能在 `Init` 内查状态，那是写锁内）。措辞由插件自己负责，核心不解释内容；三处输出（Web UI、QQ、微信）统一从 `StatusInfo.PluginLines` / `/api/status` 的 `plugin_lines` 取同一份数据，接在会话行之后。 状态文本的**措辞**同样只有一份：Go 侧在 `internal/statustext`（QQ 与微信共用，此前是两份逐字节相同的复制品，改一处忘一处就会分叉），Web UI 因为跑在浏览器里另有一份（`app.js` 的 `runStatus`），改措辞时两边要一起动，`internal/statustext` 的测试盯着格式。版面按「一行说一件事」压紧：模型与思考深度同行，上下文窗口并进会话那一行——窗口大小单独占一行时，读的人还得自己拿它和用量做除法，而占用比例本来就在旁边。
+14. **插件操作入口**（`Actionable`，`internal/plugin/action.go`）—— 插件声明可在设置页触发的操作（如扫码绑定），状态含说明文字与一张可选 PNG（只经内存下发不落盘）；`Actions()` 与 `SystemPrompt()` 同契约（廉价、每次刷新列表都调用），`StartAction` 立即返回、长流程放后台 goroutine 自带超时，进行中重复触发=重新开始。界面入口统一在齿轮的配置弹窗内（有操作或有配置项都会出齿轮，卡片上不单独摆按钮），点击操作弹出进展窗盖在配置弹窗之上、**配置弹窗不关**（否则填了一半的内容会丢，「测试」类操作就等于要求先保存）；关闭进展窗只停轮询不打断流程。
+15. **插件状态行**（`StatusReporter`，`internal/plugin/statusline.go`）—— 插件向状态命令贡献一行运行状况（如心跳报当前节奏与下次时机），`Manager.StatusLines` 按注册顺序只收**启用**插件的非空行（禁用的插件报一行「已停」只是噪声）；与 `SystemPrompt` 同契约（廉价、无副作用）；不得在 `StatusLines` 里回头调 `InitContext.Status`（那条路径又会回到 `StatusLines`，是无限递归），也不能在 `Init` 内查状态，那仍是写锁内。措辞由插件自己负责，核心不解释内容；三处输出（Web UI、QQ、微信）统一从 `StatusInfo.PluginLines` / `/api/status` 的 `plugin_lines` 取同一份数据，接在会话行之后。 状态文本的**措辞**同样只有一份：Go 侧在 `internal/statustext`（QQ 与微信共用，此前是两份逐字节相同的复制品，改一处忘一处就会分叉），Web UI 因为跑在浏览器里另有一份（`app.js` 的 `runStatus`），改措辞时两边要一起动，`internal/statustext` 的测试盯着格式。版面按「一行说一件事」压紧：模型与思考深度同行，上下文窗口并进会话那一行——窗口大小单独占一行时，读的人还得自己拿它和用量做除法，而占用比例本来就在旁边。
 16. **会话注记**（`InitContext.Notice`，`internal/agent/notice.go`）—— 插件往一个会话里留一行只给人看的说明（`session.KindNotice`）：落盘、在界面展示，但**永不进入模型上下文**，也不进压缩摘要、不计入 token 估算（与 `KindEphemeral` 正好相反，那个是「给模型看一轮、界面不当用户消息展示」）。存在的理由是后台工作与轮次不同步——插件发起的活儿在轮次收尾之后才跑完，那时 `/api/chat` 的事件流已经关闭，结果只能进日志。标签取自 ctx 的可见域（「在人格 A 的库里记了什么」也属于人格 A），发起方由 Manager 注入。实时送达经 `Agent.SetNoticeSink` → server 的 `noticeHub` → 常驻的 `GET /api/events`（一条流服务所有会话，前端按当前会话筛；订阅者积压就丢，内容已落盘、刷新即补齐）。`AppendNotice` **刻意不取轮次锁**：工具的 `Execute` 也可能想写一条，而那时本轮正持着锁，取锁就是自锁；代价是与并发压缩的 `Replace` 有极小概率丢一条注记，注记是旁注不是对话内容，丢了不影响任何后续行为。
 17. **操作的草稿配置值**（`WithActionValues` / `ActionValuesFrom` / `ActionValueOr`，`internal/plugin/action.go`）—— 触发插件操作时，把配置弹窗里**尚未保存**的表单值经 ctx 一并交给插件，使「测试」类操作能先验后存（`weather` 测城市能不能解析，同样的形状可用于任何「测试连接」）。走 ctx 而不是给 `StartAction` 加参数，是为了不动已有实现的签名；值未经校验，就是界面原样提交的内容。**必须在 `StartAction` 内同步取出**——ctx 属于那个 HTTP 请求，响应发出后就失效了，而长流程在后台 goroutine 里。
 
 任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「天气」「身体」「心情」「危险命令」「心跳」「定时」「QQ」或「微信」这回事。
 
+**核心对插件的回调一律在锁外进行。** `Manager` 先在锁内快照「实现了某个接口的启用插件」（`enabledAs`），再到锁外逐个调用，每次调用都过 `safely` 兜住 panic（单个插件不该连累整轮对话）。这不是风格偏好：Go 的 `RWMutex` 在有写者排队时会挡住后续所有 `RLock`，读锁一旦跨进插件代码，插件里一次反向调用就会永久卡住——而 `OnCompact` 里有一次真实的模型往返，那把锁会一直握到提炼结束，期间在设置页拨一下开关就足以让整个服务停住。代价是快照与调用之间有个窗口，期间刚被禁用的插件仍会被回调一次，可接受（插件本就要求自行加锁、`Init` 可重入）。例外只有两处，都留在锁内：`Init` 要与开关状态一起原子完成，依赖与冲突的推算要看一致的整张注册表——因此 `Init` 内不得反向调用 `Manager`，`Requires` / `Conflicts` 必须是静态声明。
+
 远程 IM 插件目前有两个同构实现：`qq_bot`（QQ 官方开放平台，WebSocket 网关）与 `wechat_bot`（微信官方 ClawBot 插件，iLink HTTP 长轮询，扫码绑定走「插件操作入口」）。共同约定：每个远端用户映射一个普通会话、命令集 /new /status /compact /help /apply /deny、`WithInteractive` + 自带确认通道、白名单外一律拒绝只记日志、markdown 转纯文本共用 `internal/mdtext`。两者都实现 `TurnObserver`：**后台轮次**（`Origin` 非空且非自身，如心跳、定时任务）落在 IM 绑定的会话上时，把助手最终文本推送给绑定用户——否则结果只进会话文件，远端永远看不到；前台轮次与自己发起的轮次不推（各有回复渠道）。QQ 推送走主动消息（无 msg_id，受限容忍）；微信必须回带 context_token，故按用户持久化最近一次入站消息的 token（`tokens.json`，0600），没有 token 的用户只记日志。推送 goroutine 用插件自己的 ctx——广播的 ctx 在发起方轮次结束后立即被取消。
 
 ## 插件持久化与生命周期约定
 
-需要落盘的插件用 `InitContext.StateDir` = `<配置目录>/plugins/<插件名>/`（由 `Manager.initCtxFor` 从 `statePath` 推导，目录可能不存在需自行创建）。该字段为空表示没有可用的持久化位置，插件应在 `Init` 中返回错误拒绝启用，**不要**退化到写进程当前目录。`plugins/` 已在 `.gitignore` 中。要读会话数据用 `SessionDir`（只读；写入一律走 `StateDir`）。
+需要落盘的插件用 `InitContext.StateDir` = `<配置目录>/plugins/<插件名>/`（由 `Manager.initCtxFor` 从 `statePath` 推导，目录可能不存在需自行创建）。该字段为空表示没有可用的持久化位置，插件应在 `Init` 中返回错误拒绝启用，**不要**退化到写进程当前目录。`plugins/` 已在 `.gitignore` 中。要读会话数据分两档，**按需要的最窄那一档取**：只想知道「该落在哪个会话上」或「记下的会话还在不在」，用 `InitContext.Sessions`（`SessionQuery`：`LastActive` / `LastInteraction` / `Exists`）；真要读会话**正文**（检索、归档）才用 `SessionDir`。目录是个读写路径，为回答一个布尔值把全部对话的读写权限交出去不划算——心跳、定时任务与两个 IM 插件从前都是这么拿的。写入一律走 `StateDir`。
+
+「最近活跃的会话」的判定规则（按 `LastActiveAt` 排序，旧会话缺该字段时回落 `CreatedAt`）归核心，不要在插件里各写一份——心跳与定时任务曾经就是两份逐行相同的复制品。注意 `LastActive` 与 `LastInteraction` 问的不是同一件事：前者挑会话，后者只答「上一次有人来过是什么时候」，把刚创建的空会话当成「有人来过」会让空闲衰减永不触发。
 
 `InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。
 
-`Lifecycle.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，`roleplay` 借此保住最后一处场景演绎，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。历史带可见域标签时按标签分组，每组一次事件，`CompactEvent.Scope` 给出本组的标签。
+`CompactObserver.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，`roleplay` 借此保住最后一处场景演绎，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。历史带可见域标签时按标签分组，每组一次事件，`CompactEvent.Scope` 给出本组的标签。
 
 **定时类状态记「上一次发生的时刻」，不记「还剩多久」。** 进程内的定时器只是执行手段，不是状态载体——它随进程消失，于是重启就把倒计时清零重算，重启比周期更频繁时那件事一次都不会发生（心跳曾经如此：只存了间隔，没存上次心跳时刻）。存了时刻之后，下一次由「时刻 + 周期」推算，重启天然延续；已经过期就补一次，但要给一个启动宽限期，别在服务刚起来的那一秒就动作。同理，带时效的缓存要连同取得时刻一起落盘（天气的观测），否则重启既产生数据空窗，又白打一次外部接口。按轮数累计的缓冲同理（`memory` 的提炼窗口）：只在内存里攒，重启就归零，「每 N 轮做一次」在重启比 N 轮更频繁时永远走不完。`scheduler` 的 `LastRun`、`mood` 的 `Updated` 是这条的既有实现，新写这类插件时照着来。另注：每轮都起 goroutine 写盘时，它们的完成顺序不保证，必须串行化并丢弃过期快照，否则晚到的旧内容会盖掉新进展。
 

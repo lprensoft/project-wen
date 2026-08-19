@@ -31,7 +31,7 @@ type ActionState struct {
 }
 
 // Actionable 由需要「用户在界面上主动触发一段流程」的插件实现（可选）。
-// Actions 必须廉价（会在 Manager 持锁的列表路径上调用，与 SystemPrompt 同一契约）；
+// Actions 必须廉价（每次刷新插件列表都会调用，与 SystemPrompt 同一契约）；
 // StartAction 应立即返回，长流程放后台 goroutine 并自带超时；进行中重复调用表示重新开始。
 // 实现自行对状态加锁——StartAction 与 ActionState 会被 HTTP 处理并发调用。
 // ctx 可能带有配置弹窗里尚未保存的草稿值，用 ActionValuesFrom 取（须在 StartAction 内同步取出）。

@@ -354,43 +354,116 @@ func (m *Manager) StopAll() {
 	}
 }
 
-// List 返回全部插件状态（按注册顺序）。
-func (m *Manager) List() []Status {
+// ---------- 对插件的回调（一律在锁外进行） ----------
+
+// named 是一次快照里的一个插件：名字，加它实现的某个可选能力。
+type named[T any] struct {
+	name string
+	impl T
+}
+
+// enabledAs 在锁内快照实现了 T 的启用插件（按注册顺序），供锁外逐个调用。
+//
+// 所有对插件的回调都要经这条路进出。读锁一旦跨进插件代码，插件里任何一次反向
+// 调用（哪怕只是问一句状态）都可能撞上排队中的写锁而死锁——Go 的 RWMutex 在有
+// 写者等待时会挡住后续所有 RLock。而 OnCompact 里还藏着一次真实的模型往返，锁
+// 会一直握到它返回为止：那期间在设置页拨一下开关，整个服务就停到提炼结束。
+//
+// 代价是快照与调用之间有个窗口，期间被禁用的插件仍会被回调一次。这与 StopAll、
+// actionableFor 早就采用的做法一致，可接受：插件本就要求自行加锁、Init 可重入。
+func enabledAs[T any](m *Manager) []named[T] {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	out := make([]Status, 0, len(m.order))
+	var out []named[T]
 	for _, name := range m.order {
 		e := m.entries[name]
-		names := []string{}
-		for _, t := range e.plugin.Tools() {
-			names = append(names, t.Name())
+		if !e.enabled {
+			continue
 		}
+		if impl, ok := any(e.plugin).(T); ok {
+			out = append(out, named[T]{name: name, impl: impl})
+		}
+	}
+	return out
+}
+
+// safely 执行一次插件回调，panic 只记日志：单个插件不该连累整轮对话。
+// 从前只有轮次结束的广播做了这层保护，其余回调点各自裸调——同样是插件代码，
+// 没有理由区别对待。
+func safely(name, what string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("插件 %q 在%s时 panic: %v", name, what, r)
+		}
+	}()
+	fn()
+}
+
+// entrySnapshot 是列表接口在锁内取到的插件状态，插件自己的方法留到锁外调用。
+// 依赖与冲突的推算留在锁内：它们要看整张注册表，必须在一致的快照上进行，
+// 而 Requires / Conflicts 按契约就是静态声明，不会反向调用 Manager。
+type entrySnapshot struct {
+	name        string
+	plugin      Plugin
+	source      string
+	enabled     bool
+	inited      bool
+	cfg         map[string]any
+	requires    []string
+	unmet       []string
+	conflicts   []string
+	conflicting []string
+}
+
+// List 返回全部插件状态（按注册顺序）。
+func (m *Manager) List() []Status {
+	m.mu.RLock()
+	snaps := make([]entrySnapshot, 0, len(m.order))
+	for _, name := range m.order {
+		e := m.entries[name]
+		snaps = append(snaps, entrySnapshot{
+			name: name, plugin: e.plugin, source: e.source,
+			enabled: e.enabled, inited: e.inited, cfg: e.cfg,
+			requires:    RequiresOf(e.plugin),
+			unmet:       m.unmetLocked(name),
+			conflicts:   ConflictsOf(e.plugin),
+			conflicting: m.conflictingLocked(name),
+		})
+	}
+	m.mu.RUnlock()
+
+	out := make([]Status, 0, len(snaps))
+	for _, sn := range snaps {
 		st := Status{
-			Name:        name,
-			Description: e.plugin.Description(),
-			Source:      e.source,
-			Category:    CategoryOf(e.plugin),
-			Enabled:     e.enabled,
-			ToolNames:   names,
-			HasPrompt:   e.plugin.SystemPrompt() != "",
-			Requires:    RequiresOf(e.plugin),
-			Unmet:       m.unmetLocked(name),
-			Conflicts:   ConflictsOf(e.plugin),
-			Conflicting: m.conflictingLocked(name),
+			Name:      sn.name,
+			Source:    sn.source,
+			Enabled:   sn.enabled,
+			ToolNames: []string{},
+			Requires:  sn.requires,
+			Unmet:     sn.unmet,
+			Conflicts: sn.conflicts, Conflicting: sn.conflicting,
 		}
-		if a, ok := e.plugin.(Actionable); ok && e.enabled && e.inited {
-			st.Actions = a.Actions()
-		}
-		if fields := ConfigFieldsOf(e.plugin); len(fields) > 0 {
-			st.ConfigFields = fields
-			// 配置非法时（如手改配置文件）退回默认值展示，不影响列表可用
-			values, err := NormalizeConfig(fields, e.cfg)
-			if err != nil {
-				values, _ = NormalizeConfig(fields, nil)
+		safely(sn.name, "汇报插件状态", func() {
+			st.Description = sn.plugin.Description()
+			st.Category = CategoryOf(sn.plugin)
+			for _, t := range sn.plugin.Tools() {
+				st.ToolNames = append(st.ToolNames, t.Name())
 			}
-			st.Config = values
-		}
+			st.HasPrompt = sn.plugin.SystemPrompt() != ""
+			if a, ok := sn.plugin.(Actionable); ok && sn.enabled && sn.inited {
+				st.Actions = a.Actions()
+			}
+			if fields := ConfigFieldsOf(sn.plugin); len(fields) > 0 {
+				st.ConfigFields = fields
+				// 配置非法时（如手改配置文件）退回默认值展示，不影响列表可用
+				values, err := NormalizeConfig(fields, sn.cfg)
+				if err != nil {
+					values, _ = NormalizeConfig(fields, nil)
+				}
+				st.Config = values
+			}
+		})
 		out = append(out, st)
 	}
 	return out
@@ -398,29 +471,21 @@ func (m *Manager) List() []Status {
 
 // EnabledTools 返回所有启用插件的工具（按注册顺序）。
 func (m *Manager) EnabledTools() []Tool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	var out []Tool
-	for _, name := range m.order {
-		if e := m.entries[name]; e.enabled {
-			out = append(out, e.plugin.Tools()...)
-		}
+	for _, e := range enabledAs[Plugin](m) {
+		var tools []Tool
+		safely(e.name, "列举工具", func() { tools = e.impl.Tools() })
+		out = append(out, tools...)
 	}
 	return out
 }
 
 // FindTool 在启用插件中按名查找工具。
 func (m *Manager) FindTool(name string) (Tool, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, pname := range m.order {
-		e := m.entries[pname]
-		if !e.enabled {
-			continue
-		}
-		for _, t := range e.plugin.Tools() {
+	for _, e := range enabledAs[Plugin](m) {
+		var tools []Tool
+		safely(e.name, "列举工具", func() { tools = e.impl.Tools() })
+		for _, t := range tools {
 			if t.Name() == name {
 				return t, true
 			}
@@ -431,15 +496,12 @@ func (m *Manager) FindTool(name string) (Tool, bool) {
 
 // SystemPrompts 返回所有启用插件的非空提示词片段（按注册顺序）。
 func (m *Manager) SystemPrompts() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	var out []string
-	for _, name := range m.order {
-		if e := m.entries[name]; e.enabled {
-			if p := e.plugin.SystemPrompt(); p != "" {
-				out = append(out, p)
-			}
+	for _, e := range enabledAs[Plugin](m) {
+		var frag string
+		safely(e.name, "生成系统提示词", func() { frag = e.impl.SystemPrompt() })
+		if frag != "" {
+			out = append(out, frag)
 		}
 	}
 	return out
@@ -448,20 +510,11 @@ func (m *Manager) SystemPrompts() []string {
 // StatusLines 返回所有启用插件贡献的状态行（按注册顺序）。
 // 只问启用的插件：被禁用的插件没有运行状况可言，报一行「已停」只是噪声。
 func (m *Manager) StatusLines() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	var out []string
-	for _, name := range m.order {
-		e := m.entries[name]
-		if !e.enabled {
-			continue
-		}
-		r, ok := e.plugin.(StatusReporter)
-		if !ok {
-			continue
-		}
-		for _, line := range r.StatusLines() {
+	for _, e := range enabledAs[StatusReporter](m) {
+		var lines []string
+		safely(e.name, "汇报状态行", func() { lines = e.impl.StatusLines() })
+		for _, line := range lines {
 			if line != "" {
 				out = append(out, line)
 			}
@@ -476,37 +529,30 @@ func (m *Manager) StatusLines() []string {
 // Write 会被插件用来拼持久化目录，因此按插件名的字符集校验，非法则整条裁决作废
 // 降级为零值——降级成「不限制」比让一个 "../x" 之类的标签流进文件路径安全得多。
 func (m *Manager) DecideScope(ctx context.Context, ev TurnEvent) Scope {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	var out Scope
 	owner := ""
-	for _, name := range m.order {
-		e := m.entries[name]
-		if !e.enabled {
-			continue
-		}
-		d, ok := e.plugin.(ScopeDecider)
-		if !ok {
-			continue
-		}
-		sc, err := d.DecideScope(ctx, ev)
+	for _, e := range enabledAs[ScopeDecider](m) {
+		var (
+			sc  Scope
+			err error
+		)
+		safely(e.name, "裁决可见域", func() { sc, err = e.impl.DecideScope(ctx, ev) })
 		if err != nil {
-			log.Printf("插件 %q 裁决可见域失败，按不限制处理: %v", name, err)
+			log.Printf("插件 %q 裁决可见域失败，按不限制处理: %v", e.name, err)
 			continue
 		}
 		if sc.IsZero() {
 			continue
 		}
 		if sc.Write != "" && !validName.MatchString(sc.Write) {
-			log.Printf("插件 %q 返回了非法的可见域标签 %q，已忽略", name, sc.Write)
+			log.Printf("插件 %q 返回了非法的可见域标签 %q，已忽略", e.name, sc.Write)
 			continue
 		}
 		if owner != "" {
-			log.Printf("插件 %q 的可见域裁决被忽略：本轮已由插件 %q 决定", name, owner)
+			log.Printf("插件 %q 的可见域裁决被忽略：本轮已由插件 %q 决定", e.name, owner)
 			continue
 		}
-		out, owner = sc, name
+		out, owner = sc, e.name
 	}
 	return out
 }
@@ -514,26 +560,19 @@ func (m *Manager) DecideScope(ctx context.Context, ev TurnEvent) Scope {
 // TurnPrompts 在可见域裁决完成后收集各插件的一次性提示词片段（按注册顺序，已滤空）。
 // 插件返回的错误只记日志：少一段提示词应当降级，不该让整轮对话失败。
 func (m *Manager) TurnPrompts(ctx context.Context, ev TurnEvent) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	var out []string
-	for _, name := range m.order {
-		e := m.entries[name]
-		if !e.enabled {
-			continue
-		}
-		tp, ok := e.plugin.(TurnPrompter)
-		if !ok {
-			continue
-		}
-		s, err := tp.TurnPrompt(ctx, ev)
+	for _, e := range enabledAs[TurnPrompter](m) {
+		var (
+			frag string
+			err  error
+		)
+		safely(e.name, "生成本轮提示词", func() { frag, err = e.impl.TurnPrompt(ctx, ev) })
 		if err != nil {
-			log.Printf("插件 %q 生成本轮提示词失败: %v", name, err)
+			log.Printf("插件 %q 生成本轮提示词失败: %v", e.name, err)
 			continue
 		}
-		if s != "" {
-			out = append(out, s)
+		if frag != "" {
+			out = append(out, frag)
 		}
 	}
 	return out
@@ -541,23 +580,18 @@ func (m *Manager) TurnPrompts(ctx context.Context, ev TurnEvent) []string {
 
 // NotifyCompact 在会话历史被替换前广播压缩事件，返回各插件的注记（按注册顺序，已滤掉空串）。
 // 插件返回的错误只记录日志，不阻断压缩——压缩是上下文溢出时的保底手段，不能被插件卡住。
+//
+// 这里是回调必须走出锁外最硬的理由：memory 的 OnCompact 内含一次真实的模型往返。
 func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	var notes []string
-	for _, name := range m.order {
-		e := m.entries[name]
-		if !e.enabled {
-			continue
-		}
-		lc, ok := e.plugin.(Lifecycle)
-		if !ok {
-			continue
-		}
-		note, err := lc.OnCompact(ctx, ev)
+	for _, e := range enabledAs[CompactObserver](m) {
+		var (
+			note string
+			err  error
+		)
+		safely(e.name, "处理压缩事件", func() { note, err = e.impl.OnCompact(ctx, ev) })
 		if err != nil {
-			log.Printf("插件 %q 处理压缩事件失败: %v", name, err)
+			log.Printf("插件 %q 处理压缩事件失败: %v", e.name, err)
 			continue
 		}
 		if note != "" {
@@ -568,28 +602,10 @@ func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
 }
 
 // NotifyTurnEnd 在一轮对话成功结束后广播给所有实现 TurnObserver 的启用插件。
-// 广播发生在轮次收尾的同步路径上：逐个 recover，单个插件的 panic 不能连累整轮对话。
+// 广播发生在轮次收尾的同步路径上，实现须快速返回。
 func (m *Manager) NotifyTurnEnd(ctx context.Context, ev TurnEndEvent) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, name := range m.order {
-		e := m.entries[name]
-		if !e.enabled {
-			continue
-		}
-		ob, ok := e.plugin.(TurnObserver)
-		if !ok {
-			continue
-		}
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("插件 %q 处理轮次结束事件时 panic: %v", name, r)
-				}
-			}()
-			ob.OnTurnEnd(ctx, ev)
-		}()
+	for _, e := range enabledAs[TurnObserver](m) {
+		safely(e.name, "处理轮次结束事件", func() { e.impl.OnTurnEnd(ctx, ev) })
 	}
 }
 

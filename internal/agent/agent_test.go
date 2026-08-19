@@ -379,7 +379,7 @@ func TestCompact(t *testing.T) {
 	}
 }
 
-// archiverPlugin 实现 Lifecycle，记录压缩事件并返回一条注记。
+// archiverPlugin 实现 CompactObserver，记录压缩事件并返回一条注记。
 type archiverPlugin struct {
 	note string
 	got  plugin.CompactEvent

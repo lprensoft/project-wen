@@ -459,7 +459,7 @@ internal/config/         配置加载（YAML + ${VAR} 环境变量替换）
 internal/llm/            Provider 接口 + OpenAI 兼容 / Anthropic 实现
 internal/modelcfg/       模型与提供商配置（models.json 覆盖层，热切换）
 internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下文预算）
-internal/plugin/         插件协议（Plugin / Tool / Configurable / Lifecycle / 可见域 / 依赖）+ Manager（开关与聚合）
+internal/plugin/         插件协议（Plugin / Tool / Configurable / 观察者 / 可见域 / 依赖）+ Manager（开关与聚合）
 internal/plugin/builtin/ 内置系统插件（注册顺序即提示词拼接顺序）：
                          readfile / execcmd / webfetch / memory / sessionsearch /
                          roleplay / dualpersona / scene / bodysense / mood /
@@ -477,17 +477,17 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 可选接口（不实现则零成本）：
 
 - `Configurable`（`ConfigFields()`）——声明可配置项，设置页据此生成表单并持久化。字段类型有 `int` / `bool` / `string` / `select` / `text`（多行，渲染成 textarea）。
-- `Lifecycle`（`OnCompact()`）——在会话历史被摘要替换**之前**收到通知，可借此归档或提炼；返回的注记会追加到摘要末尾，从而只落进该会话的历史。事件广播给所有订阅者（`memory` 与 `session_search` 都订阅了它，各做各的事），返回错误只记日志，不阻断压缩。历史带可见域标签时按标签分组，每组一次事件。
+- `CompactObserver`（`OnCompact()`）——在会话历史被摘要替换**之前**收到通知，可借此归档或提炼；返回的注记会追加到摘要末尾，从而只落进该会话的历史。事件广播给所有订阅者（`memory` 与 `session_search` 都订阅了它，各做各的事），返回错误只记日志，不阻断压缩。历史带可见域标签时按标签分组，每组一次事件。
 - `ScopeDecider`（`DecideScope()`）与 `TurnPrompter`（`TurnPrompt()`）——见下方「可见域」。
 - 操作确认：用 `plugin.ConfirmerFrom(ctx)` 取确认通道，在执行不可逆操作前问一次。第二个返回值为 false 表示当前没有可交互的用户，**不要当作已获同意**；返回 error 同理，拿不到答复不等于得到许可。
 - `Dependent`（`Requires()`）——声明必须同时启用的插件。依赖未满足时拒绝启用（开关在界面上置灰），被依赖的插件也无法在依赖方仍启用时关闭。
 - `Conflicting`（`Conflicts()`）——声明能力相抵的插件。只告警不阻止。
 - `Stoppable`（`Stop()`）——停掉自己起的后台活动。禁用、以新配置重新 `Init`、进程退出三处会调用；只做取消与有界等待，不得等整轮对话跑完。起 goroutine 的插件必须实现它，并保证 `Init` 可重入。
 - `TurnObserver`（`OnTurnEnd()`）——观察每轮对话的结束。在收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
-- `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用、Manager 持锁时调用）。
+- `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用）。
 - `Actionable`（`Actions()` / `StartAction()` / `ActionState()`）——声明可在设置页触发的流程（如扫码绑定），状态含说明文字与一张可选 PNG。`StartAction` 应立即返回，长流程放后台并自带超时。
 
-`InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`SessionDir`（会话目录，只读用）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`Notice`（往会话里留一行只给人看的说明）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
+`InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`Sessions`（会话的只读窄查询：最近活跃的会话、某会话是否还在）、`SessionDir`（会话目录，只给需要读会话正文的检索与归档类插件）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`Notice`（往会话里留一行只给人看的说明）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
 
 `RunTurn` 与 `Notice` 由 Manager 包一层自动注入发起方标记，插件无法伪装成前台；`RunTurn` 在会话忙时立即返回 `ErrSessionBusy` 而不排队——后台任务堆在锁上，只会在解锁瞬间连环轰炸同一个会话。`Notice` 写出的内容落盘、在界面实时展示，但永不进入模型上下文，也不进压缩摘要：后台工作在轮次收尾之后才跑完，那时事件流已经关闭，结果否则只能进日志。
 

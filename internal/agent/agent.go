@@ -193,7 +193,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 
 	// 裁决本轮可见域。一轮只裁一次并全程从 ctx 取：若在工具执行阶段再裁一次，
 	// 同一轮的 assistant 与 tool 结果可能落到不同标签，tool_use / tool_result 会被永久拆散。
-	ev := plugin.TurnEvent{SessionID: sessionID, UserInput: userInput, History: taggedOf(history)}
+	ev := plugin.TurnEvent{SessionID: sessionID, UserInput: userInput}
 	scope := a.plugins.DecideScope(ctx, ev)
 	ctx = plugin.WithScope(ctx, scope)
 	ev.Scope = scope

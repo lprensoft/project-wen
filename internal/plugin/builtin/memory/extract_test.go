@@ -267,8 +267,8 @@ func TestSerializeHistoryTruncates(t *testing.T) {
 	}
 }
 
-func TestPluginImplementsLifecycle(t *testing.T) {
-	var _ plugin.Lifecycle = New()
+func TestPluginImplementsCompactObserver(t *testing.T) {
+	var _ plugin.CompactObserver = New()
 
 	// 走 Manager 的广播路径（这是核心真正调用的入口）
 	c := &fakeComplete{replies: []string{`[{"name":"经由广播","description":"d","type":"事实","content":"c"}]`}}

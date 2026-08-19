@@ -3,9 +3,6 @@ package plugin
 import (
 	"context"
 	"slices"
-	"time"
-
-	"wen/internal/llm"
 )
 
 // Scope 描述一轮对话的可见域：本轮产生的消息归属哪个标签，以及哪些标签的历史与
@@ -32,22 +29,16 @@ func (s Scope) CanRead(tag string) bool {
 // IsZero 表示该 Scope 未参与裁决。
 func (s Scope) IsZero() bool { return s.Write == "" && s.Read == nil }
 
-// TaggedMessage 是带可见域标签的历史消息，供钩子只读检视。
-// 不直接用 session.StoredMessage：plugin 包不引入 session 依赖，
-// 沿用 CompactEvent.History 已有的「由核心负责转换」的做法。
-type TaggedMessage struct {
-	llm.Message
-	Tag  string    // 可见域标签，空串 = 共享
-	Kind string    // "" 普通消息；"summary" 压缩摘要
-	TS   time.Time // 落盘时间
-}
-
 // TurnEvent 描述一轮对话的开始。
+//
+// 这里刻意不带会话历史：历史是未按可见域过滤的全量内容，广播给每个插件正好
+// 与可见域机制的目的相抵——memory 被要求按可读域过滤记忆索引，却能从事件里
+// 读到所有标签的原文。要读历史的钩子只有压缩一处，那里由 CompactEvent 按域
+// 分组给出。
 type TurnEvent struct {
 	SessionID string
 	UserInput string
-	History   []TaggedMessage // 该会话的完整历史，未按可见域过滤
-	Scope     Scope           // 仅在 TurnPrompt 阶段有效（此时已完成裁决）
+	Scope     Scope // 仅在 TurnPrompt 阶段有效（此时已完成裁决）
 }
 
 // ScopeDecider 是插件的可选能力：决定本轮对话的可见域。

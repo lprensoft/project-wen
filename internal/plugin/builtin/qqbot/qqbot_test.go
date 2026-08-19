@@ -176,7 +176,7 @@ func newInitedCfg(t *testing.T, runTurn plugin.RunTurnFunc, whitelist string, ex
 	p.tokenURLOverride = f.srv.URL + "/app/getAppAccessToken"
 	ictx := plugin.InitContext{
 		StateDir:   t.TempDir(),
-		SessionDir: sessDir,
+		Sessions:   store,
 		RunTurn:    runTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 		Status: func(sessionID string) (plugin.StatusInfo, error) {
