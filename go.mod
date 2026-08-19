@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/josephspurrier/goversioninfo v1.7.0
+	github.com/larksuite/oapi-sdk-go/v3 v3.9.10
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/text v0.41.0
@@ -28,6 +29,7 @@ require (
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

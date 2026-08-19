@@ -42,13 +42,23 @@
 16. **会话注记**（`InitContext.Notice`，`internal/agent/notice.go`）—— 插件往一个会话里留一行只给人看的说明（`session.KindNotice`）：落盘、在界面展示，但**永不进入模型上下文**，也不进压缩摘要、不计入 token 估算（与 `KindEphemeral` 正好相反，那个是「给模型看一轮、界面不当用户消息展示」）。存在的理由是后台工作与轮次不同步——插件发起的活儿在轮次收尾之后才跑完，那时 `/api/chat` 的事件流已经关闭，结果只能进日志。标签取自 ctx 的可见域（「在人格 A 的库里记了什么」也属于人格 A），发起方由 Manager 注入。实时送达经 `Agent.SetNoticeSink` → server 的 `noticeHub` → 常驻的 `GET /api/events`（一条流服务所有会话，前端按当前会话筛；订阅者积压就丢，内容已落盘、刷新即补齐）。`AppendNotice` **刻意不取轮次锁**：工具的 `Execute` 也可能想写一条，而那时本轮正持着锁，取锁就是自锁；代价是与并发压缩的 `Replace` 有极小概率丢一条注记，注记是旁注不是对话内容，丢了不影响任何后续行为。
 17. **操作的草稿配置值**（`WithActionValues` / `ActionValuesFrom` / `ActionValueOr`，`internal/plugin/action.go`）—— 触发插件操作时，把配置弹窗里**尚未保存**的表单值经 ctx 一并交给插件，使「测试」类操作能先验后存（`weather` 测城市能不能解析，同样的形状可用于任何「测试连接」）。走 ctx 而不是给 `StartAction` 加参数，是为了不动已有实现的签名；值未经校验，就是界面原样提交的内容。**必须在 `StartAction` 内同步取出**——ctx 属于那个 HTTP 请求，响应发出后就失效了，而长流程在后台 goroutine 里。
 
-任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「天气」「身体」「心情」「危险命令」「心跳」「定时」「技能」「QQ」或「微信」这回事。
+任何插件都能用，核心不知道「记忆」「检索」「人格」「场景」「天气」「身体」「心情」「危险命令」「心跳」「定时」「技能」「QQ」「微信」「飞书」「Lark」或「Telegram」这回事。
 
 `skills` 是这条界线的一次正例检验：外面那套「技能」（一批用户自己安装的 SKILL.md，模型按需读取）在本项目里不需要核心加任何东西——`StateDir` 拿目录、`SystemPrompt` 常驻一份「名称 + 用途」的清单、工具返回正文，现有契约刚好够用。它的正文之所以走**工具返回值**而不是任何提示词注入，是「上下文分层约定」直接推出来的：按需加载意味着内容会在第 N 轮才出现，落进 system 或 `<本轮状态>` 都会让整段前缀作废，而工具结果是追加进历史的，此后前缀不再变动。它排在角色演绎那组之后，理由与 `memory` 相同（见 `buildPlugins` 的注释）。
 
 **核心对插件的回调一律在锁外进行。** `Manager` 先在锁内快照「实现了某个接口的启用插件」（`enabledAs`），再到锁外逐个调用，每次调用都过 `safely` 兜住 panic（单个插件不该连累整轮对话）。这不是风格偏好：Go 的 `RWMutex` 在有写者排队时会挡住后续所有 `RLock`，读锁一旦跨进插件代码，插件里一次反向调用就会永久卡住——而 `OnCompact` 里有一次真实的模型往返，那把锁会一直握到提炼结束，期间在设置页拨一下开关就足以让整个服务停住。代价是快照与调用之间有个窗口，期间刚被禁用的插件仍会被回调一次，可接受（插件本就要求自行加锁、`Init` 可重入）。例外只有两处，都留在锁内：`Init` 要与开关状态一起原子完成，依赖与冲突的推算要看一致的整张注册表——因此 `Init` 内不得反向调用 `Manager`，`Requires` / `Conflicts` 必须是静态声明。
 
-远程 IM 插件目前有两个同构实现：`qq_bot`（QQ 官方开放平台，WebSocket 网关）与 `wechat_bot`（微信官方 ClawBot 插件，iLink HTTP 长轮询，扫码绑定走「插件操作入口」）。共同约定：每个远端用户映射一个普通会话、命令集 /new /status /compact /help /apply /deny、`WithInteractive` + 自带确认通道、白名单外一律拒绝只记日志、markdown 转纯文本共用 `internal/mdtext`。两者都实现 `TurnObserver`：**后台轮次**（`Origin` 非空且非自身，如心跳、定时任务）落在 IM 绑定的会话上时，把助手最终文本推送给绑定用户——否则结果只进会话文件，远端永远看不到；前台轮次与自己发起的轮次不推（各有回复渠道）。QQ 推送走主动消息（无 msg_id，受限容忍）；微信必须回带 context_token，故按用户持久化最近一次入站消息的 token（`tokens.json`，0600），没有 token 的用户只记日志。推送 goroutine 用插件自己的 ctx——广播的 ctx 在发起方轮次结束后立即被取消。
+远程 IM 通道目前是**五个插件、四套协议实现**：`qq_bot`（QQ 官方开放平台，WebSocket 网关）、`wechat_bot`（微信官方 ClawBot 插件，iLink HTTP 长轮询，扫码绑定走「插件操作入口」）、`feishu_bot` 与 `lark_bot`（飞书 / Lark，同一套实现的两次实例化）、`telegram_bot`（Bot API，HTTP 长轮询）。
+
+**通道无关的部分一律走 `internal/imbot`**，不在插件里各写一份：入站分发（去重、准入、`/apply` `/deny` 直投确认代理）、命令集 /new /status /compact /help、按用户串行的 worker、会话绑定与持久化（`sessions.json`）、确认代理、`WithInteractive` 与过程通知转发。通道只实现 `imbot.Sender`（把一段文本发给某个用户）并把入站消息归一化成 `imbot.Message`。这是补课补出来的：QQ 与微信的确认代理曾是逐行相同的两份，命令层约六成重合——`internal/statustext` 当初正是这么分叉的。
+
+留在插件侧的只有协议层：鉴权、收发、错误码、分段上限与格式降级（markdown 转纯文本共用 `internal/mdtext`）、推送凭据。`Message.ReplyTo` 是通道自定义的回复凭据，骨架不解释内容原样交回 `Sender`（QQ 是 msg_id，微信是 context_token，Telegram 是 message_id，飞书是 message_id）。两个可选钩子把通道特有的概念留在通道里：`OnAccepted`（微信记住 context_token）与 `Typing`（微信的输入状态、Telegram 的 sendChatAction）。`Config.Allow` 为 nil 表示**一律拒绝**而不是一律放行——某条通道忘了实现不该变成对全网开放。
+
+五个插件都实现 `TurnObserver`：**后台轮次**（`Origin` 非空且非自身，如心跳、定时任务）落在 IM 绑定的会话上时，把助手最终文本推送给绑定用户——否则结果只进会话文件，远端永远看不到；前台轮次与自己发起的轮次不推（各有回复渠道）。推送凭据各不相同：QQ 走主动消息（无 msg_id，受限容忍）；微信必须回带 context_token，故按用户持久化最近一次入站消息的 token（`tokens.json`，0600），没有 token 的用户只记日志；Telegram 与飞书按 chat_id / open_id 直接发。推送 goroutine 用插件自己的 ctx——广播的 ctx 在发起方轮次结束后立即被取消。
+
+**同一套协议的不同租户域做成两个插件**（`feishu_bot` / `lark_bot`），判据是「凭证不通用且要能同时连」：飞书与 Lark 的接口、事件、SDK 完全一致，但国际版应用不能用于中国版，open_id 也是两套；一个插件只能存一份凭证就只能连一边。协议代码只写一遍，差异集中在 `larkbot.variant`（插件名、默认域、开发者后台地址、文案里的产品名），插件名不同意味着 `StateDir` 不同，白名单与会话绑定天然隔离。域**不做成配置项**——能在界面上改就等于允许「飞书插件连 Lark」，那是个必然失败的组合。以后再来一条 IM 时按这条判据决定合还是分。
+
+飞书的收消息是唯一一处「协议层不自己写」的例外：长连接的线格式是 protobuf 私有协议，官方不公开，只能用 `github.com/larksuite/oapi-sdk-go/v3` 的 `ws` 包（好处是本机就能收事件，不需要公网地址）。发消息仍是手写 HTTP。SDK 回调带进来的 ctx 属于那一次事件投递，**不能拿去跑轮次**，要用插件自己的 ctx。
 
 ## 插件持久化与生命周期约定
 

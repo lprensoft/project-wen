@@ -27,6 +27,7 @@ import (
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
 	"wen/internal/plugin/builtin/heartbeat"
+	"wen/internal/plugin/builtin/larkbot"
 	"wen/internal/plugin/builtin/memory"
 	"wen/internal/plugin/builtin/mood"
 	"wen/internal/plugin/builtin/qqbot"
@@ -283,6 +284,8 @@ var needsSetupPlugins = map[string]bool{
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
 	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
 	"wechat_bot":   true, // 不扫码绑定没法工作
+	"feishu_bot":   true, // 不填 App ID/Secret 没法工作
+	"lark_bot":     true, // 同上
 	"telegram_bot": true, // 不填 Bot Token 没法工作
 }
 
@@ -313,7 +316,10 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// 指令」一并压过去，成为可读可不读的建议。
 		skills.New(),
 		heartbeat.New(), scheduler.New(),
-		qqbot.New(), wechatbot.New(), telegrambot.New(),
+		// 飞书与 Lark 是同一套实现的两次实例化（见 larkbot 包注释）：同一套 API 的两个
+		// 租户域，凭证互不通用，分成两个插件才能同时连两边
+		qqbot.New(), wechatbot.New(),
+		larkbot.NewFeishu(), larkbot.NewLark(), telegrambot.New(),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍
