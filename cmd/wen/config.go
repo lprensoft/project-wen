@@ -92,7 +92,7 @@ func topMenu(b backend) (string, error) {
 	choice := "plugins"
 	err := run(huh.NewSelect[string]().
 		Title("要配置什么？").
-		Description(b.mode()).
+		Description(fitLines(b.mode())).
 		Options(
 			huh.NewOption("插件 —— 开关与参数", "plugins"),
 			huh.NewOption("模型 —— 提供商、密钥与当前模型", "models"),

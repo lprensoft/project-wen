@@ -29,13 +29,16 @@ func modelsSection(b backend) error {
 				"edit:"+p.Name))
 		}
 		opts = append(opts, huh.NewOption("← 返回", back))
+		for i, o := range opts {
+			opts[i] = huh.NewOption(fit(o.Key), o.Value)
+		}
 
 		choice := "current" // 光标停在第一项，见 topMenu 的说明
 		if err := run(huh.NewSelect[string]().
 			Title("模型").
-			Description(fmt.Sprintf("当前：%s / %s\n%s",
-				doc.Current.Provider, doc.Current.Model, b.mode())).
-			Height(16).
+			Description(fitLines(fmt.Sprintf("当前：%s / %s\n%s",
+				doc.Current.Provider, doc.Current.Model, b.mode()))).
+			Height(listHeight(len(opts))).
 			Options(opts...).
 			Value(&choice)); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {
