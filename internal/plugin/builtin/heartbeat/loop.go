@@ -139,6 +139,7 @@ func (p *Plugin) maybeDecay() {
 		return
 	}
 	p.cur = p.clamp(p.cur * 3 / 2)
+	p.adjusted = true
 	next := p.cur
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()

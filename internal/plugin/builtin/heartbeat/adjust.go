@@ -95,6 +95,7 @@ func (p *Plugin) judge(ctx context.Context, complete plugin.CompleteFunc, ev plu
 		p.mu.Unlock()
 		return
 	}
+	p.adjusted = true
 	next := p.cur
 	wake := p.wake
 	dir, st := p.snapshotStateLocked()
