@@ -81,6 +81,8 @@ type Plugin struct {
 	decay           bool
 	blurDays        int
 	forgetDays      int
+	timeline        bool
+	timelineDays    int
 
 	// 后台提炼与清扫的运行环境。ctx 由 Init 建、Stop 取消——广播进来的 ctx
 	// 在轮次结束时就被取消了，拿它去跑后台调用必然半路夭折。
@@ -108,6 +110,10 @@ type Plugin struct {
 	extracting map[windowKey]bool
 	lastSweep  time.Time
 	sweeping   bool
+	// 时间线的日切状态（由 turnMu 保护）与文件锁。
+	lastTimeline time.Time
+	timelining   bool
+	timelineMu   sync.Mutex
 	// stopped 让 wg.Add 与 wg.Wait 有明确的先后：两者都在 turnMu 内决定，
 	// 停止之后不再有新的 goroutine 被登记，Wait 也就不会漏等一个刚起来的。
 	stopped bool
@@ -126,6 +132,8 @@ func New() *Plugin {
 		decay:           defaultDecay,
 		blurDays:        defaultBlurDays,
 		forgetDays:      defaultForgetDays,
+		timeline:        defaultTimeline,
+		timelineDays:    defaultTimelineDays,
 		windows:         map[windowKey]*window{},
 		extracting:      map[windowKey]bool{},
 	}
@@ -218,6 +226,23 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Max:     plugin.IntPtr(100),
 		},
 		{
+			Key:   "timeline",
+			Label: "按日时间线",
+			Type:  plugin.FieldBool,
+			Description: "把每天的对话在次日收束成一行「日期 | 关键事件」，最近几天随对话注入，" +
+				"回答「我们最近经历了什么」。每个有对话的自然日多一次模型调用。",
+			Default: defaultTimeline,
+		},
+		{
+			Key:         "timeline_days",
+			Label:       "时间线注入条数",
+			Type:        plugin.FieldInt,
+			Description: "随对话注入最近多少条时间线记录，更早的保留在库里不注入。",
+			Default:     defaultTimelineDays,
+			Min:         plugin.IntPtr(1),
+			Max:         plugin.IntPtr(30),
+		},
+		{
 			Key:   "decay",
 			Label: "记忆逐步淡忘",
 			Type:  plugin.FieldBool,
@@ -287,6 +312,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.decay = plugin.CfgBool(cfg, "decay", defaultDecay)
 	p.blurDays = blurDays
 	p.forgetDays = forgetDays
+	p.timeline = plugin.CfgBool(cfg, "timeline", defaultTimeline)
+	p.timelineDays = plugin.CfgInt(cfg, "timeline_days", defaultTimelineDays)
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 
 	p.turnMu.Lock()
@@ -296,8 +323,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 再装一次等于把刚攒的几轮退回旧值
 	if !p.loaded {
 		p.loaded = true
-		if windows, lastSweep := loadWindowState(p.windowDir); windows != nil {
-			p.windows, p.lastSweep = windows, lastSweep
+		if windows, marks := loadWindowState(p.windowDir); windows != nil {
+			p.windows, p.lastSweep, p.lastTimeline = windows, marks.lastSweep, marks.lastTimeline
 		}
 	}
 	p.turnMu.Unlock()
@@ -346,6 +373,7 @@ func (p *Plugin) Tools() []plugin.Tool {
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
 	store           *Store
+	libBase         string
 	maxIndexEntries int
 	maxIndexBytes   int
 	maxEntryBytes   int
@@ -357,6 +385,8 @@ type settings struct {
 	decay           bool
 	blurDays        int
 	forgetDays      int
+	timeline        bool
+	timelineDays    int
 	ctx             context.Context
 }
 
@@ -366,6 +396,7 @@ func (p *Plugin) snapshot() settings {
 	defer p.mu.RUnlock()
 	return settings{
 		store:           p.store,
+		libBase:         p.libBase,
 		maxIndexEntries: p.maxIndexEntries,
 		maxIndexBytes:   p.maxIndexBytes,
 		maxEntryBytes:   p.maxEntryBytes,
@@ -377,6 +408,8 @@ func (p *Plugin) snapshot() settings {
 		decay:           p.decay,
 		blurDays:        p.blurDays,
 		forgetDays:      p.forgetDays,
+		timeline:        p.timeline,
+		timelineDays:    p.timelineDays,
 		ctx:             p.ctx,
 	}
 }
@@ -452,18 +485,25 @@ func (p *Plugin) SystemPrompt() string {
 	return promptGuide
 }
 
-// TurnPrompt 注入本轮可读的记忆索引。
-// 记忆库为空时不注入：判据已在 SystemPrompt 里，那是引导保存第一条记忆的东西。
+// TurnPrompt 注入本轮可读的记忆索引与时间线。
+// 都为空时不注入：判据已在 SystemPrompt 里，那是引导保存第一条记忆的东西。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if s.store == nil {
 		return "", nil
 	}
 	entries, err := p.visibleEntries(ctx)
-	if err != nil || len(entries) == 0 {
+	if err != nil {
 		return "", err
 	}
-	return promptHeader + "\n" + renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes), nil
+	var parts []string
+	if len(entries) > 0 {
+		parts = append(parts, promptHeader+"\n"+renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes))
+	}
+	if block := p.timelineBlock(ctx, s); block != "" {
+		parts = append(parts, block)
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // renderIndex 按预算渲染索引，分三级降级：

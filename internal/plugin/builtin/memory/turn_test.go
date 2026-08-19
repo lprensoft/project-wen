@@ -446,9 +446,9 @@ func TestWindowStateRoundTrip(t *testing.T) {
 			lastEnd: end,
 		},
 	}
-	saveWindowState(dir, windows, end)
+	saveWindowState(dir, windows, dayMarks{lastSweep: end, lastTimeline: end})
 
-	got, sweep := loadWindowState(dir)
+	got, marks := loadWindowState(dir)
 	w := got[windowKey{session: "s1", tag: "inner"}]
 	if w == nil {
 		t.Fatal("窗口未恢复")
@@ -462,8 +462,11 @@ func TestWindowStateRoundTrip(t *testing.T) {
 	if w.bytes != 6 {
 		t.Errorf("字节数 = %d, want 6（够不够格提炼靠它判断）", w.bytes)
 	}
-	if !sweep.Equal(end) {
-		t.Errorf("上次清扫日期 = %v, want %v", sweep, end)
+	if !marks.lastSweep.Equal(end) {
+		t.Errorf("上次清扫日期 = %v, want %v", marks.lastSweep, end)
+	}
+	if !marks.lastTimeline.Equal(end) {
+		t.Errorf("上次日切日期 = %v, want %v", marks.lastTimeline, end)
 	}
 }
 
@@ -493,7 +496,7 @@ func TestReinitKeepsInMemoryWindow(t *testing.T) {
 
 // 没有可用的持久化目录时退化成纯内存缓冲，不报错也不乱写文件。
 func TestWindowNoStateDirDegrades(t *testing.T) {
-	saveWindowState("", map[windowKey]*window{}, time.Time{})
+	saveWindowState("", map[windowKey]*window{}, dayMarks{})
 	if got, _ := loadWindowState(""); got != nil {
 		t.Error("无目录时不该返回窗口")
 	}

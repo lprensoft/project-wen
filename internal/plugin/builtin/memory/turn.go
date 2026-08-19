@@ -103,19 +103,24 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 			p.extracting[key] = true
 		}
 	}
-	// 遗忘是以天计的过程，一天扫一次足够，不值得为它起定时器
+	// 遗忘是以天计的过程，一天扫一次足够，不值得为它起定时器；时间线的日切同理
 	sweep := s.decay && !p.sweeping && !sameDay(p.lastSweep, ev.EndedAt)
 	if sweep {
 		p.sweeping, p.lastSweep = true, ev.EndedAt
 	}
-	if ripe == nil && !sweep && !s.turnExtract {
+	dayFlush := s.timeline && !p.timelining && !sameDay(p.lastTimeline, ev.EndedAt)
+	if dayFlush {
+		p.timelining, p.lastTimeline = true, ev.EndedAt
+	}
+	if ripe == nil && !sweep && !s.turnExtract && !s.timeline {
 		p.turnMu.Unlock()
 		return
 	}
 	// 缓冲进展要落盘，否则重启就归零，「每 N 轮提炼一次」在重启比 N 轮更频繁时
 	// 永远走不完。快照在锁内取，写盘在锁外做。
 	p.windowSeq++
-	dir, snapshot, lastSweep, seq := p.windowDir, p.snapshotWindowsLocked(), p.lastSweep, p.windowSeq
+	dir, snapshot, seq := p.windowDir, p.snapshotWindowsLocked(), p.windowSeq
+	marks := dayMarks{lastSweep: p.lastSweep, lastTimeline: p.lastTimeline}
 	// 登记在锁内完成：Stop 会先在同一把锁下置 stopped 再 Wait，
 	// 这样不会出现「刚 Add 完就被略过」的 goroutine
 	p.wg.Add(1)
@@ -123,7 +128,15 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 
 	go func() {
 		defer p.wg.Done()
-		p.persistWindows(dir, snapshot, lastSweep, seq)
+		// 先收束昨天，再把本轮追加进今天的缓冲——反过来会把新一天的第一轮
+		// 也算进「昨天」。多天缓冲对并发追加是安全的：收束只取早于今天的日子。
+		if dayFlush {
+			p.runTimeline(s)
+		}
+		if s.timeline {
+			p.appendDayBuf(s, scope.Write, ev)
+		}
+		p.persistWindows(dir, snapshot, marks, seq)
 		if ripe != nil {
 			p.runExtract(s, key, ripe)
 		}
@@ -134,14 +147,14 @@ func (p *Plugin) OnTurnEnd(ctx context.Context, ev plugin.TurnEndEvent) {
 }
 
 // persistWindows 串行写盘并丢弃过期的快照。
-func (p *Plugin) persistWindows(dir string, windows map[windowKey]*window, lastSweep time.Time, seq uint64) {
+func (p *Plugin) persistWindows(dir string, windows map[windowKey]*window, marks dayMarks, seq uint64) {
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
 	if seq <= p.savedSeq {
 		return // 已经写过更新的快照了，这一份是旧的
 	}
 	p.savedSeq = seq
-	saveWindowState(dir, windows, lastSweep)
+	saveWindowState(dir, windows, marks)
 }
 
 // snapshotWindowsLocked 深拷贝当前缓冲，供锁外写盘使用。
