@@ -1,5 +1,17 @@
 "use strict";
 
+// 会话过期（或被踢下线）后，任何一个接口都会返回 401。在这里统一接住并回到登录页，
+// 否则界面会表现为「所有操作都静默失败」。包一层 fetch 而不是在每个调用点判断，
+// 是因为调用点有二十多处，漏掉一处就是一个查不出来的怪毛病。
+const rawFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const res = await rawFetch(input, init);
+  if (res.status === 401 && location.pathname !== "/login.html") {
+    location.replace("/login.html");
+  }
+  return res;
+};
+
 const $ = (sel) => document.querySelector(sel);
 const messagesEl = $("#messages");
 const sessionListEl = $("#session-list");
@@ -1078,7 +1090,79 @@ function showSettingsSection(name) {
 
 $("#settings-nav").addEventListener("click", (e) => {
   const btn = e.target.closest(".settings-nav-item");
-  if (btn) showSettingsSection(btn.dataset.section);
+  if (!btn) return;
+  showSettingsSection(btn.dataset.section);
+  if (btn.dataset.section === "access") loadAccessState();
+});
+
+// ---------- 访问控制 ----------
+
+const accessStateEl = $("#access-state");
+const accessErrorEl = $("#access-error");
+
+// 状态一句话讲清「现在谁能进来」。措辞与启动日志的 authSummary 对齐。
+function accessSummary(s) {
+  if (s.env_managed) return ["ok", "口令由环境变量 WEN_AUTH_PASSWORD 提供，此处无法修改。"];
+  if (!s.has_password) {
+    return ["warn", "尚未设置口令。服务当前只监听本机，配置了对外监听也会被降级——设置口令并重启后才会真正对外提供服务。"];
+  }
+  if (!s.trust_loopback) return ["ok", "已设置口令，所有来源（包括本机）都需要登录。"];
+  if (s.exposed) return ["ok", "已设置口令。本机访问免登录，其它来源需要登录。"];
+  return ["ok", "已设置口令，但当前只监听本机，外部访问不到。"];
+}
+
+async function loadAccessState() {
+  accessErrorEl.classList.add("hidden");
+  try {
+    const st = await fetch("/api/auth/status").then((r) => r.json());
+    const [kind, text] = accessSummary(st);
+    accessStateEl.className = "access-state " + kind;
+    accessStateEl.textContent = text;
+    // 没设过口令时不该问「当前口令」
+    $("#access-current-field").classList.toggle("hidden", !st.has_password);
+    const locked = !!st.env_managed;
+    $("#btn-access-save").disabled = locked;
+    for (const id of ["#access-current", "#access-new", "#access-confirm"]) $(id).disabled = locked;
+  } catch (e) {
+    accessStateEl.className = "access-state warn";
+    accessStateEl.textContent = "读取访问控制状态失败：" + e.message;
+  }
+}
+
+$("#access-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  accessErrorEl.classList.add("hidden");
+
+  const next = $("#access-new").value;
+  if (next !== $("#access-confirm").value) {
+    accessErrorEl.textContent = "两次输入的新口令不一致";
+    accessErrorEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    const res = await fetch("/api/auth/password", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current: $("#access-current").value, new: next }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      accessErrorEl.textContent = body.error || "保存失败";
+      accessErrorEl.classList.remove("hidden");
+      return;
+    }
+    for (const id of ["#access-current", "#access-new", "#access-confirm"]) $(id).value = "";
+    await loadAccessState();
+    // 改口令会踢掉所有会话。本机来源靠回环免认证仍在，远程来源会在下一个请求上被弹回登录页。
+  } catch (err) {
+    accessErrorEl.textContent = "保存失败：" + err.message;
+    accessErrorEl.classList.remove("hidden");
+  }
+});
+
+$("#btn-access-logout").addEventListener("click", async () => {
+  await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  location.replace("/login.html");
 });
 
 function closeSettings() {

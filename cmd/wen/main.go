@@ -174,7 +174,30 @@ func main() {
 		ContextLength: cur.ContextLength,
 	})
 
-	srv := server.New(ag, store, plugins, models)
+	auth, err := server.NewAuthStore(cfg.BaseDir)
+	if err != nil {
+		log.Fatalf("加载访问口令失败: %v", err)
+	}
+
+	// 启动守卫：配了对外监听却没设口令时，降级为只监听回环而不是拒绝启动。
+	// 拒绝启动在新装的远程机器上是个死局——口令要在界面里设，而界面起不来。
+	// 降级同样一次都没暴露过，且 SSH 隧道进来就能把口令补上。
+	exposed := !server.IsLoopbackHost(cfg.Server.Host)
+	if exposed && !auth.HasPassword() {
+		log.Printf("⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
+		log.Printf("  设置口令后重启即可对外提供服务：用 ssh -L %d:127.0.0.1:%d <用户>@<服务器>",
+			cfg.Server.Port, cfg.Server.Port)
+		log.Printf("  建隧道后打开界面，在设置页的「访问控制」里设置；容器部署可用环境变量 %s。",
+			"WEN_AUTH_PASSWORD")
+		cfg.Server.Host = "127.0.0.1"
+		exposed = false
+	}
+
+	srv := server.New(ag, store, plugins, models, server.Options{
+		Auth:          auth,
+		TrustLoopback: cfg.Server.TrustLoopbackOrDefault(),
+		Exposed:       exposed,
+	})
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	log.Printf("配置文件: %s", path)
@@ -186,6 +209,7 @@ func main() {
 		}
 		log.Printf("插件: %-12s [%s] %s", st.Name, state, st.Description)
 	}
+	log.Printf("访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
 	log.Printf("Wen Agent %s 已启动: http://%s", version.Version, addr)
 
 	httpServer := &http.Server{
@@ -208,6 +232,22 @@ func main() {
 	defer cancel()
 	_ = httpServer.Shutdown(shutCtx)
 	plugins.StopAll()
+}
+
+// authSummary 把访问控制的实际状态写成一行，供启动日志使用。
+// 「配了什么」和「实际生效什么」可能不一致（降级、反代关掉回环免认证），
+// 所以这里说的是生效结果。
+func authSummary(auth *server.AuthStore, exposed, trustLoopback bool) string {
+	switch {
+	case !auth.HasPassword():
+		return "未设置口令，仅本机可访问"
+	case !trustLoopback:
+		return "已设置口令，所有来源（含本机）都需登录"
+	case exposed:
+		return "已设置口令，本机免登录、其它来源需登录"
+	default:
+		return "已设置口令，但当前只监听本机，不会被外部访问"
+	}
 }
 
 // needsSetupPlugins 是默认不启用的插件：它们不配置就没法工作——roleplay 没有角色设定

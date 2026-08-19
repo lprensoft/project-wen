@@ -27,6 +27,15 @@ type Config struct {
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
+	// TrustLoopback 决定来自回环地址的请求是否免认证（默认开启）。
+	// 指针是为了与「未配置」区分。套反向代理时必须显式关掉：那种部署下所有请求
+	// 都从回环地址进来，开着等于没有认证。
+	TrustLoopback *bool `yaml:"trust_loopback"`
+}
+
+// TrustLoopbackOrDefault 返回回环免认证的实际取值（未配置按开启算）。
+func (c ServerConfig) TrustLoopbackOrDefault() bool {
+	return c.TrustLoopback == nil || *c.TrustLoopback
 }
 
 type ModelConfig struct {

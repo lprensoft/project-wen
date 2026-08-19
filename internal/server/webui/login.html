@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 · Wen Agent</title>
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <script>
+    // 与主界面同一套主题标记。这一页刻意不引用 style.css：
+    // 认证中间件只放行登录页本身，放开整个静态目录会把未登录能看到的东西变多。
+    (function () {
+      var s = localStorage.getItem("wen-theme") || "system";
+      var dark = s === "dark" || (s === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #f5f6f8; --panel: #ffffff; --border: #e2e4e8;
+      --text: #1f2328; --text-dim: #6b7280;
+      --accent: #2563eb; --accent-hover: #1d4ed8;
+      --danger: #dc2626; --danger-bg: #fee2e2;
+    }
+    :root[data-theme="dark"] {
+      --bg: #12151a; --panel: #1a1f26; --border: #2b323c;
+      --text: #e5e7eb; --text-dim: #98a2b0;
+      --accent: #3b82f6; --accent-hover: #2563eb;
+      --danger: #f87171; --danger-bg: #3d1f1f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex;
+      align-items: center; justify-content: center;
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .card {
+      width: min(360px, calc(100vw - 32px));
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px 26px;
+    }
+    .logo { display: block; width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 12px; }
+    h1 { margin: 0 0 4px; font-size: 17px; text-align: center; font-weight: 600; }
+    .sub { margin: 0 0 20px; font-size: 12.5px; color: var(--text-dim); text-align: center; }
+    label { display: block; font-size: 12.5px; color: var(--text-dim); margin-bottom: 6px; }
+    input {
+      width: 100%; padding: 9px 11px; font-size: 14px;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 7px; outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      width: 100%; margin-top: 16px; padding: 9px; font-size: 14px; font-weight: 500;
+      background: var(--accent); color: #fff; border: 0; border-radius: 7px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled { opacity: .6; cursor: default; }
+    .err {
+      margin-top: 14px; padding: 8px 11px; font-size: 12.5px;
+      background: var(--danger-bg); color: var(--danger); border-radius: 7px;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <form class="card" id="form">
+    <img class="logo" src="assets/logo-512.png" alt="">
+    <h1>Wen Agent</h1>
+    <p class="sub">请输入访问口令</p>
+    <label for="pwd">访问口令</label>
+    <input id="pwd" type="password" autocomplete="current-password" autofocus>
+    <button id="submit" type="submit">登录</button>
+    <div id="err" class="err hidden"></div>
+  </form>
+  <script>
+    const form = document.getElementById("form");
+    const pwd = document.getElementById("pwd");
+    const submit = document.getElementById("submit");
+    const err = document.getElementById("err");
+
+    function fail(msg) {
+      err.textContent = msg;
+      err.classList.remove("hidden");
+      pwd.select();
+    }
+
+    // 已经登录（或本机免认证）时不该停在登录页
+    fetch("/api/auth/status").then(r => r.json()).then(s => {
+      if (s.authenticated) location.replace("/");
+    }).catch(() => {});
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.classList.add("hidden");
+      submit.disabled = true;
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pwd.value }),
+        });
+        if (res.ok) { location.replace("/"); return; }
+        const body = await res.json().catch(() => ({}));
+        fail(body.error || "登录失败");
+      } catch {
+        fail("无法连接服务");
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
