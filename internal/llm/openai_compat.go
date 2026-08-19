@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -100,6 +101,27 @@ type wireChunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *wireUsage `json:"usage"` // 最后一个 chunk 携带（需 stream_options.include_usage）
+	// Error 是流中途下发的错误帧（限流、内容拦截等都可能走这条路）。
+	// 不解析它的话错误会被当成无法识别的帧静默跳过，表现成「空回复且正常结束」。
+	Error *wireError `json:"error"`
+}
+
+type wireError struct {
+	Type string `json:"type"`
+	// Code 各家类型不一（字符串或数字），收原文避免解析失败连累整帧。
+	Code    json.RawMessage `json:"code"`
+	Message string          `json:"message"`
+}
+
+func (e *wireError) text() string {
+	head := e.Type
+	if head == "" {
+		head = strings.Trim(string(e.Code), `"`)
+	}
+	if head == "" || head == "null" {
+		return e.Message
+	}
+	return head + ": " + e.Message
 }
 
 // wireUsage 单独一个结构而不是直接解进 llm.Usage：缓存命中数各家字段名不同，
@@ -234,7 +256,7 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("llm api: status %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
+		return nil, &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(errBody))}
 	}
 
 	ch := make(chan StreamEvent)
@@ -291,6 +313,10 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue
 			}
+			if chunk.Error != nil {
+				emit(StreamEvent{Type: EventError, Err: &APIError{Body: chunk.Error.text()}})
+				return
+			}
 			if chunk.Usage != nil {
 				if !emit(StreamEvent{Type: EventUsage, Usage: chunk.Usage.usage()}) {
 					return
@@ -298,6 +324,15 @@ func (p *OpenAICompat) ChatStream(ctx context.Context, req ChatRequest) (<-chan 
 			}
 			if len(chunk.Choices) == 0 {
 				continue
+			}
+			switch chunk.Choices[0].FinishReason {
+			case "content_filter":
+				// 内容被后端安全策略拦截。当成错误上报而不是静默收尾，
+				// 否则表现为「说到一半没了」且没有任何解释。
+				emit(StreamEvent{Type: EventError, Err: &APIError{Kind: KindContentFilter, Body: "内容被提供商安全策略拦截（finish_reason=content_filter）"}})
+				return
+			case "length":
+				log.Printf("llm: 输出被 max_tokens 截断（finish_reason=length）")
 			}
 			delta := chunk.Choices[0].Delta
 			if delta.ReasoningContent != "" {

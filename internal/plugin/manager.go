@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -555,6 +556,39 @@ func (m *Manager) DecideScope(ctx context.Context, ev TurnEvent) Scope {
 		out, owner = sc, e.name
 	}
 	return out
+}
+
+// failureTextMaxRunes 是转译文本的长度上限。它会以助手消息落盘并直接展示，
+// 一句台词用不到更多；超限截断而不是作废——插件已经接手，缺一截好过整条丢弃。
+const failureTextMaxRunes = 500
+
+// TranslateFailure 在一轮对话失败后，给插件一个把失败转成一句面向用户回复的机会。
+//
+// 单所有者：按注册顺序第一个返回非空文本的插件胜出，其余被忽略并记日志——
+// 两个插件各给一句「台词」是无法合并的组合，与 DecideScope 同理。
+func (m *Manager) TranslateFailure(ctx context.Context, ev TurnFailure) (string, bool) {
+	var out string
+	owner := ""
+	for _, e := range enabledAs[FailureTranslator](m) {
+		var (
+			text string
+			ok   bool
+		)
+		safely(e.name, "转译轮次失败", func() { text, ok = e.impl.TranslateFailure(ctx, ev) })
+		text = strings.TrimSpace(text)
+		if !ok || text == "" {
+			continue
+		}
+		if owner != "" {
+			log.Printf("插件 %q 的失败转译被忽略：本轮已由插件 %q 接手", e.name, owner)
+			continue
+		}
+		if r := []rune(text); len(r) > failureTextMaxRunes {
+			text = string(r[:failureTextMaxRunes])
+		}
+		out, owner = text, e.name
+	}
+	return out, owner != ""
 }
 
 // TurnPrompts 在可见域裁决完成后收集各插件的一次性提示词片段（按注册顺序，已滤空）。

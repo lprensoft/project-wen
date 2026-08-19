@@ -755,6 +755,8 @@ async function sendMessage() {
 
   let assistantBubble = null; // 惰性创建，收到第一个 delta 才建
   let assistantRaw = "";      // 当前气泡的原始 Markdown 文本
+  let sawText = false;        // 本轮是否出现过任何正文增量
+  let sawError = false;       // 本轮是否报过错（报过就不再提示空回复）
   let thinkingBlock = null;   // 当前轮的思考块
   let compactBlock = null;    // 自动压缩的动态展示块
   let autoCompacted = false;  // 本轮发生过自动压缩，结束后需重载历史
@@ -798,6 +800,7 @@ async function sendMessage() {
         thinkingBlock.querySelector(".thinking-content").textContent += ev.content || "";
         scrollBottom();
       } else if (ev.type === "delta") {
+        sawText = true;
         if (thinkingBlock) thinkingBlock.open = false; // 正文开始，折叠思考
         if (!assistantBubble) {
           assistantBubble = addBubble("assistant", "");
@@ -851,10 +854,13 @@ async function sendMessage() {
         }
         compactBlock = null;
       } else if (ev.type === "error") {
+        sawError = true;
         addError("出错了：" + (ev.error || "未知错误"));
       } else if (ev.type === "done") {
         finishBubble();
         finishThinking();
+        // 一次没有任何正文的成功轮次：不提示的话界面完全静默，像什么都没发生
+        if (!sawText && !sawError) addSysBlock("（本轮没有文本回复）");
       }
     }
   } catch (e) {
