@@ -34,22 +34,27 @@ const (
 type Plugin struct {
 	mu sync.RWMutex
 
-	persona      string
-	userProfile  string
-	interaction  bool
-	humanize     bool
-	timeRules    bool
-	memoryRules  bool
-	maxTextBytes int
+	persona           string
+	userProfile       string
+	interaction       bool
+	humanize          bool
+	timeRules         bool
+	memoryRules       bool
+	maxTextBytes      int
+	translateFailures bool
+	failureLine       string
+	complete          plugin.CompleteFunc
 }
 
 func New() *Plugin {
 	return &Plugin{
-		interaction:  defaultInteraction,
-		humanize:     defaultHumanize,
-		timeRules:    defaultTimeRules,
-		memoryRules:  defaultMemoryRules,
-		maxTextBytes: defaultMaxTextBytes,
+		interaction:       defaultInteraction,
+		humanize:          defaultHumanize,
+		timeRules:         defaultTimeRules,
+		memoryRules:       defaultMemoryRules,
+		maxTextBytes:      defaultMaxTextBytes,
+		translateFailures: defaultTranslateFailures,
+		failureLine:       defaultFailureLine,
 	}
 }
 
@@ -99,6 +104,17 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default: defaultMemoryRules,
 		},
 		{
+			Key: "translate_failures", Label: "失败转译", Type: plugin.FieldBool,
+			Description: "模型调用失败（如内容被提供商安全策略拦截）时，以角色口吻转成一句走神般的回复，" +
+				"原始错误转入会话注记；配置类错误（密钥、地址）仍原样报出。需要已填写角色设定。",
+			Default: defaultTranslateFailures,
+		},
+		{
+			Key: "failure_line", Label: "转译兜底台词", Type: plugin.FieldString,
+			Description: "转译时连生成一句台词也失败（如提供商完全不可用）的兜底回复。",
+			Default:     defaultFailureLine,
+		},
+		{
 			Key: "max_text_bytes", Label: "设定文本上限（字节）", Type: plugin.FieldInt,
 			Description: "角色设定与我的信息的合计上限。它们每轮全额重发且不参与预算裁剪，超出部分会被截断。",
 			Default:     defaultMaxTextBytes,
@@ -108,7 +124,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	}
 }
 
-func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
+func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	persona := strings.TrimSpace(plugin.CfgString(cfg, "persona", ""))
 	profile := strings.TrimSpace(plugin.CfgString(cfg, "user_profile", ""))
 	limit := plugin.CfgInt(cfg, "max_text_bytes", defaultMaxTextBytes)
@@ -122,6 +138,9 @@ func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
 	p.timeRules = plugin.CfgBool(cfg, "time_rules", defaultTimeRules)
 	p.memoryRules = plugin.CfgBool(cfg, "memory_rules", defaultMemoryRules)
 	p.maxTextBytes = limit
+	p.translateFailures = plugin.CfgBool(cfg, "translate_failures", defaultTranslateFailures)
+	p.failureLine = strings.TrimSpace(plugin.CfgString(cfg, "failure_line", defaultFailureLine))
+	p.complete = ictx.Complete
 	return nil
 }
 
@@ -129,12 +148,15 @@ func (p *Plugin) Tools() []plugin.Tool { return nil }
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
-	persona     string
-	userProfile string
-	interaction bool
-	humanize    bool
-	timeRules   bool
-	memoryRules bool
+	persona           string
+	userProfile       string
+	interaction       bool
+	humanize          bool
+	timeRules         bool
+	memoryRules       bool
+	translateFailures bool
+	failureLine       string
+	complete          plugin.CompleteFunc
 }
 
 // snapshot 取一份配置快照：SetConfig 会在运行时重新 Init，而提示词可能正在生成。
@@ -142,12 +164,15 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
-		persona:     p.persona,
-		userProfile: p.userProfile,
-		interaction: p.interaction,
-		humanize:    p.humanize,
-		timeRules:   p.timeRules,
-		memoryRules: p.memoryRules,
+		persona:           p.persona,
+		userProfile:       p.userProfile,
+		interaction:       p.interaction,
+		humanize:          p.humanize,
+		timeRules:         p.timeRules,
+		memoryRules:       p.memoryRules,
+		translateFailures: p.translateFailures,
+		failureLine:       p.failureLine,
+		complete:          p.complete,
 	}
 }
 

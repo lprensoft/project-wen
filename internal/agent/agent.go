@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -266,7 +267,22 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	for turn := 0; turn < opts.MaxTurns; turn++ {
 		r, err := a.stream(ctx, provider, opts, msgs, pinned, emit)
 		if err != nil {
-			return "", err
+			// 给插件一个把失败转成正常回复的机会（如角色扮演场景把内容拦截
+			// 演成一句走神）。转译成功即按正常轮次收尾，原始错误进会话注记。
+			text, ok := a.translateFailure(ctx, sessionID, scope.Write, origin, r.content, err, emit)
+			if !ok {
+				return "", err
+			}
+			a.plugins.NotifyTurnEnd(ctx, plugin.TurnEndEvent{
+				SessionID:   sessionID,
+				Origin:      origin,
+				Interactive: true, // 转译只发生在真人在场的轮次
+				UserInput:   userInput,
+				FinalText:   text,
+				StartedAt:   startedAt,
+				EndedAt:     time.Now(),
+			})
+			return text, nil
 		}
 		if r.usage != nil {
 			// 记录实测用量（供 /status 展示与自动压缩判断）
@@ -385,13 +401,50 @@ func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options,
 		case llm.EventUsage:
 			r.usage = ev.Usage
 		case llm.EventError:
-			return turnResult{}, ev.Err
+			// 半截产出随错误一起交回：内容不作数（调用方不落盘），
+			// 但界面上增量已经流出去了，失败善后需要知道这一点。
+			return r, ev.Err
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return turnResult{}, err
 	}
 	return r, nil
+}
+
+// translateFailure 在模型调用失败后给插件一个把失败转成一句正常回复的机会
+//（经 Manager.TranslateFailure，单所有者）。成功时：文本以增量事件送出、以正常
+// 助手消息落盘（带本轮可见域标签），原始错误转入会话注记——注记只给人看、
+// 永不进模型上下文，真相因此不丢。
+//
+// 只在真人在场的轮次尝试：后台轮次没人看，转译白费一次模型调用，还会把失败
+// 伪装成成功、干扰发起方（如心跳按报错跳过本拍）的判断。用户主动取消（ctx
+// 已作废）也不转译——那不是失败，而且转译自己也需要这个 ctx。
+//
+// partial 是失败前已经流出去的半截文本：它不落盘（与失败路径一致），但界面上
+// 已经显示了，转译文本得另起一段接在后面，避免两段话粘成一句。
+func (a *Agent) translateFailure(ctx context.Context, sessionID, tag, origin, partial string, cause error, emit func(Event)) (string, bool) {
+	if !plugin.IsInteractive(ctx) || ctx.Err() != nil {
+		return "", false
+	}
+	text, ok := a.plugins.TranslateFailure(ctx, plugin.TurnFailure{SessionID: sessionID, Err: cause})
+	if !ok || text == "" {
+		return "", false
+	}
+	out := text
+	if strings.TrimSpace(partial) != "" {
+		out = "\n\n" + text
+	}
+	emit(Event{Type: EventDelta, Content: out})
+	if err := a.append(sessionID, llm.Message{Role: llm.RoleAssistant, Content: text}, tag, origin); err != nil {
+		// 落不了盘就退回原始错误：界面已经流出的台词与历史会不一致，
+		// 但那是磁盘故障级别的场景，一致性让位于把问题报出来。
+		return "", false
+	}
+	if err := a.AppendNotice(ctx, sessionID, "本轮模型调用失败，回复由插件转译生成。原始错误："+cause.Error()); err != nil {
+		log.Printf("写失败转译注记失败: %v", err)
+	}
+	return text, true
 }
 
 // maybeAutoCompact 在上下文占用达到窗口阈值时自动压缩会话。

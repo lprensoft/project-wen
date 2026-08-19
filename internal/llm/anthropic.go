@@ -289,7 +289,7 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("llm api: status %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
+		return nil, &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(errBody))}
 	}
 
 	ch := make(chan StreamEvent)
@@ -397,7 +397,7 @@ func (p *Anthropic) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 				if ev.Error != nil {
 					msg = ev.Error.Type + ": " + ev.Error.Message
 				}
-				emit(StreamEvent{Type: EventError, Err: fmt.Errorf("llm api: %s", msg)})
+				emit(StreamEvent{Type: EventError, Err: &APIError{Body: msg}})
 				return
 			}
 		}
