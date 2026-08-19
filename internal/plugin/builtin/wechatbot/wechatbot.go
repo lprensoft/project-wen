@@ -6,10 +6,12 @@
 // 服务端下发，因此绑定流程通过「插件操作入口」（plugin.Actionable）做在设置页。
 //
 // 每个微信用户（xxx@im.wechat）映射到一个当前会话，远程会话就是普通会话，
-// Web UI 刷新即可看到。命令集与 qq_bot 一致：/new /status /compact /help，
-// 以及危险操作确认的 /apply /deny。仅响应白名单内的用户；扫码绑定人自动放行，
-// 白名单为空时其他人一律拒绝（陌生用户记录到日志，方便抄进白名单）。仅私聊：
-// 带 group_id 的消息忽略（群聊能力官方未充分验证）。
+// Web UI 刷新即可看到。会话绑定、命令集（/new /status /compact /help /apply /deny）、
+// 串行处理与确认代理都在公共骨架 wen/internal/imbot 里，这个包只负责微信的协议层：
+// 扫码绑定、长轮询、发送与「正在输入」。
+//
+// 仅响应白名单内的用户；扫码绑定人自动放行，白名单为空时其他人一律拒绝（陌生用户
+// 记录到日志，方便抄进白名单）。仅私聊：带 group_id 的消息忽略（群聊能力官方未充分验证）。
 package wechatbot
 
 import (
@@ -20,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
 
@@ -28,7 +31,6 @@ const (
 	defConfirmTimeout = 300 // 秒
 
 	turnTimeout = 10 * time.Minute
-	queueSize   = 8 // 每用户待处理消息队列长度，超出直接回复稍候
 
 	// chunkLimit 是单条消息的 rune 上限。官方未公开限制，保守取值，实测后可调。
 	chunkLimit = 2000
@@ -50,31 +52,18 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置
-	apiBase        string // 扫码入口用的公共基址；绑定后改用服务端下发的专属 baseurl
-	whitelist      map[string]bool
-	confirmTimeout time.Duration
-	format         string // 消息格式：markdown 直发 / plain 转纯文本
-	showThinking   bool   // 把每轮思考链推送到微信
-	showTools      bool   // 把工具调用（仅名字）推送到微信
+	apiBase   string // 扫码入口用的公共基址；绑定后改用服务端下发的专属 baseurl
+	whitelist map[string]bool
+	format    string // 消息格式：markdown 直发 / plain 转纯文本
 
 	// 凭证（扫码绑定后持久化到 StateDir/credentials.json）
 	creds    credentials
 	stateDir string
 
-	// 能力
-	runTurn    plugin.RunTurnFunc
-	newSession plugin.NewSessionFunc
-	compact    plugin.CompactFunc
-	status     plugin.StatusFunc
-	sessions   plugin.SessionQuery // 只读：校验绑定的会话是否仍存在
-
 	// 运行组件
-	dedup   *deduper
-	binding *sessionBinding // 微信用户 ID → 会话 ID
-	tokens  *tokenStore     // 微信用户 ID → 最近入站的 context_token（后台推送用）
-	broker  *confirmBroker
-	workers map[string]chan inbound
-	typing  map[string]string // 微信用户 ID → typing_ticket 缓存
+	core   *imbot.Core       // 通道无关的分发、命令、会话绑定与确认代理
+	tokens *tokenStore       // 微信用户 ID → 最近入站的 context_token（后台推送用）
+	typing map[string]string // 微信用户 ID → typing_ticket 缓存
 
 	// 长轮询循环有独立的子取消：绑定成功后可只重启轮询而不动整个插件
 	ctx        context.Context
@@ -145,21 +134,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	}
 }
 
-// Init 应用配置并（重）启动。可重入：先停旧循环与所有 worker。
+// Init 应用配置并（重）启动。可重入：先停旧循环与骨架。
 // 未绑定时 Init 也成功——插件进入待绑定状态，等设置页扫码；绑定过则直接起轮询。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录")
-	}
-	if ictx.RunTurn == nil || ictx.NewSession == nil {
-		return fmt.Errorf("当前环境不支持插件发起对话轮次")
-	}
-	if ictx.Sessions == nil {
-		return fmt.Errorf("当前环境不支持会话查询")
-	}
-	binding, err := loadBinding(ictx.StateDir)
-	if err != nil {
-		return fmt.Errorf("加载会话映射失败: %w", err)
 	}
 	tokens, err := loadTokens(ictx.StateDir)
 	if err != nil {
@@ -182,36 +161,72 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.mu.Lock()
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
-	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
-	p.showThinking = plugin.CfgBool(cfg, "show_thinking", false)
-	p.showTools = plugin.CfgBool(cfg, "show_tools", false)
 	p.creds = creds
 	p.stateDir = ictx.StateDir
-	p.runTurn = ictx.RunTurn
-	p.newSession = ictx.NewSession
-	p.compact = ictx.Compact
-	p.status = ictx.Status
-	p.sessions = ictx.Sessions
-	p.dedup = newDeduper()
-	p.binding = binding
 	p.tokens = tokens
-	p.broker = newConfirmBroker()
-	p.workers = map[string]chan inbound{}
 	p.typing = map[string]string{}
 	if p.pauseOnExpired == 0 {
 		p.pauseOnExpired = expiredPause
 	}
+	coreCfg := imbot.Config{
+		PluginName:     p.Name(),
+		Sender:         sender{p: p},
+		StateDir:       ictx.StateDir,
+		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
+		TurnTimeout:    turnTimeout,
+		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
+		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
+		Allow:          p.allowed,
+		OnAccepted:     p.rememberToken,
+		Typing:         p.onTyping,
+		RunTurn:        ictx.RunTurn,
+		NewSession:     ictx.NewSession,
+		Compact:        ictx.Compact,
+		Status:         ictx.Status,
+		Sessions:       ictx.Sessions,
+	}
+	p.mu.Unlock()
+
+	core, err := imbot.New(coreCfg)
+	if err != nil {
+		return err
+	}
+
+	p.mu.Lock()
+	p.core = core
 	p.ctx, p.cancel = context.WithCancel(context.Background())
+	ctx := p.ctx
 	bound := creds.valid()
 	p.mu.Unlock()
 
+	core.Start(ctx)
 	if bound {
 		p.startPolling()
 	} else {
 		log.Printf("wechat_bot: 尚未绑定微信，请到设置页的插件卡片上点击「扫码绑定微信」")
 	}
 	return nil
+}
+
+// allowed 判定用户是否放行：扫码绑定人始终放行，其余看配置白名单。
+func (p *Plugin) allowed(userID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return userID != "" && (userID == p.creds.BinderUserID || p.whitelist[userID])
+}
+
+// rememberToken 记住该用户最近一次入站的 context_token：后台轮次（心跳等）的结果要靠它推送。
+func (p *Plugin) rememberToken(msg imbot.Message) {
+	p.mu.Lock()
+	tokens := p.tokens
+	p.mu.Unlock()
+	tokens.remember(msg.UserID, msg.ReplyTo)
+}
+
+// onTyping 把骨架的「正在输入」回调接到微信协议层。
+func (p *Plugin) onTyping(ctx context.Context, msg imbot.Message, active bool) {
+	p.setTyping(ctx, msg.UserID, msg.ReplyTo, active)
 }
 
 // startPolling （重）启动长轮询循环：先停掉旧循环，再以当前凭证起新的。
@@ -232,15 +247,46 @@ func (p *Plugin) startPolling() {
 	go p.pollLoop(ctx)
 }
 
-// Stop 停掉轮询循环、绑定流程与全部 worker。
+// Stop 停掉轮询循环、绑定流程与骨架的全部 worker。
 func (p *Plugin) Stop() {
 	p.mu.Lock()
-	cancel := p.cancel
+	cancel, core := p.cancel, p.core
 	p.cancel = nil
 	p.pollCancel = nil
 	p.mu.Unlock()
+	if core != nil {
+		core.Stop()
+	}
 	if cancel != nil {
 		cancel()
 		p.wg.Wait()
 	}
+}
+
+// handleInbound 把一条微信消息交给公共骨架。unsupported 表示消息里有暂不支持的媒体类型。
+func (p *Plugin) handleInbound(ctx context.Context, msg inbound, dedupKey string, unsupported bool) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return
+	}
+	note := ""
+	if unsupported {
+		note = "暂不支持该消息类型，请发文字或语音。"
+	}
+	core.Handle(ctx, imbot.Message{
+		UserID:  msg.userID,
+		DedupID: dedupKey,
+		ReplyTo: msg.contextToken,
+		Text:    msg.text,
+		Note:    note,
+	})
+}
+
+// sender 把骨架的发送请求接到微信的协议层。
+type sender struct{ p *Plugin }
+
+func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
+	s.p.send(ctx, userID, text, replyTo)
 }

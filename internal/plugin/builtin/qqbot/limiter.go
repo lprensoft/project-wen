@@ -60,39 +60,3 @@ func (l *replyLimiter) evictLocked(now time.Time) {
 		}
 	}
 }
-
-// deduper 按消息 id 去重：平台会因网络重试、断线重连等原因重复推送同一事件。
-// 窗口取 5 分钟——模型一轮回复动辄几十秒，太短的窗口挡不住重连场景的重推。
-type deduper struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
-}
-
-const (
-	dedupWindow  = 5 * time.Minute
-	dedupMaxSize = 1000
-)
-
-func newDeduper() *deduper { return &deduper{seen: map[string]time.Time{}} }
-
-// isDuplicate 判定并记录一条消息；重复返回 true。
-func (d *deduper) isDuplicate(msgID string) bool {
-	if msgID == "" {
-		return false
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	now := time.Now()
-	if len(d.seen) > dedupMaxSize {
-		for id, ts := range d.seen {
-			if now.Sub(ts) > dedupWindow {
-				delete(d.seen, id)
-			}
-		}
-	}
-	if ts, ok := d.seen[msgID]; ok && now.Sub(ts) <= dedupWindow {
-		return true
-	}
-	d.seen[msgID] = now
-	return false
-}
