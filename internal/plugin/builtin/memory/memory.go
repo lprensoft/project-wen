@@ -95,7 +95,15 @@ type Plugin struct {
 
 	// 定期提炼的状态。单独一把锁，且不随 Init 重置：攒着的是对话内容，
 	// 不是配置，改一次配置就把它清空等于白丢一个窗口。
-	turnMu     sync.Mutex
+	turnMu    sync.Mutex
+	windowDir string // 窗口缓冲的落盘位置；为空表示无处可存，退化成纯内存缓冲
+	loaded    bool   // 缓冲已从盘上装回，Init 重入时不再重复装（内存里的更新）
+	windowSeq uint64 // 每次落盘递增，由 turnMu 保护
+
+	// 写盘串行化。每轮对话都会起一个写盘 goroutine，它们完成的顺序不保证——
+	// 不排队的话，晚到的旧快照会把新进展整个盖掉（表现为重启后只剩一轮）。
+	saveMu     sync.Mutex
+	savedSeq   uint64
 	windows    map[windowKey]*window
 	extracting map[windowKey]bool
 	lastSweep  time.Time
@@ -283,6 +291,15 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.turnMu.Lock()
 	p.stopped = false
+	p.windowDir = ictx.StateDir
+	// 只在首次装回：SetConfig 会重新 Init，那时内存里的缓冲比盘上的新，
+	// 再装一次等于把刚攒的几轮退回旧值
+	if !p.loaded {
+		p.loaded = true
+		if windows, lastSweep := loadWindowState(p.windowDir); windows != nil {
+			p.windows, p.lastSweep = windows, lastSweep
+		}
+	}
 	p.turnMu.Unlock()
 	return nil
 }
