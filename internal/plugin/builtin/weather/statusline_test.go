@@ -12,7 +12,7 @@ import (
 func TestStatusLineNotConfigured(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": ""}); err != nil {
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"persona_location": ""}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if got := p.StatusLines(); len(got) != 1 || !strings.Contains(got[0], "未设置城市") {
@@ -24,7 +24,7 @@ func TestStatusLineSameCity(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": true, "refresh_minutes": 30, "stale_minutes": 60,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -49,7 +49,7 @@ func TestStatusLineSameCity(t *testing.T) {
 func TestStatusLineTwoCitiesMarksStalePerSide(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": false, "user_location": "上海",
 		"refresh_minutes": 30, "stale_minutes": 60,
 	}); err != nil {
@@ -80,7 +80,7 @@ func TestStatusLineCarriesLastError(t *testing.T) {
 	stubServer(t, "", "")
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "杭州"}); err != nil {
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"persona_location": "杭州"}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	p.Stop() // 先停掉后台循环：它启动时就会取一次，会把自己的失败原因写进来

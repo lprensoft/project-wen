@@ -55,7 +55,7 @@ type Plugin struct {
 	refresh    time.Duration
 	stale      time.Duration
 	client     *http.Client
-	stateDir   string // 观测缓存的落盘位置；为空表示无处可存，退化成纯内存缓存
+	stateDir   string // 观测缓存的落盘位置
 
 	// 后台刷新循环。Init 可重入，每次先停旧的再起新的。
 	cancel context.CancelFunc
@@ -140,6 +140,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	refreshMin := plugin.CfgInt(cfg, "refresh_minutes", defaultRefreshMinutes)
 	staleMin := plugin.CfgInt(cfg, "stale_minutes", defaultStaleMinutes)
+	if ictx.StateDir == "" {
+		return fmt.Errorf("没有可用的持久化目录，无法保存天气观测")
+	}
 	if staleMin < refreshMin {
 		return fmt.Errorf("「过期不注入的时限」(%d 分钟) 不能小于「刷新间隔」(%d 分钟)："+
 			"那样刚取到的天气也会立刻被判为过期，等于永远不注入", staleMin, refreshMin)
@@ -162,9 +165,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 	p.dataMu.Unlock()
 
-	// 装回上次的观测：重启不该产生空窗，也不该白烧一次 API 调用。
-	// StateDir 为空时退化成纯内存缓存——天气不落盘也能工作，只是失去跨重启的连续性，
-	// 不值得为此拒绝启用。
+	// 装回上次的观测：重启不该产生空窗，也不该白烧一次 API 调用
 	p.loadInto(ictx.StateDir, wanted)
 
 	p.mu.Lock()
