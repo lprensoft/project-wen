@@ -143,10 +143,17 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.complete = ictx.Complete
 	p.sessions = sessions
 
-	// 当前间隔：优先用上次持久化的值（限幅到新配置范围），否则用基础间隔
-	p.cur = p.loadIntervalLocked()
-	p.lastBeat = time.Now()
+	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
+	// 「上次是几点」才推得出下一次
+	st := p.loadStateLocked()
+	p.cur = st.interval(p.base, p.clamp)
 	p.lastActive = p.probeLastActiveLocked()
+	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, time.Now())
+
+	// 起点当场落盘，别等第一次心跳才写：否则「启用后还没跳过一次就重启」这一段
+	// 时间里状态文件仍是空的，倒计时又会从头开始。persistState 不碰 p.mu，
+	// 在锁内直接调是安全的，且写完即返回，不会脱离 Init 的生命周期。
+	persistState(p.snapshotStateLocked())
 
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.wake = make(chan struct{}, 1)
@@ -167,46 +174,85 @@ func (p *Plugin) Stop() {
 	}
 }
 
-// ---------- 状态持久化（state.json：只存当前间隔） ----------
+// ---------- 状态持久化（state.json） ----------
 
+// state 是重启后要接着用的东西：当前间隔，以及上一次心跳发生在什么时刻。
+//
+// 此前只存了间隔，Init 把倒计时清零重算，于是重启比心跳间隔更频繁时，心跳一次都
+// 不会触发。定时类状态一律记「上一次发生的时刻」而不是「还剩多久」——进程内的
+// 定时器只是执行手段，不是状态载体。
 type state struct {
-	IntervalSeconds int `json:"interval_seconds"`
+	IntervalSeconds int       `json:"interval_seconds"`
+	LastBeat        time.Time `json:"last_beat,omitempty"`
+}
+
+// interval 返回可用的间隔：持久化值经限幅，缺失或非法时退回基础间隔。
+func (st state) interval(base time.Duration, clamp func(time.Duration) time.Duration) time.Duration {
+	if st.IntervalSeconds <= 0 {
+		return base
+	}
+	return clamp(time.Duration(st.IntervalSeconds) * time.Second)
+}
+
+// startupGrace 是重启后补心跳的宽限期。
+//
+// 关机时长超过心跳间隔时，恢复后「早就该心跳了」，循环会立刻补上一次。补是对的
+// ——心跳的语义是隔一阵子主动开口，提示词里还会带上真实间隔——但不该在服务刚起来
+// 的那一秒就开口：那时人多半正打算自己说话，调试期间反复重启尤其明显。
+const startupGrace = 2 * time.Minute
+
+// resumeLastBeat 定出重启后的倒计时起点。
+//
+// 取「上次心跳」与「上次真人对话」中较晚的一个：真人聊完会重置心跳时钟
+// （见 OnTurnEnd），而那个时刻记在会话元数据里，因此不必在轮次收尾的同步路径上
+// 写盘——那条路径要求快速返回，每轮多一次写盘不值得。
+func (p *Plugin) resumeLastBeat(lastBeat, lastActive, now time.Time) time.Time {
+	last := lastBeat
+	if lastActive.After(last) {
+		last = lastActive
+	}
+	if last.IsZero() {
+		return now // 没有先前状态（首次启用）：等满一个完整间隔，而不是立刻心跳
+	}
+	if earliest := now.Add(startupGrace - p.cur); last.Before(earliest) {
+		return earliest // 已经过期，补一次，但至少等到宽限期之后
+	}
+	return last
 }
 
 func (p *Plugin) statePath() string { return filepath.Join(p.stateDir, "state.json") }
 
-// loadIntervalLocked 读上次的间隔并限幅到当前配置范围；无状态时用基础间隔。
-func (p *Plugin) loadIntervalLocked() time.Duration {
+// loadStateLocked 读上次的状态；文件缺失或损坏时返回零值，由调用方回退。
+func (p *Plugin) loadStateLocked() state {
 	raw, err := os.ReadFile(p.statePath())
 	if err != nil {
-		return p.base
+		return state{}
 	}
 	var st state
-	if json.Unmarshal(raw, &st) != nil || st.IntervalSeconds <= 0 {
-		return p.base
+	if json.Unmarshal(raw, &st) != nil {
+		return state{}
 	}
-	return p.clamp(time.Duration(st.IntervalSeconds) * time.Second)
+	return st
 }
 
-// persistInterval 把间隔写进状态文件。不碰锁：目录与间隔由调用方在锁内取好，
-// 写盘在锁外做——否则持锁的调用方只能另起 goroutine 来绕开自锁，而那种写会脱离
-// 插件的生命周期，在插件停掉之后才落地（测试里表现为临时目录清理时「目录非空」）。
-func persistInterval(dir string, iv time.Duration) {
+// snapshotStateLocked 取出该落盘的内容。调用方需持有 p.mu，写盘在锁外做——
+// 持锁写盘会让调用方只能另起 goroutine 绕开自锁，而那种写会脱离插件的生命周期，
+// 在插件停掉之后才落地（测试里表现为临时目录清理时「目录非空」）。
+func (p *Plugin) snapshotStateLocked() (string, state) {
+	return p.stateDir, state{
+		IntervalSeconds: int(p.cur / time.Second),
+		LastBeat:        p.lastBeat,
+	}
+}
+
+// persistState 写状态文件。失败只影响下次启动的初值，不值得让调用方失败。
+func persistState(dir string, st state) {
 	if dir == "" {
 		return
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	raw, _ := json.Marshal(state{IntervalSeconds: int(iv / time.Second)})
+	raw, _ := json.Marshal(st)
 	_ = os.WriteFile(filepath.Join(dir, "state.json"), raw, 0o644)
-}
-
-// saveInterval 持久化当前间隔，供未持锁的调用方使用。
-// 失败只影响下次启动的初值，不值得让调用方失败。
-func (p *Plugin) saveInterval(iv time.Duration) {
-	p.mu.Lock()
-	dir := p.stateDir
-	p.mu.Unlock()
-	persistInterval(dir, iv)
 }
 
 func (p *Plugin) clamp(iv time.Duration) time.Duration {

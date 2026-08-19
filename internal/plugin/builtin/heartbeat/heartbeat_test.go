@@ -325,7 +325,11 @@ func TestIntervalPersistence(t *testing.T) {
 	if err := p.Init(ictx, nil); err != nil {
 		t.Fatal(err)
 	}
-	p.saveInterval(10 * time.Minute)
+	p.mu.Lock()
+	p.cur = 10 * time.Minute
+	dir, st := p.snapshotStateLocked()
+	p.mu.Unlock()
+	persistState(dir, st)
 	p.Stop()
 
 	p2 := New()
@@ -376,5 +380,83 @@ func TestBeatSendsGap(t *testing.T) {
 	want := "心跳内容\n\n【距上次对话】2 小时"
 	if sent != want {
 		t.Fatalf("心跳输入 = %q，期望 %q", sent, want)
+	}
+}
+
+// 重启后倒计时接着上次走，而不是从零重算。
+//
+// 这是「重启比心跳间隔更频繁时，心跳一次都不会触发」那个毛病的回归测试：
+// 起点若每次 Init 都取 now，下一次心跳就被无限推迟。
+func TestLastBeatSurvivesRestart(t *testing.T) {
+	stateDir := t.TempDir()
+	sessDir := t.TempDir()
+	ictx := plugin.InitContext{StateDir: stateDir, SessionDir: sessDir, RunTurn: noTurn}
+
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 60, "dynamic": false}); err != nil {
+		t.Fatal(err)
+	}
+	// 假装 40 分钟前心跳过一次
+	beatAt := time.Now().Add(-40 * time.Minute)
+	p.mu.Lock()
+	p.lastBeat = beatAt
+	dir, st := p.snapshotStateLocked()
+	p.mu.Unlock()
+	persistState(dir, st)
+	p.Stop()
+
+	p2 := New()
+	if err := p2.Init(ictx, map[string]any{"interval_minutes": 60, "dynamic": false}); err != nil {
+		t.Fatal(err)
+	}
+	defer p2.Stop()
+	p2.mu.Lock()
+	got := p2.lastBeat
+	p2.mu.Unlock()
+
+	if diff := got.Sub(beatAt); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("重启后倒计时起点 = %v，应接着上次的 %v（相差 %v）", got, beatAt, diff)
+	}
+	// 还剩约 20 分钟，不该立刻心跳
+	if left := time.Until(got.Add(60 * time.Minute)); left < 19*time.Minute {
+		t.Errorf("下次心跳只剩 %v，应还有约 20 分钟", left)
+	}
+}
+
+// 关机太久导致「早就该心跳了」时补一次，但要等过宽限期，
+// 免得服务刚起来的那一秒角色就抢先开口。
+func TestOverdueBeatWaitsForGrace(t *testing.T) {
+	p := &Plugin{cur: 60 * time.Minute}
+	now := time.Now()
+
+	got := p.resumeLastBeat(now.Add(-5*time.Hour), time.Time{}, now)
+	next := got.Add(p.cur)
+	if d := next.Sub(now); d < startupGrace-time.Second || d > startupGrace+time.Second {
+		t.Errorf("过期后下次心跳在 %v 后，应正好是宽限期 %v", d, startupGrace)
+	}
+}
+
+// 真人对话会重置心跳时钟，这个时刻记在会话元数据里，
+// 因此重启后要认它——否则刚聊完就重启，会比预期更早心跳。
+func TestResumeUsesLaterOfBeatAndActive(t *testing.T) {
+	p := &Plugin{cur: 60 * time.Minute}
+	now := time.Now()
+	beat := now.Add(-50 * time.Minute)
+	active := now.Add(-10 * time.Minute) // 聊完才 10 分钟
+
+	got := p.resumeLastBeat(beat, active, now)
+	if !got.Equal(active) {
+		t.Errorf("起点 = %v，应取较晚的上次对话时刻 %v", got, active)
+	}
+}
+
+// 首次启用没有任何先前状态，应等满一个完整间隔，而不是被宽限期规则拽成立刻心跳。
+func TestFreshInstallWaitsFullInterval(t *testing.T) {
+	p := &Plugin{cur: 60 * time.Minute}
+	now := time.Now()
+
+	got := p.resumeLastBeat(time.Time{}, time.Time{}, now)
+	if !got.Equal(now) {
+		t.Errorf("首次启用的起点 = %v，应为当前时刻 %v", got, now)
 	}
 }

@@ -61,7 +61,11 @@ func (p *Plugin) beat(ctx context.Context) {
 	p.mu.Lock()
 	p.lastBeat = time.Now()
 	runTurn, prompt := p.runTurn, p.prompt
+	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
+
+	// 记下这次心跳发生的时刻——重启后就是靠它推算下一次的
+	persistState(dir, st)
 
 	sid, lastActive, err := p.pickSession()
 	if err != nil {
@@ -153,11 +157,12 @@ func (p *Plugin) maybeDecay() {
 		return
 	}
 	p.cur = p.clamp(p.cur * 3 / 2)
-	next, dir := p.cur, p.stateDir
+	next := p.cur
+	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
 
-	// 写盘放在锁外：持锁时调 saveInterval 会自锁，而为了绕开自锁另起 goroutine
+	// 写盘放在锁外：持锁写会自锁，而为了绕开自锁另起 goroutine
 	// 就会让这次写脱离循环的生命周期（Stop 等不到它）
-	persistInterval(dir, next)
+	persistState(dir, st)
 	log.Printf("heartbeat: 无人聊天，心跳放缓至 %v", next)
 }
