@@ -3,11 +3,11 @@ package wechatbot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 
 	"wen/internal/plugin"
+	"wen/internal/statustext"
 )
 
 const helpText = `支持的命令：
@@ -215,29 +215,8 @@ func (p *Plugin) cmdStatus(ctx context.Context, msg inbound) {
 		return
 	}
 
-	lines := []string{
-		statusHeader(info.Version),
-		"模型：" + info.Provider + " / " + info.Model,
-		"思考深度：" + info.Thinking,
-		"上下文窗口：" + comma(info.ContextLength) + " tokens",
-	}
-	if info.HasSession {
-		if info.MeasuredTokens >= 0 {
-			lines = append(lines, fmt.Sprintf("当前会话：%d 条消息，实测 %s tokens（占用 %s%%）",
-				info.MessageCount, comma(info.MeasuredTokens), pct(info.MeasuredTokens, info.ContextLength)))
-		} else {
-			lines = append(lines, fmt.Sprintf("当前会话：%d 条消息，约 %s tokens（估算，占用 %s%%）",
-				info.MessageCount, comma(info.EstTokens), pct(info.EstTokens, info.ContextLength)))
-		}
-		if line := cacheLine(info); line != "" {
-			lines = append(lines, line)
-		}
-		lines = append(lines, "会话 ID："+sid)
-	} else {
-		lines = append(lines, "当前会话：无")
-	}
-	lines = append(lines, info.PluginLines...) // 插件贡献的状态行，与 Web UI 同源同序
-	p.send(ctx, msg.userID, strings.Join(lines, "\n"), msg.contextToken)
+	// 措辞三处输出共用一份实现，见 internal/statustext
+	p.send(ctx, msg.userID, statustext.Render(info, sid), msg.contextToken)
 }
 
 func (p *Plugin) cmdCompact(ctx context.Context, msg inbound) {
@@ -276,53 +255,4 @@ func toolsLine(tools []string) string {
 		quoted = append(quoted, "`"+t+"`")
 	}
 	return "🔧 调用工具 " + strings.Join(quoted, "、")
-}
-
-// statusHeader 是状态输出的首行：带上程序版本号，与 Web UI 的 /status 一致。
-func statusHeader(version string) string {
-	if version == "" {
-		return "📊 Agent 状态"
-	}
-	return "📊 Wen Agent " + version
-}
-
-// comma 加千位分隔符，与 Web UI 的 toLocaleString 显示一致。
-// cacheLine 给出提示词缓存那一行，本轮没用上缓存时返回空串。
-// 措辞与 Web UI、另一个 IM 插件保持一致（三处输出同源同序，见 CLAUDE.md）。
-func cacheLine(info plugin.StatusInfo) string {
-	if info.CachedTokens <= 0 && info.CacheWriteTokens <= 0 {
-		return ""
-	}
-	s := "提示词缓存：命中 " + comma(info.CachedTokens)
-	if info.CacheWriteTokens > 0 {
-		s += " / 写入 " + comma(info.CacheWriteTokens)
-	}
-	s += " tokens"
-	if info.PromptTokens > 0 {
-		s += "（占本轮输入 " + pct(info.CachedTokens, info.PromptTokens) + "%）"
-	}
-	return s
-}
-
-func comma(n int) string {
-	s := fmt.Sprintf("%d", n)
-	neg := strings.HasPrefix(s, "-")
-	if neg {
-		s = s[1:]
-	}
-	for i := len(s) - 3; i > 0; i -= 3 {
-		s = s[:i] + "," + s[i:]
-	}
-	if neg {
-		s = "-" + s
-	}
-	return s
-}
-
-// pct 与 Web UI 相同的两位小数百分比。
-func pct(used, total int) string {
-	if total <= 0 {
-		return "0.00"
-	}
-	return fmt.Sprintf("%.2f", float64(used)/float64(total)*100)
 }

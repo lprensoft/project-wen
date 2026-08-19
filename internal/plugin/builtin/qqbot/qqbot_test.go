@@ -383,11 +383,11 @@ func TestCommands(t *testing.T) {
 		t.Fatal("/new 后应换绑新会话")
 	}
 
+	// 措辞本身由 internal/statustext 的测试盯着，这里只验证命令确实接到了那份渲染
 	f.pushC2C("user1", "/status")
 	if m := f.expectSend(t); !strings.Contains(m.content, "📊 Agent 状态") ||
-		!strings.Contains(m.content, "testprov / m1") ||
-		!strings.Contains(m.content, "上下文窗口：131,072 tokens") ||
-		!strings.Contains(m.content, "实测 1,234 tokens（占用 0.94%）") {
+		!strings.Contains(m.content, "模型：testprov / m1 · 思考深度 off") ||
+		!strings.Contains(m.content, "1,234 / 131,072 tokens（占用 0.9%）") {
 		t.Fatalf("/status 应与 Web UI 同格式: %s", m.content)
 	}
 
@@ -544,21 +544,6 @@ func TestReplyLimiter(t *testing.T) {
 	l.entries["m2"] = &replyEntry{count: 1, first: time.Now().Add(-2 * time.Hour)}
 	if ok, _ := l.next("m2"); ok {
 		t.Fatal("超过 60 分钟应降级")
-	}
-}
-
-func TestCommaPct(t *testing.T) {
-	if got := comma(131072); got != "131,072" {
-		t.Fatalf("comma = %s", got)
-	}
-	if got := comma(999); got != "999" {
-		t.Fatalf("comma = %s", got)
-	}
-	if got := pct(1234, 131072); got != "0.94" {
-		t.Fatalf("pct = %s", got)
-	}
-	if got := pct(1, 0); got != "0.00" {
-		t.Fatalf("pct 除零 = %s", got)
 	}
 }
 

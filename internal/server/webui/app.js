@@ -965,41 +965,37 @@ async function runStatus() {
   try {
     const q = currentSession ? "?session_id=" + encodeURIComponent(currentSession) : "";
     const st = await fetch("/api/status" + q).then((r) => r.json());
+    // 措辞与 internal/statustext 的 Render 一致，两边改动要一起动
+    const pct = (used) => ((used / st.context_length) * 100).toFixed(1);
     const lines = [
       st.version ? "📊 Wen Agent " + st.version : "📊 Agent 状态",
-      "模型：" + st.provider + " / " + st.model,
-      "思考深度：" + st.thinking,
-      "上下文窗口：" + st.context_length.toLocaleString() + " tokens",
+      "模型：" + st.provider + " / " + st.model + " · 思考深度 " + st.thinking,
     ];
     if (st.session) {
-      if (st.session.measured_tokens != null) {
-        const pct = ((st.session.measured_tokens / st.context_length) * 100).toFixed(2);
-        lines.push(
-          "当前会话：" + st.session.message_count + " 条消息，实测 " +
-          st.session.measured_tokens.toLocaleString() + " tokens（占用 " + pct + "%）"
-        );
-      } else {
-        const pct = ((st.session.est_tokens / st.context_length) * 100).toFixed(2);
-        lines.push(
-          "当前会话：" + st.session.message_count + " 条消息，约 " +
-          st.session.est_tokens.toLocaleString() + " tokens（估算，占用 " + pct + "%）"
-        );
-      }
+      // 实测值不加标注，估算值前缀「约」——区别只在这一个字上
+      const measured = st.session.measured_tokens != null;
+      const used = measured ? st.session.measured_tokens : st.session.est_tokens;
+      lines.push(
+        "当前会话：" + st.session.message_count + " 条消息，" + (measured ? "" : "约 ") +
+        used.toLocaleString() + " / " + st.context_length.toLocaleString() +
+        " tokens（占用 " + pct(used) + "%）"
+      );
       // 提示词缓存：字段只在本轮真的命中或写入过时才下发
       if (st.session.cached_tokens != null) {
-        let s = "提示词缓存：命中 " + st.session.cached_tokens.toLocaleString();
-        if (st.session.cache_write_tokens) s += " / 写入 " + st.session.cache_write_tokens.toLocaleString();
-        s += " tokens";
+        let cache = "提示词缓存：命中 " + st.session.cached_tokens.toLocaleString();
+        if (st.session.cache_write_tokens) cache += " / 写入 " + st.session.cache_write_tokens.toLocaleString();
+        cache += " tokens";
         if (st.session.prompt_tokens) {
-          s += "（占本轮输入 " +
-            ((st.session.cached_tokens / st.session.prompt_tokens) * 100).toFixed(2) + "%）";
+          // measured_tokens 含输出，不能拿来当分母
+          cache += "（占本轮输入 " +
+            ((st.session.cached_tokens / st.session.prompt_tokens) * 100).toFixed(1) + "%）";
         }
-        lines.push(s);
+        lines.push(cache);
       }
       // 会话 ID 便于用 read_session / read_archive 定位这次对话
       lines.push("会话 ID：" + (st.session.id || currentSession));
     } else {
-      lines.push("当前会话：无");
+      lines.push("当前会话：无（上下文窗口 " + st.context_length.toLocaleString() + " tokens）");
     }
     // 插件贡献的状态行（如心跳节奏），没有插件可报时字段不存在
     if (Array.isArray(st.plugin_lines)) lines.push(...st.plugin_lines);
