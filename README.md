@@ -484,7 +484,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 - `Conflicting`（`Conflicts()`）——声明能力相抵的插件。只告警不阻止。
 - `Stoppable`（`Stop()`）——停掉自己起的后台活动。禁用、以新配置重新 `Init`、进程退出三处会调用；只做取消与有界等待，不得等整轮对话跑完。起 goroutine 的插件必须实现它，并保证 `Init` 可重入。
 - `TurnObserver`（`OnTurnEnd()`）——观察每轮对话的结束。在收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
-- `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用、Manager 持锁时调用）。
+- `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用）。
 - `Actionable`（`Actions()` / `StartAction()` / `ActionState()`）——声明可在设置页触发的流程（如扫码绑定），状态含说明文字与一张可选 PNG。`StartAction` 应立即返回，长流程放后台并自带超时。
 
 `InitContext` 提供这些运行环境：`Workdir`（工作目录）、`StateDir`（该插件专属的持久化目录 `<配置目录>/plugins/<插件名>/`，可能不存在需自行创建）、`SessionDir`（会话目录，只读用）、`Complete`（用当前模型做一次一问一答的辅助调用，不带工具、不写会话）、`RunTurn` / `NewSession` / `Compact`（以插件身份跑一轮完整对话、新建会话、压缩历史）、`Status`（模型配置与会话用量快照）、`Notice`（往会话里留一行只给人看的说明）。除 `Workdir` 外为空/nil 均表示当前不可用，插件应据此拒绝启用或降级，不要退化到写进程当前目录。`Complete` 与 `RunTurn` 每次调用都产生真实的模型开销，只放在低频路径上。
