@@ -35,6 +35,7 @@ import (
 	"wen/internal/plugin/builtin/scene"
 	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
+	"wen/internal/plugin/builtin/skills"
 	"wen/internal/plugin/builtin/weather"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/plugin/builtin/wechatbot"
@@ -278,6 +279,7 @@ var needsSetupPlugins = map[string]bool{
 	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
 
 	"heartbeat":  true,
+	"skills":     true, // 技能目录是空的，开着只会多两个用不上的工具
 	"qq_bot":     true, // 不填 AppID/AppSecret 没法工作
 	"wechat_bot": true, // 不扫码绑定没法工作
 }
@@ -304,6 +306,10 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// adjust_mood 与 record_touch 都被调用过，save_memory 一次也没有。
 		// 顺带的可见后果：设置页上「角色演绎」这一节因此排到了「记忆与检索」之前。
 		memory.New(), sessionsearch.New(),
+		// skills 同理排在角色演绎那组之后：它注入的「遇到相符的任务先读手册」也是一条
+		// 能力判据，落在 [角色设定 · 最高优先级] 之前会被那句「以下设定优先于其它一般性
+		// 指令」一并压过去，成为可读可不读的建议。
+		skills.New(),
 		heartbeat.New(), scheduler.New(), qqbot.New(), wechatbot.New(),
 	}
 	for _, p := range builtins {
