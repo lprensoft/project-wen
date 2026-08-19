@@ -2,8 +2,10 @@
 //
 // 心跳轮次带上系统提示词与全部启用插件的提示词（RunTurn 的天然组装），输出直接落进
 // 目标会话。心跳自身不算「活跃」：落点判定只看真人交互的轮次，否则心跳会不断自我续命。
-// 动态心跳开启时，每轮真人对话结束后由辅助模型判定聊天的热度来加快或放缓节奏；
-// 无人聊天时由内置的衰减定时器每 15 分钟逐步放缓，直到最慢间隔。
+// 动态心跳开启时，节奏由模型自己定：它在对话里用 set_heartbeat_interval 说下次隔多久
+// 再开口——该等还是该催，模型在上下文里看得比任何外部判定都清楚。无人聊天时另有一个
+// 内置的衰减定时器每 15 分钟把间隔放缓一档，直到最慢间隔：那时没有新的对话可判断，
+// 机械退避就够了，为此再打一次模型是白花钱。
 package heartbeat
 
 import (
@@ -28,7 +30,8 @@ const (
 // defaultPrompt 是心跳提示词的默认值，用户可在设置页改成任何内容。
 const defaultPrompt = `【心跳】这是一次定时唤醒，当前没有新的用户消息。请回顾本会话的进展：
 - 若有未完成的任务、值得跟进的事项或需要主动提醒用户的内容，直接说给用户听；
-- 若确实无事可说，用一句简短的话表明你还在即可，不要编造进展。`
+- 若确实无事可说，用一句简短的话表明你还在即可，不要编造进展。
+若你判断下次该早些或晚些再开口，用 set_heartbeat_interval 定下时间。`
 
 // beatTimeout 是单次心跳轮次的时长上限。
 const beatTimeout = 10 * time.Minute
@@ -52,7 +55,6 @@ type Plugin struct {
 	stateDir   string
 	runTurn    plugin.RunTurnFunc
 	newSession plugin.NewSessionFunc
-	complete   plugin.CompleteFunc
 	sessions   plugin.SessionQuery // 只读：挑选最近活跃的会话
 
 	// 运行状态
@@ -60,7 +62,6 @@ type Plugin struct {
 	adjusted   bool          // cur 是动态判定调整出来的，而非基础间隔的副本
 	lastActive time.Time     // 最近一次真人交互轮次的时间
 	lastBeat   time.Time
-	adjusting  bool // 有一次动态判定在途，避免堆积
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -75,12 +76,15 @@ func (p *Plugin) Name() string { return "heartbeat" }
 func (p *Plugin) Category() string { return plugin.CategoryBackground }
 
 func (p *Plugin) Description() string {
-	return "定时唤醒模型在最近活跃的会话上执行心跳提示词，节奏可随聊天热度动态调整"
+	return "定时唤醒模型在最近活跃的会话上执行心跳提示词，节奏可由模型自己按对话情况设定"
 }
 
 func (p *Plugin) SystemPrompt() string { return "" }
 
-func (p *Plugin) Tools() []plugin.Tool { return nil }
+// Tools 一律返回工具，不按「动态心跳」开关增减：Tools 在插件注册时就会被调用
+// （那时还没 Init），按运行期状态增减会让工具名的冲突检查看到一张空表。
+// 关掉动态心跳时由工具自己拒绝并说明理由。
+func (p *Plugin) Tools() []plugin.Tool { return []plugin.Tool{&setIntervalTool{p: p}} }
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
@@ -96,7 +100,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "dynamic", Label: "动态心跳", Type: plugin.FieldBool, Default: true,
-			Description: "根据聊天的激烈程度与回复间隔自动加快或放缓心跳；无人聊天时逐步放缓到最慢间隔",
+			Description: "允许模型在对话中自己定下次主动开口的时间（工具 set_heartbeat_interval），并在无人聊天时逐步放缓到最慢间隔；关闭则固定按基础间隔，模型也改不动",
 		},
 		{
 			Key: "min_minutes", Label: "最快间隔（分钟）", Type: plugin.FieldInt,
@@ -139,13 +143,12 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
-	p.complete = ictx.Complete
 	p.sessions = ictx.Sessions
 
 	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
 	// 「上次是几点」才推得出下一次
 	st := p.loadStateLocked()
-	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.clamp)
+	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.normalize)
 	p.lastActive = p.probeLastActiveLocked()
 	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, time.Now())
 
@@ -194,11 +197,11 @@ type state struct {
 // 只有「开着动态心跳」且「确实调整过」时才沿用持久化值——那才是需要跨重启保住的
 // 东西。关掉动态心跳、或者根本没调整过，一律跟随基础间隔：此时没有任何节奏可保，
 // 沿用旧值只会让用户改了基础间隔却看不到变化。
-func (st state) resolve(base time.Duration, dynamic bool, clamp func(time.Duration) time.Duration) (time.Duration, bool) {
+func (st state) resolve(base time.Duration, dynamic bool, normalize func(time.Duration) time.Duration) (time.Duration, bool) {
 	if !dynamic || !st.Adjusted || st.IntervalSeconds <= 0 {
 		return base, false
 	}
-	return clamp(time.Duration(st.IntervalSeconds)*time.Second), true
+	return normalize(time.Duration(st.IntervalSeconds) * time.Second), true
 }
 
 // startupGrace 是重启后补心跳的宽限期。
@@ -263,7 +266,18 @@ func persistState(dir string, st state) {
 	_ = os.WriteFile(filepath.Join(dir, "state.json"), raw, 0o644)
 }
 
-func (p *Plugin) clamp(iv time.Duration) time.Duration {
+// normalize 把一个算出来的间隔规整成像样的心跳节奏：先取整到分钟，再限幅到
+// 配置的最快与最慢之间。所有对 p.cur 的写入都必须经过它。
+//
+// 取整不是美观问题。衰减每次乘 1.5，而 Duration 是纳秒精度的整数，于是
+// 5m → 7m30s → 11m15s → 16m52.5s → 37m58.125s，每衰减一次多一位精度，最后落到
+// 一个谁也没配过、也读不出意义的数上。三个间隔配置项的单位都是分钟、最小 1 分钟，
+// 亚分钟的精度用户根本表达不出来，保留它只是把浮点噪声当成了信息。加快那一路的
+// 对折同理。取整同时让状态文件里的旧值（按秒存）在加载时一并规整。
+//
+// 顺序是先取整后限幅：反过来的话取整可能把值推到边界之外。
+func (p *Plugin) normalize(iv time.Duration) time.Duration {
+	iv = iv.Round(time.Minute)
 	if iv < p.minIv {
 		return p.minIv
 	}
