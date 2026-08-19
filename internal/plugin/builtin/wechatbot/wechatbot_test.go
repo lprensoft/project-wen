@@ -175,7 +175,7 @@ func testICtx(t *testing.T, store *session.Store, sessDir string, runTurn plugin
 	t.Helper()
 	return plugin.InitContext{
 		StateDir:   stateDir,
-		SessionDir: sessDir,
+		Sessions:   store,
 		RunTurn:    runTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 		Status: func(sessionID string) (plugin.StatusInfo, error) {

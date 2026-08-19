@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"wen/internal/plugin"
-	"wen/internal/session"
 )
 
 const (
@@ -67,7 +66,7 @@ type Plugin struct {
 	newSession plugin.NewSessionFunc
 	compact    plugin.CompactFunc
 	status     plugin.StatusFunc
-	sessions   *session.Store // 只读：校验绑定的会话是否仍存在
+	sessions   plugin.SessionQuery // 只读：校验绑定的会话是否仍存在
 
 	// 运行组件
 	dedup   *deduper
@@ -155,9 +154,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.RunTurn == nil || ictx.NewSession == nil {
 		return fmt.Errorf("当前环境不支持插件发起对话轮次")
 	}
-	sessions, err := session.NewStore(ictx.SessionDir)
-	if err != nil {
-		return fmt.Errorf("打开会话目录失败: %w", err)
+	if ictx.Sessions == nil {
+		return fmt.Errorf("当前环境不支持会话查询")
 	}
 	binding, err := loadBinding(ictx.StateDir)
 	if err != nil {
@@ -194,7 +192,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.newSession = ictx.NewSession
 	p.compact = ictx.Compact
 	p.status = ictx.Status
-	p.sessions = sessions
+	p.sessions = ictx.Sessions
 	p.dedup = newDeduper()
 	p.binding = binding
 	p.tokens = tokens

@@ -25,7 +25,7 @@
 给核心加东西时守住一条界线：加进核心的必须是**通用机制**而非具体功能。已有十六处按此标准放行：
 
 1. `InitContext.StateDir` —— 插件专属持久化目录；
-2. `InitContext.SessionDir` —— 会话目录，只读用；
+2. `InitContext.Sessions` —— 会话的只读窄查询（最近活跃的会话、某会话是否还在）；`InitContext.SessionDir` —— 会话目录，只给要读会话**正文**的插件；
 3. `InitContext.Complete` —— 辅助模型调用；
 4. `CompactObserver` —— 压缩前通知；
 5. **可见域**（`Scope` / `ScopeDecider` / `TurnPrompter`，见下节）；
@@ -50,7 +50,9 @@
 
 ## 插件持久化与生命周期约定
 
-需要落盘的插件用 `InitContext.StateDir` = `<配置目录>/plugins/<插件名>/`（由 `Manager.initCtxFor` 从 `statePath` 推导，目录可能不存在需自行创建）。该字段为空表示没有可用的持久化位置，插件应在 `Init` 中返回错误拒绝启用，**不要**退化到写进程当前目录。`plugins/` 已在 `.gitignore` 中。要读会话数据用 `SessionDir`（只读；写入一律走 `StateDir`）。
+需要落盘的插件用 `InitContext.StateDir` = `<配置目录>/plugins/<插件名>/`（由 `Manager.initCtxFor` 从 `statePath` 推导，目录可能不存在需自行创建）。该字段为空表示没有可用的持久化位置，插件应在 `Init` 中返回错误拒绝启用，**不要**退化到写进程当前目录。`plugins/` 已在 `.gitignore` 中。要读会话数据分两档，**按需要的最窄那一档取**：只想知道「该落在哪个会话上」或「记下的会话还在不在」，用 `InitContext.Sessions`（`SessionQuery`：`LastActive` / `LastInteraction` / `Exists`）；真要读会话**正文**（检索、归档）才用 `SessionDir`。目录是个读写路径，为回答一个布尔值把全部对话的读写权限交出去不划算——心跳、定时任务与两个 IM 插件从前都是这么拿的。写入一律走 `StateDir`。
+
+「最近活跃的会话」的判定规则（按 `LastActiveAt` 排序，旧会话缺该字段时回落 `CreatedAt`）归核心，不要在插件里各写一份——心跳与定时任务曾经就是两份逐行相同的复制品。注意 `LastActive` 与 `LastInteraction` 问的不是同一件事：前者挑会话，后者只答「上一次有人来过是什么时候」，把刚创建的空会话当成「有人来过」会让空闲衰减永不触发。
 
 `InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。
 

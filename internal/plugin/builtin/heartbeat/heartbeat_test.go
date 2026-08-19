@@ -13,6 +13,16 @@ import (
 	"wen/internal/session"
 )
 
+// mustStore 打开一个会话存储，供直接构造 InitContext 的用例使用。
+func mustStore(t *testing.T, dir string) *session.Store {
+	t.Helper()
+	s, err := session.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 func newInited(t *testing.T, runTurn plugin.RunTurnFunc, cfg map[string]any) (*Plugin, *session.Store) {
 	t.Helper()
 	sessDir := t.TempDir()
@@ -23,7 +33,7 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc, cfg map[string]any) (*P
 	p := New()
 	ictx := plugin.InitContext{
 		StateDir:   t.TempDir(),
-		SessionDir: sessDir,
+		Sessions:   store,
 		RunTurn:    runTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 	}
@@ -45,7 +55,7 @@ func noTurn(context.Context, string, string) (string, error) { return "", nil }
 // 间隔配置必须满足 最快 ≤ 基础 ≤ 最慢。
 func TestInitValidatesIntervals(t *testing.T) {
 	p := New()
-	err := p.Init(plugin.InitContext{StateDir: t.TempDir(), SessionDir: t.TempDir(), RunTurn: noTurn},
+	err := p.Init(plugin.InitContext{StateDir: t.TempDir(), Sessions: mustStore(t, t.TempDir()), RunTurn: noTurn},
 		map[string]any{"interval_minutes": 3, "min_minutes": 5, "max_minutes": 120})
 	if err == nil {
 		t.Fatal("基础间隔小于最快间隔应报错")
@@ -56,7 +66,7 @@ func TestInitValidatesIntervals(t *testing.T) {
 func TestInitReentrant(t *testing.T) {
 	p, store := newInited(t, noTurn, nil)
 	ictx := plugin.InitContext{
-		StateDir: t.TempDir(), SessionDir: t.TempDir(), RunTurn: noTurn,
+		StateDir: t.TempDir(), Sessions: mustStore(t, t.TempDir()), RunTurn: noTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 	}
 	if err := p.Init(ictx, map[string]any{"interval_minutes": 10}); err != nil {
@@ -319,7 +329,7 @@ func TestResetClockNeverRewinds(t *testing.T) {
 func TestIntervalPersistence(t *testing.T) {
 	stateDir := t.TempDir()
 	sessDir := t.TempDir()
-	ictx := plugin.InitContext{StateDir: stateDir, SessionDir: sessDir, RunTurn: noTurn}
+	ictx := plugin.InitContext{StateDir: stateDir, Sessions: mustStore(t, sessDir), RunTurn: noTurn}
 
 	p := New()
 	if err := p.Init(ictx, nil); err != nil {
@@ -390,7 +400,7 @@ func TestBeatSendsGap(t *testing.T) {
 func TestLastBeatSurvivesRestart(t *testing.T) {
 	stateDir := t.TempDir()
 	sessDir := t.TempDir()
-	ictx := plugin.InitContext{StateDir: stateDir, SessionDir: sessDir, RunTurn: noTurn}
+	ictx := plugin.InitContext{StateDir: stateDir, Sessions: mustStore(t, sessDir), RunTurn: noTurn}
 
 	p := New()
 	if err := p.Init(ictx, map[string]any{"interval_minutes": 60, "dynamic": false}); err != nil {

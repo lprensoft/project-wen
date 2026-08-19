@@ -85,38 +85,20 @@ func (p *Plugin) beat(ctx context.Context) {
 	}
 }
 
-// pickSession 返回最近活跃的会话：LastActiveAt 最大者；旧会话没有该字段回落 CreatedAt。
-// 一个会话都没有时新建一个。
-//
-// 第二个返回值是该会话最近一次**真人对话**的时间，零值表示未知。这里只认
-// LastActiveAt，不拿 CreatedAt 充数：拿不到就说不知道，总好过拿“会话创建时间”
-// 当成“上次聊天时间告诉模型”。
+// pickSession 返回最近活跃的会话，一个都没有时新建一个。
+// 挑选规则与第二个返回值的含义见 SessionQuery.LastActive——那条规则同时被
+// 定时任务插件用着，放在核心里只写一遍。
 func (p *Plugin) pickSession() (string, time.Time, error) {
 	p.mu.Lock()
 	sessions, newSession := p.sessions, p.newSession
 	p.mu.Unlock()
 
-	metas, err := sessions.List()
+	id, activeAt, err := sessions.LastActive()
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	bestID := ""
-	var bestAt, bestActive time.Time
-	for _, m := range metas {
-		at := m.CreatedAt
-		if m.LastActiveAt != nil {
-			at = *m.LastActiveAt
-		}
-		if bestID == "" || at.After(bestAt) {
-			bestID, bestAt = m.ID, at
-			bestActive = time.Time{}
-			if m.LastActiveAt != nil {
-				bestActive = *m.LastActiveAt
-			}
-		}
-	}
-	if bestID != "" {
-		return bestID, bestActive, nil
+	if id != "" {
+		return id, activeAt, nil
 	}
 	if newSession == nil {
 		return "", time.Time{}, errors.New("没有会话且当前环境不支持新建")

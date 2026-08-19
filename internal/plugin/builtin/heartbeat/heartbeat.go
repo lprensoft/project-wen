@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"wen/internal/plugin"
-	"wen/internal/session"
 )
 
 // 配置默认值。
@@ -54,7 +53,7 @@ type Plugin struct {
 	runTurn    plugin.RunTurnFunc
 	newSession plugin.NewSessionFunc
 	complete   plugin.CompleteFunc
-	sessions   *session.Store // 只读：用于挑选最近活跃的会话
+	sessions   plugin.SessionQuery // 只读：挑选最近活跃的会话
 
 	// 运行状态
 	cur        time.Duration // 当前心跳间隔（持久化到 state.json）
@@ -125,9 +124,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.RunTurn == nil {
 		return fmt.Errorf("当前环境不支持插件发起对话轮次")
 	}
-	sessions, err := session.NewStore(ictx.SessionDir)
-	if err != nil {
-		return fmt.Errorf("打开会话目录失败: %w", err)
+	if ictx.Sessions == nil {
+		return fmt.Errorf("当前环境不支持会话查询")
 	}
 
 	p.Stop() // 重入：先停上一轮循环，避免两套定时器并行
@@ -141,7 +139,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
 	p.complete = ictx.Complete
-	p.sessions = sessions
+	p.sessions = ictx.Sessions
 
 	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
 	// 「上次是几点」才推得出下一次
@@ -267,15 +265,9 @@ func (p *Plugin) clamp(iv time.Duration) time.Duration {
 
 // probeLastActiveLocked 从会话元数据推最近一次真人交互时间，进程重启后衰减判定不失忆。
 func (p *Plugin) probeLastActiveLocked() time.Time {
-	var last time.Time
-	metas, err := p.sessions.List()
+	last, err := p.sessions.LastInteraction()
 	if err != nil {
-		return last
-	}
-	for _, m := range metas {
-		if m.LastActiveAt != nil && m.LastActiveAt.After(last) {
-			last = *m.LastActiveAt
-		}
+		return time.Time{}
 	}
 	return last
 }

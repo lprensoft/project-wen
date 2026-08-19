@@ -23,7 +23,7 @@ func newInited(t *testing.T, runTurn plugin.RunTurnFunc) (*Plugin, *session.Stor
 	p := New()
 	ictx := plugin.InitContext{
 		StateDir:   t.TempDir(),
-		SessionDir: sessDir,
+		Sessions:   store,
 		RunTurn:    runTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 	}
@@ -141,7 +141,7 @@ func TestPersistence(t *testing.T) {
 	sessDir, stateDir := t.TempDir(), t.TempDir()
 	store, _ := session.NewStore(sessDir)
 	ictx := plugin.InitContext{
-		StateDir: stateDir, SessionDir: sessDir, RunTurn: noTurn,
+		StateDir: stateDir, Sessions: store, RunTurn: noTurn,
 		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
 	}
 	p := New()

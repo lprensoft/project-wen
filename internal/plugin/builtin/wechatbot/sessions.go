@@ -72,7 +72,7 @@ func (p *Plugin) sessionFor(userID string) (string, error) {
 	p.mu.Unlock()
 
 	if sid := binding.get(userID); sid != "" {
-		if _, _, err := sessions.Get(sid); err == nil {
+		if sessions.Exists(sid) {
 			return sid, nil
 		}
 		// 会话文件已被删除，重建
