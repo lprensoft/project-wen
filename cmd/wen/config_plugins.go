@@ -28,7 +28,7 @@ func pluginsSection(b backend) error {
 		if err := run(huh.NewSelect[string]().
 			Title("插件").
 			Description(fit(b.mode())).
-			Height(listHeight(len(opts))).
+			Height(listHeight(len(opts), 2)). // chrome：标题 1 行 + 说明 1 行
 			Options(opts...).
 			Value(&choice)); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {

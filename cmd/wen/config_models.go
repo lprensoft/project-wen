@@ -38,7 +38,7 @@ func modelsSection(b backend) error {
 			Title("模型").
 			Description(fitLines(fmt.Sprintf("当前：%s / %s\n%s",
 				doc.Current.Provider, doc.Current.Model, b.mode()))).
-			Height(listHeight(len(opts))).
+			Height(listHeight(len(opts), 3)). // chrome：标题 1 行 + 说明 2 行
 			Options(opts...).
 			Value(&choice)); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {
