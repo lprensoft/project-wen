@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
 
@@ -335,5 +336,119 @@ func TestInitReenteringIsSafe(t *testing.T) {
 	}
 	if got := decide(t, p, "s1", "回来吧"); got.Write != personaOuter {
 		t.Errorf("新触发词未生效，得到 %q", got.Write)
+	}
+}
+
+// ---- 分通道 ----
+
+// splitCfg 是打开了分通道的配置：表人格在 a_bot，里人格在 b_bot。
+func splitCfg() map[string]any {
+	cfg := defaultCfg()
+	cfg["split_channels"] = true
+	cfg["outer_channel"] = "a_bot"
+	cfg["inner_channel"] = "b_bot"
+	return cfg
+}
+
+// 每个用例自己收拾包级路由：它是进程级单例，留着会污染后面的用例。
+func clearRouter(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() { imbot.SetRouter(nil) })
+}
+
+func TestChannelOptionsListAllDeclaredChannels(t *testing.T) {
+	imbot.Declare("a_bot", "甲")
+	opts := channelOptions()
+	if len(opts) < 2 || opts[0].Value != "" {
+		t.Fatalf("第一项应是「不指定」，得到 %+v", opts)
+	}
+	var found *plugin.ConfigOption
+	for i := range opts {
+		if opts[i].Value == "a_bot" {
+			found = &opts[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("已声明的通道应出现在候选里：%+v", opts)
+	}
+	// 没启动的通道要标出来，否则选了个连不上的看不出问题
+	if !strings.Contains(found.Label, "未启用") {
+		t.Errorf("未启动的通道应标注出来，得到 %q", found.Label)
+	}
+}
+
+// 候选是「已声明」而非「已启用」，所以关掉一条通道不会让这里的配置变得非法。
+func TestConfigWithADisabledChannelStillValidates(t *testing.T) {
+	imbot.Declare("a_bot", "甲")
+	imbot.Declare("b_bot", "乙")
+	if _, err := plugin.NormalizeConfig(New().ConfigFields(), splitCfg()); err != nil {
+		t.Fatalf("选了未启动的通道也应能保存配置: %v", err)
+	}
+}
+
+func TestRouteFollowsPersona(t *testing.T) {
+	clearRouter(t)
+	p := newTestPlugin(t, splitCfg())
+
+	if got := p.route("s1"); got != "a_bot" {
+		t.Errorf("默认表人格应发往 a_bot，得到 %q", got)
+	}
+	// 说出暗号的那一轮就该转投：裁决在轮次开头已经写下新人格
+	decide(t, p, "s1", "只有我们两个人的时候")
+	if got := p.route("s1"); got != "b_bot" {
+		t.Errorf("切到里人格后应发往 b_bot，得到 %q", got)
+	}
+	decide(t, p, "s1", "好了")
+	if got := p.route("s1"); got != "a_bot" {
+		t.Errorf("切回表人格后应发往 a_bot，得到 %q", got)
+	}
+	// 另一个会话各算各的
+	if got := p.route("s2"); got != "a_bot" {
+		t.Errorf("新会话继承上一次的人格（表），应发往 a_bot，得到 %q", got)
+	}
+}
+
+func TestRouterInstalledOnlyWhenConfigured(t *testing.T) {
+	clearRouter(t)
+	dir := t.TempDir()
+
+	// 开关关着：不装路由
+	newPluginAt(t, dir, defaultCfg())
+	if imbot.Target("s1") != "" {
+		t.Error("未开启分通道时不该安装路由")
+	}
+
+	// 开关开着但一条通道都没选：装了也只会答空串，不如不装
+	cfg := defaultCfg()
+	cfg["split_channels"] = true
+	newPluginAt(t, dir, cfg)
+	if imbot.Target("s1") != "" {
+		t.Error("两个通道都没选时不该安装路由")
+	}
+
+	// 配齐了才装
+	p := newPluginAt(t, dir, splitCfg())
+	if got := imbot.Target("s1"); got != "a_bot" {
+		t.Errorf("应安装路由并答出表人格的通道，得到 %q", got)
+	}
+
+	// 重新 Init 关掉开关：路由要跟着卸掉
+	if err := p.Init(plugin.InitContext{StateDir: dir}, defaultCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if imbot.Target("s1") != "" {
+		t.Error("关掉分通道后应卸掉路由")
+	}
+}
+
+func TestStopClearsRouter(t *testing.T) {
+	clearRouter(t)
+	p := newTestPlugin(t, splitCfg())
+	if imbot.Target("s1") == "" {
+		t.Fatal("前置条件：路由应已安装")
+	}
+	p.Stop()
+	if imbot.Target("s1") != "" {
+		t.Error("插件停止后不该再有通道路由生效")
 	}
 }
