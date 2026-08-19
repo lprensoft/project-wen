@@ -188,9 +188,10 @@ func TestRunAppliesScopeToStorageAndRequest(t *testing.T) {
 	if gotMeta.Title != "公开问" || gotMeta.Tag != "open" {
 		t.Errorf("标题归属不对: title=%q tag=%q", gotMeta.Title, gotMeta.Tag)
 	}
-	// 钩子看到的是未过滤的完整历史——插件需要据此推导自己的状态
-	if len(sp.seen.History) != 2 || sp.seen.Scope.Write != "open" {
-		t.Errorf("TurnEvent 不对: history=%d scope=%+v", len(sp.seen.History), sp.seen.Scope)
+	// 钩子拿到的是会话 id、本轮输入与已裁决的可见域——不含会话历史，
+	// 未过滤的全量历史广播出去正好与可见域机制的目的相抵
+	if sp.seen.SessionID != meta.ID || sp.seen.UserInput != "公开问" || sp.seen.Scope.Write != "open" {
+		t.Errorf("TurnEvent 不对: %+v", sp.seen)
 	}
 }
 
