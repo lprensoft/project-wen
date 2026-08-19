@@ -11,7 +11,14 @@ import (
 	"wen/internal/plugin"
 )
 
-const defaultMaxInjectBytes = 2 * 1024
+const (
+	defaultMaxInjectBytes = 2 * 1024
+
+	// 即时身体状态的默认参数：唤起平复得快（余韵以小时计），疲劳消退得慢（要歇过来）。
+	defaultArousalDecayPerHour = 30
+	defaultFatigueDecayPerHour = 10
+	defaultStateMaxDelta       = 30
+)
 
 // Plugin 是 body_sense 系统插件。
 type Plugin struct {
@@ -21,10 +28,14 @@ type Plugin struct {
 	pace           string
 	base           string // 基准记录库目录（= 共享域）
 	maxInjectBytes int
+	arousalDecay   int
+	fatigueDecay   int
+	stateMaxDelta  int
 
 	// 按可见域分出的库，惰性创建。单独一把锁：这张表的生命周期与配置无关。
-	storesMu sync.Mutex
-	stores   map[string]*Store
+	storesMu    sync.Mutex
+	stores      map[string]*Store
+	stateStores map[string]*StateStore
 
 	// 设置页操作的状态。StartAction 与 ActionState 会被 HTTP 并发调用，自带一把锁。
 	actMu    sync.Mutex
@@ -32,7 +43,12 @@ type Plugin struct {
 }
 
 func New() *Plugin {
-	return &Plugin{pace: paceNormal, maxInjectBytes: defaultMaxInjectBytes}
+	return &Plugin{
+		pace: paceNormal, maxInjectBytes: defaultMaxInjectBytes,
+		arousalDecay:  defaultArousalDecayPerHour,
+		fatigueDecay:  defaultFatigueDecayPerHour,
+		stateMaxDelta: defaultStateMaxDelta,
+	}
 }
 
 func (p *Plugin) Name() string { return "body_sense" }
@@ -40,7 +56,7 @@ func (p *Plugin) Name() string { return "body_sense" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
-	return "身体感知：记录角色各部位被触碰的累计次数，按熟悉阶段给出与次数相称的反应准则"
+	return "身体感知：记录各部位被触碰的累计次数并按熟悉阶段给出反应准则，另维护随时间回落的唤起与疲劳"
 }
 
 // Requires 硬依赖 roleplay：没有角色，身体就没有归属，接触记录也没有作用对象。
@@ -79,6 +95,28 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			},
 		},
 		{
+			Key: "arousal_decay_per_hour", Label: "唤起每小时回落点数", Type: plugin.FieldInt,
+			Description: "唤起（0-100）每过一小时向 0 回落多少点，回落的过程就是余韵。" +
+				"填 0 表示不回落，唤起会一直停在上次的值。",
+			Default: defaultArousalDecayPerHour,
+			Min:     plugin.IntPtr(0),
+			Max:     plugin.IntPtr(100),
+		},
+		{
+			Key: "fatigue_decay_per_hour", Label: "疲劳每小时回落点数", Type: plugin.FieldInt,
+			Description: "疲劳（0-100）每过一小时向 0 回落多少点——歇着自然恢复。填 0 表示不回落。",
+			Default:     defaultFatigueDecayPerHour,
+			Min:         plugin.IntPtr(0),
+			Max:         plugin.IntPtr(100),
+		},
+		{
+			Key: "state_max_delta_per_call", Label: "身体状态单次调整上限", Type: plugin.FieldInt,
+			Description: "一次调用最多把唤起或疲劳改变多少点。超出的部分按上限收，并告知模型。",
+			Default:     defaultStateMaxDelta,
+			Min:         plugin.IntPtr(1),
+			Max:         plugin.IntPtr(stateMax),
+		},
+		{
 			Key: "max_inject_bytes", Label: "接触记录注入字节上限", Type: plugin.FieldInt,
 			Description: "记录随每轮对话重复发送，因此需要上界。超出时先省略次数只留阶段，再按阶段归并，" +
 				"仍超出则只注明部位数。另注：roleplay 的「【】互动演绎」关闭时本插件基本没有作用对象。",
@@ -109,6 +147,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	p.storesMu.Lock()
 	p.stores = map[string]*Store{}
+	p.stateStores = map[string]*StateStore{}
 	p.storesMu.Unlock()
 
 	p.mu.Lock()
@@ -117,6 +156,9 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.pace = plugin.CfgString(cfg, "familiarity_pace", paceNormal)
 	p.base = filepath.Join(ictx.StateDir, "body")
 	p.maxInjectBytes = plugin.CfgInt(cfg, "max_inject_bytes", defaultMaxInjectBytes)
+	p.arousalDecay = plugin.CfgInt(cfg, "arousal_decay_per_hour", defaultArousalDecayPerHour)
+	p.fatigueDecay = plugin.CfgInt(cfg, "fatigue_decay_per_hour", defaultFatigueDecayPerHour)
+	p.stateMaxDelta = plugin.CfgInt(cfg, "state_max_delta_per_call", defaultStateMaxDelta)
 	return nil
 }
 
@@ -137,7 +179,7 @@ func cfgText(cfg map[string]any, key, def string) string {
 }
 
 func (p *Plugin) Tools() []plugin.Tool {
-	return []plugin.Tool{&recordTool{p: p}, &listTool{p: p}}
+	return []plugin.Tool{&recordTool{p: p}, &listTool{p: p}, &adjustStateTool{p: p}}
 }
 
 // settings 是一次调用期间使用的配置快照。
@@ -146,33 +188,53 @@ type settings struct {
 	pace           string
 	base           string
 	maxInjectBytes int
+	arousalDecay   int
+	fatigueDecay   int
+	stateMaxDelta  int
 }
 
 // snapshot 取一份配置快照：SetConfig 会在运行时重新 Init，而工具可能正在执行。
 func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return settings{parts: p.parts, pace: p.pace, base: p.base, maxInjectBytes: p.maxInjectBytes}
+	return settings{
+		parts: p.parts, pace: p.pace, base: p.base, maxInjectBytes: p.maxInjectBytes,
+		arousalDecay: p.arousalDecay, fatigueDecay: p.fatigueDecay, stateMaxDelta: p.stateMaxDelta,
+	}
 }
 
 // SystemPrompt 注入上报判据与反应准则，均为静态内容。
 // 累计记录改由 TurnPrompt 注入：它取决于本轮的可见域，且要访问磁盘，
 // 而本方法的契约是廉价、无副作用（列表接口会对禁用的插件也调用它）。
 func (p *Plugin) SystemPrompt() string {
-	return guidePrompt + "\n\n" + stageRules
+	return guidePrompt + "\n\n" + stageRules + "\n\n" + stateGuide
 }
 
-// TurnPrompt 注入本轮可读的累计记录。一条记录都没有时不注入：上报判据已在 SystemPrompt 里。
+// TurnPrompt 注入本轮可读的累计记录与即时身体状态。都没有时不注入：
+// 判据已在 SystemPrompt 里。
 func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if s.base == "" {
 		return "", nil
 	}
 	views, _, err := p.visibleViews(ctx)
-	if err != nil || len(views) == 0 {
+	if err != nil {
 		return "", err
 	}
-	return statesHeader + "\n" + renderViews(views, s.maxInjectBytes), nil
+	var parts []string
+	if len(views) > 0 {
+		parts = append(parts, statesHeader+"\n"+renderViews(views, s.maxInjectBytes))
+	}
+	st, ok, err := p.visibleState(ctx)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		if line := renderBodyState(st); line != "" {
+			parts = append(parts, bodyStateHeader+"\n"+line)
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // ---------- 按可见域分库 ----------
@@ -202,6 +264,71 @@ func (p *Plugin) storeFor(tag string) *Store {
 // writeStore 返回本轮该写入的库。
 func (p *Plugin) writeStore(ctx context.Context) *Store {
 	return p.storeFor(plugin.ScopeFrom(ctx).Write)
+}
+
+// stateStoreFor 返回某个可见域的即时身体状态库（惰性创建）。未初始化时返回 nil。
+func (p *Plugin) stateStoreFor(tag string) *StateStore {
+	p.mu.RLock()
+	base := p.base
+	p.mu.RUnlock()
+	if base == "" {
+		return nil
+	}
+
+	p.storesMu.Lock()
+	defer p.storesMu.Unlock()
+	if p.stateStores == nil {
+		p.stateStores = map[string]*StateStore{}
+	}
+	if s, ok := p.stateStores[tag]; ok {
+		return s
+	}
+	s := NewStateStore(plugin.DomainDir(base, tag))
+	p.stateStores[tag] = s
+	return s
+}
+
+// visibleState 合并本轮可读域的即时身体状态：逐字段取最大值。
+//
+// 每个域记下的都是这具身体状态的下界，取最大与接触计数的求和同一个方向——加数
+// 全在可读集内，表人格读不到里域那份。起因取可读记录里最新那条的：起因所在的域
+// 本轮可读，展示它不泄漏。
+func (p *Plugin) visibleState(ctx context.Context) (BodyState, bool, error) {
+	s := p.snapshot()
+	if s.base == "" {
+		return BodyState{}, false, nil
+	}
+	now := time.Now()
+
+	var out BodyState
+	var latest time.Time
+	found := false
+	var errs []string
+	for _, tag := range plugin.ReadDomains(s.base, plugin.ScopeFrom(ctx)) {
+		store := p.stateStoreFor(tag)
+		if store == nil {
+			continue
+		}
+		st, ok, err := store.Current(s.arousalDecay, s.fatigueDecay, now)
+		if err != nil {
+			errs = append(errs, err.Error()) // 单个域读不出来不该让其余域也用不了
+			continue
+		}
+		if !ok {
+			continue
+		}
+		found = true
+		out.Arousal = max(out.Arousal, st.Arousal)
+		out.Fatigue = max(out.Fatigue, st.Fatigue)
+		if st.Reason != "" && st.Updated.After(latest) {
+			latest = st.Updated
+			out.Reason = st.Reason
+		}
+	}
+	if !found && len(errs) > 0 {
+		return BodyState{}, false, fmt.Errorf("读取身体状态失败: %s", strings.Join(errs, "; "))
+	}
+	return out, found, nil
 }
 
 // view 是一个部位在本轮可读范围内的合并状态。

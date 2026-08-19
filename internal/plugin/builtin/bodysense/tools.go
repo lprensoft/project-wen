@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"wen/internal/plugin"
 )
@@ -122,6 +123,73 @@ func (t *recordTool) Execute(ctx context.Context, args json.RawMessage) (string,
 		fmt.Fprintf(&b, "%s ×%d（%s · %s）", st.Part, count, stageOf(count, s.pace), privacyLabel(privacy))
 	}
 	return b.String(), nil
+}
+
+// ---------- adjust_body_state ----------
+
+type adjustStateTool struct{ p *Plugin }
+
+func (t *adjustStateTool) Name() string { return "adjust_body_state" }
+
+func (t *adjustStateTool) Description() string {
+	return "按本轮演绎调整角色此刻的身体状态（唤起与疲劳，各 0-100），并返回调整后的状态。" +
+		"报的是变化量而不是目标值。出现明显改变身体状态的事时先调用它，再据此写这一轮的反应；" +
+		"一轮最多调一次，两项可以同时报。"
+}
+
+func (t *adjustStateTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"arousal_delta": {"type": "integer", "description": "唤起的变化量，正数推高、负数平复。轻微的事几点，剧烈的事几十点；不变可省略"},
+			"fatigue_delta": {"type": "integer", "description": "疲劳的变化量，正数更累、负数恢复。不变可省略"},
+			"reason": {"type": "string", "description": "这次变化的起因，一句话"}
+		},
+		"required": ["reason"]
+	}`)
+}
+
+func (t *adjustStateTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		ArousalDelta int    `json:"arousal_delta"`
+		FatigueDelta int    `json:"fatigue_delta"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("参数格式错误: %w", err)
+	}
+
+	s := t.p.snapshot()
+	// 写入本轮写入域：与接触计数同一套分域规则
+	store := t.p.stateStoreFor(plugin.ScopeFrom(ctx).Write)
+	if store == nil {
+		return "", errNotReady
+	}
+	st, appliedA, appliedF, err := store.Apply(a.ArousalDelta, a.FatigueDelta,
+		s.stateMaxDelta, s.arousalDecay, s.fatigueDecay, a.Reason, time.Now())
+	if err != nil {
+		return "", err
+	}
+
+	// 回显本轮可读域合并后的口径，与 [当前身体状态] 注入一致
+	if merged, ok, err := t.p.visibleState(ctx); err == nil && ok {
+		st.Arousal, st.Fatigue = merged.Arousal, merged.Fatigue
+	}
+	out := fmt.Sprintf("身体状态：唤起 %s（%d，本次 %+d），疲劳 %s（%d，本次 %+d）",
+		arousalBand(st.Arousal), st.Arousal, appliedA,
+		fatigueBand(st.Fatigue), st.Fatigue, appliedF)
+	// 拦截生效时要把规则告诉模型，否则它只会换个更大的数字再试一次
+	var capped []string
+	if appliedA != a.ArousalDelta {
+		capped = append(capped, fmt.Sprintf("唤起原报 %+d", a.ArousalDelta))
+	}
+	if appliedF != a.FatigueDelta {
+		capped = append(capped, fmt.Sprintf("疲劳原报 %+d", a.FatigueDelta))
+	}
+	if len(capped) > 0 {
+		out += fmt.Sprintf("。变化量按单次上限 ±%d 收了（%s）", s.stateMaxDelta, strings.Join(capped, "，"))
+	}
+	return out + "。", nil
 }
 
 // ---------- list_body_state ----------
