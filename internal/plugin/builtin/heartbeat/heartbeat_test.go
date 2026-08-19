@@ -3,9 +3,9 @@ package heartbeat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,78 +187,121 @@ func TestMaybeDecay(t *testing.T) {
 	}
 }
 
-// 动态判定：加快对折、放缓翻倍、限幅、答非所问按保持。
-func TestJudgeAdjust(t *testing.T) {
-	cases := []struct {
-		verdict string
-		want    time.Duration
-	}{
-		{"加快", 15 * time.Minute},
-		{"放缓", 60 * time.Minute},
-		{"保持", 30 * time.Minute},
-		{"我觉得可以聊聊天气", 30 * time.Minute},
-	}
-	for _, c := range cases {
-		p := &Plugin{
-			minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 30 * time.Minute,
-			stateDir: t.TempDir(), wake: make(chan struct{}, 1), adjusting: true,
-		}
-		complete := func(context.Context, string) (string, error) { return c.verdict, nil }
-		p.judge(context.Background(), complete, plugin.TurnEndEvent{UserInput: "在吗", FinalText: "在"}, time.Time{})
-		if p.cur != c.want {
-			t.Fatalf("判定 %q 后 cur = %v，期望 %v", c.verdict, p.cur, c.want)
-		}
-		if p.adjusting {
-			t.Fatal("judge 结束后 adjusting 应复位")
-		}
-	}
-	// 限幅：已在最快间隔时继续加快保持不变
+// setTool 造一个能直接调用的工具与它所属的插件。
+func setTool(t *testing.T, cur time.Duration, dynamic bool) (*Plugin, plugin.Tool) {
+	t.Helper()
 	p := &Plugin{
-		minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 5 * time.Minute,
-		stateDir: t.TempDir(), wake: make(chan struct{}, 1), adjusting: true,
+		dynamic: dynamic, minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: cur,
+		stateDir: t.TempDir(), wake: make(chan struct{}, 1),
 	}
-	complete := func(context.Context, string) (string, error) { return "加快", nil }
-	p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
-	if p.cur != 5*time.Minute {
-		t.Fatalf("已到最快间隔仍被调整: %v", p.cur)
+	return p, p.Tools()[0]
+}
+
+func callSet(t *testing.T, tl plugin.Tool, minutes int, reason string) (string, error) {
+	t.Helper()
+	args, _ := json.Marshal(map[string]any{"minutes": minutes, "reason": reason})
+	return tl.Execute(context.Background(), args)
+}
+
+// 模型自己定节奏：报几分钟就是几分钟，并且倒计时从此刻重算。
+func TestSetIntervalTool(t *testing.T) {
+	p, tl := setTool(t, 30*time.Minute, true)
+	before := time.Now()
+
+	out, err := callSet(t, tl, 90, "她说去忙了")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.cur != 90*time.Minute {
+		t.Fatalf("cur = %v，期望 90m", p.cur)
+	}
+	if !p.adjusted {
+		t.Fatal("模型定过的节奏要标记为 adjusted，否则重启就丢了")
+	}
+	if p.lastBeat.Before(before) {
+		t.Fatal("倒计时应从此刻重算")
+	}
+	if !strings.Contains(out, "1 小时 30 分钟") {
+		t.Errorf("回执应说明实际生效的间隔: %q", out)
+	}
+	select {
+	case <-p.wake:
+	default:
+		t.Fatal("改完间隔要唤醒循环重算下次心跳时刻")
 	}
 }
 
-// judge 返回时状态必须已经落盘。写盘若另起 goroutine，就会脱离插件的生命周期——
+// 超出配置范围时限幅，并且要把规则告诉模型——否则它只会换个数字再试一次。
+func TestSetIntervalToolClamps(t *testing.T) {
+	p, tl := setTool(t, 30*time.Minute, true)
+	out, err := callSet(t, tl, 1, "话题正热")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.cur != 5*time.Minute {
+		t.Fatalf("低于最快间隔应限幅到 5m，得到 %v", p.cur)
+	}
+	if !strings.Contains(out, "1 分钟") || !strings.Contains(out, "收到") {
+		t.Errorf("限幅生效时要说明原报值与范围: %q", out)
+	}
+
+	p2, tl2 := setTool(t, 30*time.Minute, true)
+	if _, err := callSet(t, tl2, 10000, "她要出差一周"); err != nil {
+		t.Fatal(err)
+	}
+	if p2.cur != 120*time.Minute {
+		t.Fatalf("高于最慢间隔应限幅到 120m，得到 %v", p2.cur)
+	}
+}
+
+// 关掉动态心跳时工具要拒绝，并说明为什么——固定节奏就是「固定」的意思。
+func TestSetIntervalToolRefusedWhenStatic(t *testing.T) {
+	p, tl := setTool(t, 30*time.Minute, false)
+	_, err := callSet(t, tl, 10, "话题正热")
+	if err == nil {
+		t.Fatal("固定节奏下应拒绝调整")
+	}
+	if !strings.Contains(err.Error(), "动态心跳") {
+		t.Errorf("拒绝时要指明怎么才能放开: %v", err)
+	}
+	if p.cur != 30*time.Minute {
+		t.Fatalf("拒绝之后不该改动间隔: %v", p.cur)
+	}
+}
+
+func TestSetIntervalToolRejectsBadInput(t *testing.T) {
+	_, tl := setTool(t, 30*time.Minute, true)
+	for _, m := range []int{0, -5} {
+		if _, err := callSet(t, tl, m, "随便"); err == nil {
+			t.Errorf("%d 分钟应被拒绝", m)
+		}
+	}
+	if _, err := tl.Execute(context.Background(), []byte("{")); err == nil {
+		t.Error("坏参数应报错")
+	}
+}
+
+// 工具返回时状态必须已经落盘。写盘若另起 goroutine，就会脱离插件的生命周期——
 // 停掉插件之后才写，甚至在测试的临时目录被清理之后才写（CI 上表现为
 // 「TempDir RemoveAll cleanup: directory not empty」，且只在 Linux 上偶发）。
-func TestJudgeSavesBeforeReturning(t *testing.T) {
-	dir := t.TempDir()
-	p := &Plugin{
-		minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 30 * time.Minute,
-		stateDir: dir, wake: make(chan struct{}, 1), adjusting: true,
+func TestSetIntervalToolSavesBeforeReturning(t *testing.T) {
+	p, tl := setTool(t, 30*time.Minute, true)
+	if _, err := callSet(t, tl, 15, "跟进一下"); err != nil {
+		t.Fatal(err)
 	}
-	complete := func(context.Context, string) (string, error) { return "加快", nil }
-	p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
-
-	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	raw, err := os.ReadFile(filepath.Join(p.stateDir, "state.json"))
 	if err != nil {
-		t.Fatalf("judge 返回时状态还没落盘: %v", err)
+		t.Fatalf("工具返回时状态还没落盘: %v", err)
 	}
-	var s state
-	if err := json.Unmarshal(raw, &s); err != nil {
+	var st state
+	if err := json.Unmarshal(raw, &st); err != nil {
 		t.Fatalf("状态文件解析失败: %v", err)
 	}
-	if s.IntervalSeconds != int(15*time.Minute/time.Second) {
-		t.Errorf("落盘的间隔 = %d 秒，期望 900", s.IntervalSeconds)
+	if st.IntervalSeconds != int(15*time.Minute/time.Second) {
+		t.Errorf("落盘的间隔 = %d 秒，期望 900", st.IntervalSeconds)
 	}
-}
-
-// 判定失败不改节奏。
-func TestJudgeErrorKeepsPace(t *testing.T) {
-	p := &Plugin{
-		minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 30 * time.Minute,
-		stateDir: t.TempDir(), wake: make(chan struct{}, 1), adjusting: true,
-	}
-	complete := func(context.Context, string) (string, error) { return "", errors.New("模型不可用") }
-	p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
-	if p.cur != 30*time.Minute {
-		t.Fatalf("判定失败不该改间隔，得到 %v", p.cur)
+	if !st.Adjusted {
+		t.Error("落盘时应带上 adjusted")
 	}
 }
 
@@ -617,45 +660,5 @@ func TestDecayStaysOnWholeMinutes(t *testing.T) {
 	}
 	if p.cur != p.maxIv {
 		t.Fatalf("衰减最终应封顶在最慢间隔，得到 %v", p.cur)
-	}
-}
-
-// 对折那一路同样不该留下零头。
-func TestJudgeStaysOnWholeMinutes(t *testing.T) {
-	p := &Plugin{
-		minIv: time.Minute, maxIv: 120 * time.Minute, cur: 45 * time.Minute,
-		stateDir: t.TempDir(), wake: make(chan struct{}, 1),
-	}
-	complete := func(context.Context, string) (string, error) { return "加快", nil }
-	for range 8 {
-		p.adjusting = true
-		p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
-		if p.cur%time.Minute != 0 {
-			t.Fatalf("加快出了不足一分钟的零头：%v", p.cur)
-		}
-	}
-}
-
-// 已经顶在边界上时，判定落不到实处：不该标记「调整过」，也不该唤醒循环。
-// 否则在最快间隔上持续聊天，日志里每轮都会多一条「调整为 5m0s」，
-// 而那行字说的调整并没有发生；adjusted 被无端置位还会让基础间隔改不动。
-func TestJudgeAtBoundaryIsANoOp(t *testing.T) {
-	p := &Plugin{
-		minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 5 * time.Minute,
-		stateDir: t.TempDir(), wake: make(chan struct{}, 1), adjusting: true,
-	}
-	complete := func(context.Context, string) (string, error) { return "加快", nil }
-	p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
-
-	if p.cur != 5*time.Minute {
-		t.Fatalf("已到最快间隔仍被调整: %v", p.cur)
-	}
-	if p.adjusted {
-		t.Fatal("没发生实际调整就不该标记 adjusted")
-	}
-	select {
-	case <-p.wake:
-		t.Fatal("没发生实际调整就不该唤醒循环重算")
-	default:
 	}
 }

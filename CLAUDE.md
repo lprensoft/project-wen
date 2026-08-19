@@ -66,7 +66,7 @@
 
 「最近活跃的会话」的判定规则（按 `LastActiveAt` 排序，旧会话缺该字段时回落 `CreatedAt`）归核心，不要在插件里各写一份——心跳与定时任务曾经就是两份逐行相同的复制品。注意 `LastActive` 与 `LastInteraction` 问的不是同一件事：前者挑会话，后者只答「上一次有人来过是什么时候」，把刚创建的空会话当成「有人来过」会让空闲衰减永不触发。
 
-`InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。
+`InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。「低频」是硬要求：心跳曾用它在**每一轮真人对话结束后**判定聊天热度，只为换回「加快/放缓/保持」三个词，于是用户每发一条消息都要多付一次模型调用——那件事后来改成了给模型一个工具（`set_heartbeat_interval`），模型在对话里自己定下次开口的时机，每轮零额外开销且粒度更细。**能让模型顺手用工具表达的，不要另起一次调用去问它。**
 
 `CompactObserver.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，`roleplay` 借此保住最后一处场景演绎，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。历史带可见域标签时按标签分组，每组一次事件，`CompactEvent.Scope` 给出本组的标签。
 
