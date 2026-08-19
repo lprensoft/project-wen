@@ -87,8 +87,8 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 		p.mu.Unlock()
 		return
 	}
-	binding, tokens, pctx := p.binding, p.tokens, p.ctx
-	users := binding.usersFor(ev.SessionID)
+	core, tokens, pctx := p.core, p.tokens, p.ctx
+	users := core.UsersFor(ev.SessionID)
 	if len(users) == 0 {
 		p.mu.Unlock()
 		return

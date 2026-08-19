@@ -1,9 +1,12 @@
 // Package qqbot 通过 QQ 官方开放平台（API v2 + WebSocket 事件网关）提供 C2C 私聊远程会话。
 //
 // 每个 QQ 用户（openid）映射到一个当前会话，远程会话就是普通会话（同一个会话存储），
-// Web UI 刷新即可看到。支持命令：/new /status /compact /help，以及危险操作确认的
-// /apply /deny。协议层参考官方 qqbot-nodejs SDK：被动回复带 msg_id（同一条消息
-// 60 分钟内最多回 4 条，超限降级为主动消息）、入站消息按 id 去重。
+// Web UI 刷新即可看到。会话绑定、命令集（/new /status /compact /help /apply /deny）、
+// 串行处理与确认代理都在公共骨架 wen/internal/imbot 里，这个包只负责 QQ 的协议层：
+// 鉴权、事件网关、被动回复额度、原生 markdown 的降级。
+//
+// 协议层参考官方 qqbot-nodejs SDK：被动回复带 msg_id（同一条消息 60 分钟内最多回
+// 4 条，超限降级为主动消息）、入站消息按 id 去重。
 //
 // 仅响应白名单内的 openid；白名单为空时拒绝所有人（陌生 openid 记录到日志，
 // 方便抄进白名单）。
@@ -16,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
 
@@ -25,7 +29,6 @@ const (
 	defConfirmTimeout = 300 // 秒
 
 	turnTimeout = 10 * time.Minute
-	queueSize   = 8 // 每用户待处理消息队列长度，超出直接回复稍候
 
 	formatMarkdown = "markdown"
 	formatPlain    = "plain"
@@ -36,32 +39,19 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置
-	appID          string
-	appSecret      string
-	apiBase        string
-	whitelist      map[string]bool
-	confirmTimeout time.Duration
-	format         string // formatMarkdown / formatPlain
-	showThinking   bool   // 把每轮思考链推送到 QQ
-	showTools      bool   // 把工具调用（仅名字）推送到 QQ
+	appID     string
+	appSecret string
+	apiBase   string
+	whitelist map[string]bool
+	format    string // formatMarkdown / formatPlain
 
 	// markdown 能力缓存：openid → 关闭到何时（平台返回 40034012 后记入）
 	mdOff map[string]time.Time
 
-	// 能力
-	runTurn    plugin.RunTurnFunc
-	newSession plugin.NewSessionFunc
-	compact    plugin.CompactFunc
-	status     plugin.StatusFunc
-	sessions   plugin.SessionQuery // 只读：校验绑定的会话是否仍存在
-
 	// 运行组件
+	core    *imbot.Core // 通道无关的分发、命令、会话绑定与确认代理
 	tokens  *tokenSource
 	limiter *replyLimiter
-	dedup   *deduper
-	binding *sessionBinding // openid → 会话 ID
-	broker  *confirmBroker
-	workers map[string]chan inbound
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -134,7 +124,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	}
 }
 
-// Init 应用配置并（重）启动网关连接。可重入：先停旧连接与所有 worker。
+// Init 应用配置并（重）启动网关连接。可重入：先停旧连接与骨架。
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	appID := strings.TrimSpace(plugin.CfgString(cfg, "app_id", ""))
 	appSecret := strings.TrimSpace(plugin.CfgString(cfg, "app_secret", ""))
@@ -143,16 +133,6 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录")
-	}
-	if ictx.RunTurn == nil || ictx.NewSession == nil {
-		return fmt.Errorf("当前环境不支持插件发起对话轮次")
-	}
-	if ictx.Sessions == nil {
-		return fmt.Errorf("当前环境不支持会话查询")
-	}
-	binding, err := loadBinding(ictx.StateDir)
-	if err != nil {
-		return fmt.Errorf("加载会话映射失败: %w", err)
 	}
 
 	whitelist := map[string]bool{}
@@ -165,44 +145,91 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.Stop()
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.appID, p.appSecret = appID, appSecret
 	p.apiBase = strings.TrimRight(plugin.CfgString(cfg, "api_base", defAPIBase), "/")
 	p.whitelist = whitelist
-	p.confirmTimeout = time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second
 	p.format = plugin.CfgString(cfg, "format", formatMarkdown)
-	p.showThinking = plugin.CfgBool(cfg, "show_thinking", false)
-	p.showTools = plugin.CfgBool(cfg, "show_tools", false)
 	p.mdOff = map[string]time.Time{}
-	p.runTurn = ictx.RunTurn
-	p.newSession = ictx.NewSession
-	p.compact = ictx.Compact
-	p.status = ictx.Status
-	p.sessions = ictx.Sessions
 	p.tokens = newTokenSource(appID, appSecret)
 	if p.tokenURLOverride != "" {
 		p.tokens.tokenURL = p.tokenURLOverride
 	}
 	p.limiter = newReplyLimiter()
-	p.dedup = newDeduper()
-	p.binding = binding
-	p.broker = newConfirmBroker()
-	p.workers = map[string]chan inbound{}
+	p.mu.Unlock()
 
+	core, err := imbot.New(imbot.Config{
+		PluginName:     p.Name(),
+		Sender:         sender{p: p},
+		StateDir:       ictx.StateDir,
+		ConfirmTimeout: time.Duration(plugin.CfgInt(cfg, "confirm_timeout_sec", defConfirmTimeout)) * time.Second,
+		TurnTimeout:    turnTimeout,
+		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
+		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
+		Allow:          p.allowed,
+		RunTurn:        ictx.RunTurn,
+		NewSession:     ictx.NewSession,
+		Compact:        ictx.Compact,
+		Status:         ictx.Status,
+		Sessions:       ictx.Sessions,
+	})
+	if err != nil {
+		return err
+	}
+
+	p.mu.Lock()
+	p.core = core
 	p.ctx, p.cancel = context.WithCancel(context.Background())
+	ctx := p.ctx
 	p.wg.Add(1)
-	go p.gatewayLoop(p.ctx)
+	p.mu.Unlock()
+
+	core.Start(ctx)
+	go p.gatewayLoop(ctx)
 	return nil
 }
 
-// Stop 断开网关连接并停掉全部 worker。
+// allowed 判定用户是否放行：只看配置白名单，空名单拒绝所有人。
+func (p *Plugin) allowed(openid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return openid != "" && p.whitelist[openid]
+}
+
+// Stop 断开网关连接并停掉骨架的全部 worker。
 func (p *Plugin) Stop() {
 	p.mu.Lock()
-	cancel := p.cancel
+	cancel, core := p.cancel, p.core
 	p.cancel = nil
 	p.mu.Unlock()
+	if core != nil {
+		core.Stop()
+	}
 	if cancel != nil {
 		cancel()
 		p.wg.Wait()
 	}
+}
+
+// handleInbound 把一条 QQ 消息交给公共骨架。
+func (p *Plugin) handleInbound(ctx context.Context, msg inbound) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return
+	}
+	core.Handle(ctx, imbot.Message{
+		UserID:  msg.openid,
+		DedupID: msg.msgID,
+		ReplyTo: msg.msgID,
+		Text:    msg.content,
+	})
+}
+
+// sender 把骨架的发送请求接到 QQ 的协议层。用独立类型而不是给 Plugin 加导出方法：
+// Plugin 的导出方法面向插件契约，Send 不属于那套契约。
+type sender struct{ p *Plugin }
+
+func (s sender) Send(ctx context.Context, userID, text, replyTo string) {
+	s.p.send(ctx, userID, text, replyTo)
 }

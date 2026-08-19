@@ -266,7 +266,7 @@ func TestMarkdownFallback(t *testing.T) {
 // 前台轮次与本插件自己发起的轮次不推。
 func TestBackgroundTurnPush(t *testing.T) {
 	p, f, _ := newInited(t, noopTurn, "user1")
-	if err := p.binding.set("user1", "sess-hb"); err != nil {
+	if err := p.core.Bind("user1", "sess-hb"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -370,7 +370,7 @@ func TestCommands(t *testing.T) {
 
 	f.pushC2C("user1", "先聊一句")
 	f.expectSend(t)
-	sid1 := p.binding.get("user1")
+	sid1 := p.core.BoundSession("user1")
 	if sid1 == "" {
 		t.Fatal("对话后应有会话映射")
 	}
@@ -379,7 +379,7 @@ func TestCommands(t *testing.T) {
 	if m := f.expectSend(t); !strings.Contains(m.content, "已新建会话") {
 		t.Fatalf("/new 回执异常: %s", m.content)
 	}
-	if sid2 := p.binding.get("user1"); sid2 == sid1 {
+	if sid2 := p.core.BoundSession("user1"); sid2 == sid1 {
 		t.Fatal("/new 后应换绑新会话")
 	}
 
@@ -544,19 +544,5 @@ func TestReplyLimiter(t *testing.T) {
 	l.entries["m2"] = &replyEntry{count: 1, first: time.Now().Add(-2 * time.Hour)}
 	if ok, _ := l.next("m2"); ok {
 		t.Fatal("超过 60 分钟应降级")
-	}
-}
-
-func TestDeduper(t *testing.T) {
-	d := newDeduper()
-	if d.isDuplicate("a") {
-		t.Fatal("首次不算重复")
-	}
-	if !d.isDuplicate("a") {
-		t.Fatal("窗口内应判重")
-	}
-	d.seen["b"] = time.Now().Add(-10 * time.Minute)
-	if d.isDuplicate("b") {
-		t.Fatal("超窗后不算重复")
 	}
 }

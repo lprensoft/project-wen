@@ -1,0 +1,273 @@
+// Package imbot 是远程 IM 通道的公共骨架。
+//
+// 每条通道（QQ、微信、Telegram、飞书、Lark）都要做同一批事：把远端用户映射到一个
+// 会话、按用户串行处理消息、认一套 /new /status /compact /help 命令、把危险操作的
+// 确认请求发到远端再等回复、把后台轮次的结果推回去。这些与协议无关的部分放这里，
+// 各插件只剩自己的协议层（鉴权、收发、错误码、格式降级）。
+//
+// 抽出来的直接理由是重复：QQ 与微信两个插件的确认代理曾是逐行相同的两份，命令层
+// 约六成重合，会话绑定与去重完全一致。再加三条通道就是五份同构代码，改一处忘四处。
+package imbot
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	"wen/internal/plugin"
+)
+
+// 默认参数。通道可在 Config 里覆盖。
+const (
+	DefaultQueueSize   = 8                // 每用户待处理消息队列长度，满了直接回复稍候
+	DefaultTurnTimeout = 10 * time.Minute // 单轮对话的上限
+)
+
+// Sender 是每条通道自己要实现的部分：把一段文本发给某个用户。
+//
+// 分段、格式转换（markdown / 纯文本 / 卡片）、失败重试与日志都由实现负责——各平台
+// 的长度上限与降级策略不一样，骨架不替它们决定。因此没有返回值：发不出去是通道
+// 自己的事，骨架继续往下走。
+type Sender interface {
+	Send(ctx context.Context, userID, text, replyTo string)
+}
+
+// Message 是一条已归一化的入站消息。
+type Message struct {
+	UserID  string // 通道内的用户标识（QQ openid / 微信 xxx@im.wechat / Telegram chat_id / 飞书 open_id）
+	DedupID string // 去重键；为空表示不去重
+	// ReplyTo 是通道自定义的「回复凭据」，骨架不解释内容，原样交回 Sender：
+	// QQ 是 msg_id，微信是 context_token，Telegram 是 message_id，飞书是 message_id。
+	ReplyTo string
+	Text    string
+	// Note 是收到了正文之外的东西时给用户的提示（如「暂不支持该消息类型」）。
+	// Text 为空且 Note 非空时，骨架把 Note 回过去就结束，不进队列。
+	Note string
+}
+
+// Config 是构造 Core 所需的一切。字段在 New 之后不再变动——改配置走「重建 Core」，
+// 因此 Core 内部读它们不需要加锁。
+type Config struct {
+	PluginName string // 插件名，用于日志前缀
+	Sender     Sender
+	StateDir   string // 会话绑定落在 <StateDir>/sessions.json
+
+	ConfirmTimeout time.Duration
+	TurnTimeout    time.Duration // 0 表示用 DefaultTurnTimeout
+	QueueSize      int           // 0 表示用 DefaultQueueSize
+
+	ShowThinking bool
+	ShowTools    bool
+
+	// Allow 判定用户是否放行。为 nil 表示一律拒绝——白名单为空时拒绝所有人是各通道
+	// 一致的既定行为，把它做成默认值可以避免某条通道忘了实现就变成对全网开放。
+	Allow func(userID string) bool
+	// OnAccepted 在一条消息通过去重与准入之后调用，供通道做自己的记账
+	// （微信在这里记住该用户最近的 context_token，后台推送要用）。可为 nil。
+	OnAccepted func(msg Message)
+	// Typing 在跑一轮对话前后调用，供通道发「正在输入」状态。可为 nil。
+	Typing func(ctx context.Context, msg Message, active bool)
+
+	RunTurn    plugin.RunTurnFunc
+	NewSession plugin.NewSessionFunc
+	Compact    plugin.CompactFunc
+	Status     plugin.StatusFunc
+	Sessions   plugin.SessionQuery
+}
+
+// Core 是通道无关的那一半：分发、命令、会话绑定、确认代理、串行 worker。
+type Core struct {
+	cfg     Config
+	binding *Binding
+	dedup   *Deduper
+	broker  *confirmBroker
+
+	mu      sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
+	workers map[string]chan Message
+	wg      sync.WaitGroup
+}
+
+// New 构造 Core 并加载已有的会话绑定。
+func New(cfg Config) (*Core, error) {
+	if cfg.Sender == nil {
+		return nil, fmt.Errorf("imbot: 需要 Sender")
+	}
+	if cfg.StateDir == "" {
+		return nil, fmt.Errorf("imbot: 需要持久化目录")
+	}
+	if cfg.RunTurn == nil || cfg.NewSession == nil {
+		return nil, fmt.Errorf("当前环境不支持插件发起对话轮次")
+	}
+	if cfg.Sessions == nil {
+		return nil, fmt.Errorf("当前环境不支持会话查询")
+	}
+	binding, err := loadBinding(cfg.StateDir)
+	if err != nil {
+		return nil, fmt.Errorf("加载会话映射失败: %w", err)
+	}
+	if cfg.TurnTimeout <= 0 {
+		cfg.TurnTimeout = DefaultTurnTimeout
+	}
+	if cfg.QueueSize <= 0 {
+		cfg.QueueSize = DefaultQueueSize
+	}
+	return &Core{
+		cfg:     cfg,
+		binding: binding,
+		dedup:   NewDeduper(),
+		broker:  newConfirmBroker(),
+		workers: map[string]chan Message{},
+	}, nil
+}
+
+// Start 记下生命周期 ctx。worker 是惰性启动的，这里不起 goroutine。
+func (c *Core) Start(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ctx, c.cancel = context.WithCancel(ctx)
+}
+
+// Stop 停掉全部 worker 并等它们退出。可重复调用。
+func (c *Core) Stop() {
+	c.mu.Lock()
+	cancel := c.cancel
+	c.cancel = nil
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		c.wg.Wait()
+	}
+}
+
+// Running 报告 Core 是否处于启动状态，供通道在推送前自检。
+func (c *Core) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancel != nil
+}
+
+// UsersFor 反查绑定到某会话的全部用户：后台轮次落在该会话上时要推给他们。
+func (c *Core) UsersFor(sessionID string) []string { return c.binding.UsersFor(sessionID) }
+
+// SessionFor 返回该用户的当前会话，没有（或已被删除）时新建并落映射。
+func (c *Core) SessionFor(userID string) (string, error) {
+	if sid := c.binding.Get(userID); sid != "" {
+		if c.cfg.Sessions.Exists(sid) {
+			return sid, nil
+		}
+		// 会话文件已被删除，重建
+	}
+	sid, err := c.cfg.NewSession()
+	if err != nil {
+		return "", err
+	}
+	return sid, c.binding.Set(userID, sid)
+}
+
+// Handle 是入站消息的分发层：去重 → 准入 → /apply /deny 直投确认代理 → 其余进队列。
+//
+// /apply 与 /deny 不能进队列：worker 此刻正阻塞在等确认上，排队就是自锁。
+func (c *Core) Handle(ctx context.Context, msg Message) {
+	if msg.UserID == "" {
+		return
+	}
+	if c.dedup.IsDuplicate(msg.DedupID) {
+		return
+	}
+	if !c.allowed(msg.UserID) {
+		log.Printf("%s: 拒绝了白名单之外的用户 %s（如需放行请加入白名单）", c.cfg.PluginName, msg.UserID)
+		return
+	}
+	if c.cfg.OnAccepted != nil {
+		c.cfg.OnAccepted(msg)
+	}
+
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		if msg.Note != "" {
+			c.send(ctx, msg, msg.Note)
+		}
+		return
+	}
+
+	switch text {
+	case "/apply", "/deny":
+		approved := text == "/apply"
+		ch, ok := c.broker.take(msg.UserID)
+		if !ok {
+			c.send(ctx, msg, "当前没有等待确认的操作。")
+			return
+		}
+		// 先回执、再投答复：反过来的话，被解开的那一轮可能抢在回执前面把结果发出去，
+		// 用户会先看到执行结果再看到「已允许」
+		if approved {
+			c.send(ctx, msg, "✅ 已允许，继续执行。")
+		} else {
+			c.send(ctx, msg, "🚫 已拒绝该操作。")
+		}
+		ch <- approved
+		return
+	}
+
+	c.enqueue(ctx, msg)
+}
+
+func (c *Core) allowed(userID string) bool {
+	if c.cfg.Allow == nil {
+		return false
+	}
+	return c.cfg.Allow(userID)
+}
+
+func (c *Core) send(ctx context.Context, msg Message, text string) {
+	c.cfg.Sender.Send(ctx, msg.UserID, text, msg.ReplyTo)
+}
+
+// enqueue 把消息放进该用户的串行队列，worker 不存在时惰性启动。队列满说明上一条
+// 还在处理，直接告知稍候而不是无限堆积。
+func (c *Core) enqueue(ctx context.Context, msg Message) {
+	c.mu.Lock()
+	if c.cancel == nil { // 尚未 Start 或已 Stop
+		c.mu.Unlock()
+		return
+	}
+	q, ok := c.workers[msg.UserID]
+	if !ok {
+		q = make(chan Message, c.cfg.QueueSize)
+		c.workers[msg.UserID] = q
+		c.wg.Add(1)
+		go c.worker(c.ctx, q)
+	}
+	c.mu.Unlock()
+
+	select {
+	case q <- msg:
+	default:
+		c.send(ctx, msg, "上一条消息还在处理中，请稍候再发。")
+	}
+}
+
+// worker 串行处理单个用户的消息。
+func (c *Core) worker(ctx context.Context, q chan Message) {
+	defer c.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-q:
+			c.process(ctx, msg)
+		}
+	}
+}
+
+// Bind 把用户改绑到指定会话（/new 之外，通道自己也可能需要，如测试与迁移）。
+func (c *Core) Bind(userID, sessionID string) error { return c.binding.Set(userID, sessionID) }
+
+// BoundSession 返回该用户当前绑定的会话 ID，未绑定时为空串。
+// 与 SessionFor 不同，它不会新建会话，只是查一眼。
+func (c *Core) BoundSession(userID string) string { return c.binding.Get(userID) }

@@ -479,7 +479,7 @@ func TestBackgroundTurnPush(t *testing.T) {
 	// 先让绑定人发一条消息：建立会话映射并记住 context_token
 	f.pushText(binderID, "你好")
 	f.expectSend(t)
-	sid := p.binding.get(binderID)
+	sid := p.core.BoundSession(binderID)
 	if sid == "" {
 		t.Fatal("对话后应有会话映射")
 	}
@@ -503,7 +503,7 @@ func TestBackgroundTurnPush(t *testing.T) {
 	// 前台轮次、自己发起的轮次、无 token 的用户：都不推
 	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: sid, Origin: "", FinalText: "前台"})
 	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: sid, Origin: "wechat_bot", FinalText: "自己"})
-	if err := p.binding.set("mute@im.wechat", "sess-mute"); err != nil {
+	if err := p.core.Bind("mute@im.wechat", "sess-mute"); err != nil {
 		t.Fatal(err)
 	}
 	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{SessionID: "sess-mute", Origin: "heartbeat", FinalText: "无token"})
