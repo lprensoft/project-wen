@@ -86,12 +86,20 @@ func (p *Plugin) judge(ctx context.Context, complete plugin.CompleteFunc, ev plu
 
 	verdict := strings.TrimSpace(out)
 	p.mu.Lock()
+	prev := p.cur
 	switch {
 	case strings.Contains(verdict, "加快"):
-		p.cur = p.clamp(p.cur / 2)
+		p.cur = p.normalize(p.cur / 2)
 	case strings.Contains(verdict, "放缓"):
-		p.cur = p.clamp(p.cur * 2)
+		p.cur = p.normalize(p.cur * 2)
 	default: // 保持，或模型没按格式回答
+		p.mu.Unlock()
+		return
+	}
+	// 已经顶在最快或最慢那一档时，判定落不到实处：不写盘、不记日志、不唤醒循环。
+	// 否则在最快间隔上持续聊天，每一轮都会记一条「心跳间隔调整为 5m0s」，
+	// 而那行字说的调整并没有发生。
+	if p.cur == prev {
 		p.mu.Unlock()
 		return
 	}

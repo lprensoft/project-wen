@@ -578,3 +578,84 @@ func TestFreshInstallWaitsFullInterval(t *testing.T) {
 		t.Errorf("首次启用的起点 = %v，应为当前时刻 %v", got, now)
 	}
 }
+
+// 间隔一律取整到分钟：三个间隔配置项的单位都是分钟，亚分钟的精度用户表达不出来。
+func TestNormalizeRoundsToMinutes(t *testing.T) {
+	p := &Plugin{minIv: 5 * time.Minute, maxIv: 120 * time.Minute}
+	cases := []struct {
+		in   time.Duration
+		want time.Duration
+	}{
+		{16*time.Minute + 52*time.Second + 500*time.Millisecond, 17 * time.Minute},
+		{37*time.Minute + 58*time.Second + 125*time.Millisecond, 38 * time.Minute},
+		{7*time.Minute + 30*time.Second, 8 * time.Minute}, // 半分钟向上取
+		{30 * time.Minute, 30 * time.Minute},
+		{time.Second, 5 * time.Minute},         // 取整后小于下限，限幅
+		{300 * time.Minute, 120 * time.Minute}, // 超过上限，限幅
+	}
+	for _, c := range cases {
+		if got := p.normalize(c.in); got != c.want {
+			t.Errorf("normalize(%v) = %v，期望 %v", c.in, got, c.want)
+		}
+	}
+}
+
+// 空闲衰减每次乘 1.5，而 Duration 是纳秒精度的整数：不取整的话
+// 5m → 7m30s → 11m15s → 16m52.5s → 37m58.125s，越衰减越"精确"，
+// 最后落到一个谁也没配过的数上。这是实际跑出来的回归。
+func TestDecayStaysOnWholeMinutes(t *testing.T) {
+	p := &Plugin{dynamic: true, minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 5 * time.Minute}
+	p.lastActive = time.Now().Add(-24 * time.Hour)
+
+	seen := []time.Duration{p.cur}
+	for range 20 {
+		p.maybeDecay()
+		if p.cur%time.Minute != 0 {
+			t.Fatalf("衰减出了不足一分钟的零头：%v（路径 %v）", p.cur, seen)
+		}
+		seen = append(seen, p.cur)
+	}
+	if p.cur != p.maxIv {
+		t.Fatalf("衰减最终应封顶在最慢间隔，得到 %v", p.cur)
+	}
+}
+
+// 对折那一路同样不该留下零头。
+func TestJudgeStaysOnWholeMinutes(t *testing.T) {
+	p := &Plugin{
+		minIv: time.Minute, maxIv: 120 * time.Minute, cur: 45 * time.Minute,
+		stateDir: t.TempDir(), wake: make(chan struct{}, 1),
+	}
+	complete := func(context.Context, string) (string, error) { return "加快", nil }
+	for range 8 {
+		p.adjusting = true
+		p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
+		if p.cur%time.Minute != 0 {
+			t.Fatalf("加快出了不足一分钟的零头：%v", p.cur)
+		}
+	}
+}
+
+// 已经顶在边界上时，判定落不到实处：不该标记「调整过」，也不该唤醒循环。
+// 否则在最快间隔上持续聊天，日志里每轮都会多一条「调整为 5m0s」，
+// 而那行字说的调整并没有发生；adjusted 被无端置位还会让基础间隔改不动。
+func TestJudgeAtBoundaryIsANoOp(t *testing.T) {
+	p := &Plugin{
+		minIv: 5 * time.Minute, maxIv: 120 * time.Minute, cur: 5 * time.Minute,
+		stateDir: t.TempDir(), wake: make(chan struct{}, 1), adjusting: true,
+	}
+	complete := func(context.Context, string) (string, error) { return "加快", nil }
+	p.judge(context.Background(), complete, plugin.TurnEndEvent{}, time.Time{})
+
+	if p.cur != 5*time.Minute {
+		t.Fatalf("已到最快间隔仍被调整: %v", p.cur)
+	}
+	if p.adjusted {
+		t.Fatal("没发生实际调整就不该标记 adjusted")
+	}
+	select {
+	case <-p.wake:
+		t.Fatal("没发生实际调整就不该唤醒循环重算")
+	default:
+	}
+}

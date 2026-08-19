@@ -145,7 +145,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
 	// 「上次是几点」才推得出下一次
 	st := p.loadStateLocked()
-	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.clamp)
+	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.normalize)
 	p.lastActive = p.probeLastActiveLocked()
 	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, time.Now())
 
@@ -194,11 +194,11 @@ type state struct {
 // 只有「开着动态心跳」且「确实调整过」时才沿用持久化值——那才是需要跨重启保住的
 // 东西。关掉动态心跳、或者根本没调整过，一律跟随基础间隔：此时没有任何节奏可保，
 // 沿用旧值只会让用户改了基础间隔却看不到变化。
-func (st state) resolve(base time.Duration, dynamic bool, clamp func(time.Duration) time.Duration) (time.Duration, bool) {
+func (st state) resolve(base time.Duration, dynamic bool, normalize func(time.Duration) time.Duration) (time.Duration, bool) {
 	if !dynamic || !st.Adjusted || st.IntervalSeconds <= 0 {
 		return base, false
 	}
-	return clamp(time.Duration(st.IntervalSeconds)*time.Second), true
+	return normalize(time.Duration(st.IntervalSeconds) * time.Second), true
 }
 
 // startupGrace 是重启后补心跳的宽限期。
@@ -263,7 +263,18 @@ func persistState(dir string, st state) {
 	_ = os.WriteFile(filepath.Join(dir, "state.json"), raw, 0o644)
 }
 
-func (p *Plugin) clamp(iv time.Duration) time.Duration {
+// normalize 把一个算出来的间隔规整成像样的心跳节奏：先取整到分钟，再限幅到
+// 配置的最快与最慢之间。所有对 p.cur 的写入都必须经过它。
+//
+// 取整不是美观问题。衰减每次乘 1.5，而 Duration 是纳秒精度的整数，于是
+// 5m → 7m30s → 11m15s → 16m52.5s → 37m58.125s，每衰减一次多一位精度，最后落到
+// 一个谁也没配过、也读不出意义的数上。三个间隔配置项的单位都是分钟、最小 1 分钟，
+// 亚分钟的精度用户根本表达不出来，保留它只是把浮点噪声当成了信息。加快那一路的
+// 对折同理。取整同时让状态文件里的旧值（按秒存）在加载时一并规整。
+//
+// 顺序是先取整后限幅：反过来的话取整可能把值推到边界之外。
+func (p *Plugin) normalize(iv time.Duration) time.Duration {
+	iv = iv.Round(time.Minute)
 	if iv < p.minIv {
 		return p.minIv
 	}
