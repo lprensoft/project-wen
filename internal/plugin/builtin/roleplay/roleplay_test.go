@@ -28,7 +28,7 @@ func TestSystemPromptComposition(t *testing.T) {
 	for _, want := range []string{
 		"[角色设定 · 最高优先级]", "林绘",
 		"[对方信息]", "沈",
-		"[互动演绎]", "[体型与动作]", "[自然表达]", "[时间一致性]",
+		"[互动演绎]", "[体型与动作]", "[边界与感受]", "[自然表达]", "[时间一致性]",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("提示词缺少 %q", want)
@@ -69,9 +69,10 @@ func TestSectionsCanBeDisabled(t *testing.T) {
 		"interaction": false,
 		"humanize":    false,
 		"time_rules":  false,
+		"boundaries":  false,
 	})
 	got := p.SystemPrompt()
-	for _, bad := range []string{"[互动演绎]", "[自然表达]", "[时间一致性]"} {
+	for _, bad := range []string{"[互动演绎]", "[自然表达]", "[时间一致性]", "[边界与感受]"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("关掉后仍注入了 %q", bad)
 		}
