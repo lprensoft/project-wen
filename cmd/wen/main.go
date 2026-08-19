@@ -38,17 +38,18 @@ import (
 	"wen/internal/plugin/builtin/weather"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/plugin/builtin/wechatbot"
+	"wen/internal/runlock"
 	"wen/internal/server"
 	"wen/internal/session"
 	"wen/internal/version"
 )
 
-func main() {
-	var (
-		configPath = flag.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
-		port       = flag.Int("p", 0, "监听端口（覆盖配置文件）")
-	)
-	flag.Parse()
+// runServe 启动服务。这是没有子命令时的默认动作，也是 wen serve 的实现。
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	configPath := fs.String("c", "", "配置文件路径（默认 ./config.yaml 或 ~/.wen/config.yaml）")
+	port := fs.Int("p", 0, "监听端口（覆盖配置文件）")
+	_ = fs.Parse(args)
 
 	path := config.ResolvePath(*configPath)
 	cfg, err := config.Load(path)
@@ -185,10 +186,9 @@ func main() {
 	exposed := !server.IsLoopbackHost(cfg.Server.Host)
 	if exposed && !auth.HasPassword() {
 		log.Printf("⚠ 配置的监听地址是 %s，但尚未设置访问口令，已降级为只监听 127.0.0.1。", cfg.Server.Host)
-		log.Printf("  设置口令后重启即可对外提供服务：用 ssh -L %d:127.0.0.1:%d <用户>@<服务器>",
+		log.Printf("  设置口令后重启即可对外提供服务：在本机执行 wen config server，")
+		log.Printf("  或用 ssh -L %d:127.0.0.1:%d <用户>@<服务器> 建隧道后在设置页的「访问控制」里设置。",
 			cfg.Server.Port, cfg.Server.Port)
-		log.Printf("  建隧道后打开界面，在设置页的「访问控制」里设置；容器部署可用环境变量 %s。",
-			"WEN_AUTH_PASSWORD")
 		cfg.Server.Host = "127.0.0.1"
 		exposed = false
 	}
@@ -211,6 +211,20 @@ func main() {
 	}
 	log.Printf("访问控制: %s", authSummary(auth, exposed, cfg.Server.TrustLoopbackOrDefault()))
 	log.Printf("Wen Agent %s 已启动: http://%s", version.Version, addr)
+
+	// 登记运行中的实例，供 wen config 判定该走在线还是离线模式。
+	// 失败只是让配置工具退回离线模式，不该拦住服务启动。
+	if prev, ok := runlock.Read(cfg.BaseDir); ok && reachable(prev.Addr) {
+		log.Printf("警告: 同一配置目录下已有实例在 %s 运行。两个实例共用一份状态文件会互相覆盖配置。", prev.Addr)
+	}
+	releaseLock, err := runlock.Acquire(cfg.BaseDir, runlock.Info{
+		PID: os.Getpid(), Addr: addr, Version: version.Version,
+		Started: time.Now().Format(time.RFC3339),
+	})
+	if err != nil {
+		log.Printf("提示: 无法登记运行状态（%v），wen config 将只能离线修改配置", err)
+	}
+	defer releaseLock()
 
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -274,8 +288,8 @@ var needsSetupPlugins = map[string]bool{
 // 开关与配置的唯一来源是 <配置目录>/plugins.state.json（由设置页维护）；这里给出的只是
 // 首次安装、状态文件还不存在时的初值。
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
-func buildPlugins(cfg *config.Config, ictx plugin.InitContext) *plugin.Manager {
-	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"))
+func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Option) *plugin.Manager {
+	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
 	builtins := []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，

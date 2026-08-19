@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -131,7 +132,41 @@ func (s *AuthStore) Verify(pwd string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
+// 口令变更的几种拒绝理由。CLI 与 HTTP 两个入口共用同一套判定，
+// 各自按需要把它们翻译成退出码或状态码。
+var (
+	ErrEnvManaged        = errors.New("口令由环境变量 " + envPasswordKey + " 提供，无法在此修改")
+	ErrWrongCurrent      = errors.New("当前口令不正确")
+	ErrClearWhileExposed = errors.New("服务正在对外监听，清除口令会使它完全开放；请先改回只监听本地")
+	ErrTooShort          = errors.New("口令至少 8 位")
+)
+
+// minPasswordLen 是口令长度下限。挡的是「1234」这类一试就中的口令，
+// 真正的防线是登录限速，所以不必定得更严。
+const minPasswordLen = 8
+
+// Change 校验并执行一次口令变更。next 为空表示清除。
+//
+// 策略集中在这里而不是各自的入口：设置页与 wen config 是两条独立的路径，
+// 规则写两份迟早会分叉，而分叉的那一份多半是更宽松的那份。
+func (s *AuthStore) Change(current, next string, exposed bool) error {
+	if s.EnvManaged() {
+		return ErrEnvManaged
+	}
+	if s.HasPassword() && !s.Verify(current) {
+		return ErrWrongCurrent
+	}
+	if next == "" && exposed {
+		return ErrClearWhileExposed
+	}
+	if next != "" && len([]rune(next)) < minPasswordLen {
+		return ErrTooShort
+	}
+	return s.SetPassword(next)
+}
+
 // SetPassword 设置或清除（pwd 为空）访问口令并落盘。
+// 调用方一般应当用 Change：它带上了变更策略。
 func (s *AuthStore) SetPassword(pwd string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

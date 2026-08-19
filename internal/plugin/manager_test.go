@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -395,4 +396,75 @@ func TestManagerInjectsOriginIntoNotice(t *testing.T) {
 	if gotText == "" {
 		t.Error("注记正文应原样传下去")
 	}
+}
+
+// WithoutInit 的 Manager 必须一次都不调用 Init：离线配置工具靠它避免把
+// 长连接、心跳与定时任务一并启动起来。开关、配置与状态持久化仍要正常工作。
+func TestWithoutInitNeverInitializes(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "plugins.state.json")
+
+	p := &countingPlugin{name: "counter"}
+	m := NewManager(InitContext{}, statePath, WithoutInit())
+	if err := m.Register(p, PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if p.initCalls != 0 {
+		t.Fatalf("注册时调用了 %d 次 Init，应为 0", p.initCalls)
+	}
+	// 列表仍应报告它是启用的：开关状态与「是否已初始化」是两回事
+	if list := m.List(); len(list) != 1 || !list[0].Enabled {
+		t.Fatalf("List 未如实报告启用状态: %+v", list)
+	}
+
+	// 关掉再开，都不应触发 Init 或 Stop
+	if err := m.SetEnabled("counter", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetEnabled("counter", true); err != nil {
+		t.Fatal(err)
+	}
+	if p.initCalls != 0 || p.stopCalls != 0 {
+		t.Errorf("Init 调用 %d 次、Stop 调用 %d 次，都应为 0", p.initCalls, p.stopCalls)
+	}
+
+	// 配置照常校验并落盘
+	if err := m.SetConfig("counter", map[string]any{"size": 7}); err != nil {
+		t.Fatal(err)
+	}
+	if p.initCalls != 0 {
+		t.Errorf("SetConfig 触发了 Init")
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"size": 7`) {
+		t.Errorf("配置未落盘: %s", raw)
+	}
+
+	// 非法值仍要被拒绝
+	if err := m.SetConfig("counter", map[string]any{"size": 999}); err == nil {
+		t.Error("超出 Max 的值应被拒绝")
+	}
+}
+
+// countingPlugin 记录 Init / Stop 的调用次数。
+type countingPlugin struct {
+	name      string
+	initCalls int
+	stopCalls int
+}
+
+func (p *countingPlugin) Name() string         { return p.name }
+func (p *countingPlugin) Description() string  { return "计数插件" }
+func (p *countingPlugin) Tools() []Tool        { return nil }
+func (p *countingPlugin) SystemPrompt() string { return "" }
+func (p *countingPlugin) Init(InitContext, map[string]any) error {
+	p.initCalls++
+	return nil
+}
+func (p *countingPlugin) Stop() { p.stopCalls++ }
+func (p *countingPlugin) ConfigFields() []ConfigField {
+	return []ConfigField{{Key: "size", Label: "大小", Type: "int", Default: 3, Min: IntPtr(1), Max: IntPtr(10)}}
 }
