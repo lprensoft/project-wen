@@ -88,9 +88,10 @@ type CompactEvent struct {
 	Summary   string        // 已生成的摘要正文
 }
 
-// Lifecycle 是插件的可选能力：接收会话生命周期事件。
-// 未实现该接口的插件不会收到任何通知。
-type Lifecycle interface {
+// CompactObserver 是插件的可选能力：在会话历史被压缩前收到通知。
+// 未实现该接口的插件不会收到任何通知。与 TurnObserver 同一族：都是「观察核心的
+// 某个时刻」，命名与广播方式保持一致。
+type CompactObserver interface {
 	// OnCompact 在会话历史被摘要替换之前调用，此时 History 尚未被删除。
 	// 返回的非空注记会追加到摘要消息末尾；返回 error 只记录日志，不阻断压缩。
 	OnCompact(ctx context.Context, ev CompactEvent) (string, error)

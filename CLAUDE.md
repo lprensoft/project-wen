@@ -27,7 +27,7 @@
 1. `InitContext.StateDir` —— 插件专属持久化目录；
 2. `InitContext.SessionDir` —— 会话目录，只读用；
 3. `InitContext.Complete` —— 辅助模型调用；
-4. `Lifecycle` —— 会话生命周期通知；
+4. `CompactObserver` —— 压缩前通知；
 5. **可见域**（`Scope` / `ScopeDecider` / `TurnPrompter`，见下节）；
 6. `Requires` / `Conflicts` —— 插件间的依赖与互斥声明；
 7. **操作确认**（`ConfirmFunc` / `WithConfirmer` / `ConfirmerFrom`，见下节）；
@@ -52,7 +52,7 @@
 
 `InitContext.Complete` 让插件用当前模型做一次一问一答（不带工具、不启用思考、不写会话），由 `Agent.Complete` 实现。它在 Agent 建好之前就要传进 `buildPlugins`，故 `main.go` 用闭包延迟取值。为 nil 表示当前不可用，插件应降级而不是崩掉；每次调用都是真实开销，只放在低频且信息即将丢失的路径上。
 
-`Lifecycle.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，`roleplay` 借此保住最后一处场景演绎，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。历史带可见域标签时按标签分组，每组一次事件，`CompactEvent.Scope` 给出本组的标签。
+`CompactObserver.OnCompact(ctx, CompactEvent) (note string, err error)` 在 `compact` 用 `store.Replace` 物理删除历史**之前**由 `Manager.NotifyCompact` **广播给所有订阅者**（自动与手动压缩共用一个调用点）：`memory` 借此提炼长期记忆，`session_search` 借此归档原文，`roleplay` 借此保住最后一处场景演绎，各管各的领域。返回的注记由核心追加到摘要消息末尾，因此只落进该会话的历史。插件返回 error 只记日志不阻断压缩：压缩是上下文溢出时的保底手段，不能被插件卡住。历史带可见域标签时按标签分组，每组一次事件，`CompactEvent.Scope` 给出本组的标签。
 
 **定时类状态记「上一次发生的时刻」，不记「还剩多久」。** 进程内的定时器只是执行手段，不是状态载体——它随进程消失，于是重启就把倒计时清零重算，重启比周期更频繁时那件事一次都不会发生（心跳曾经如此：只存了间隔，没存上次心跳时刻）。存了时刻之后，下一次由「时刻 + 周期」推算，重启天然延续；已经过期就补一次，但要给一个启动宽限期，别在服务刚起来的那一秒就动作。同理，带时效的缓存要连同取得时刻一起落盘（天气的观测），否则重启既产生数据空窗，又白打一次外部接口。按轮数累计的缓冲同理（`memory` 的提炼窗口）：只在内存里攒，重启就归零，「每 N 轮做一次」在重启比 N 轮更频繁时永远走不完。`scheduler` 的 `LastRun`、`mood` 的 `Updated` 是这条的既有实现，新写这类插件时照着来。另注：每轮都起 goroutine 写盘时，它们的完成顺序不保证，必须串行化并丢弃过期快照，否则晚到的旧内容会盖掉新进展。
 

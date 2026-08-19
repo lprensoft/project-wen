@@ -307,7 +307,7 @@ func TestRegisterRejectsInvalidName(t *testing.T) {
 	}
 }
 
-// lifecyclePlugin 实现 Lifecycle，用于验证压缩事件广播。
+// lifecyclePlugin 实现 CompactObserver，用于验证压缩事件广播。
 type lifecyclePlugin struct {
 	fakePlugin
 	note  string
@@ -328,7 +328,7 @@ func TestNotifyCompact(t *testing.T) {
 	off := &lifecyclePlugin{fakePlugin: fakePlugin{name: "b"}, note: "注记B"}
 	boom := &lifecyclePlugin{fakePlugin: fakePlugin{name: "c"}, note: "注记C", err: fmt.Errorf("boom")}
 	silent := &lifecyclePlugin{fakePlugin: fakePlugin{name: "d"}} // 返回空串
-	plain := &fakePlugin{name: "e"}                               // 未实现 Lifecycle
+	plain := &fakePlugin{name: "e"}                               // 未实现 CompactObserver
 
 	m.Register(on, PluginConfig{Enabled: true})
 	m.Register(off, PluginConfig{Enabled: false})

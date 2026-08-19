@@ -10,19 +10,19 @@ import (
 	"wen/internal/session"
 )
 
-// recordingLifecycle 记录每次收到的压缩事件，用于验证按域广播。
-type recordingLifecycle struct {
+// compactRecorder 记录每次收到的压缩事件，用于验证按域广播。
+type compactRecorder struct {
 	name string
 	got  []plugin.CompactEvent
 }
 
-func (p *recordingLifecycle) Name() string                                  { return p.name }
-func (p *recordingLifecycle) Description() string                           { return "记录压缩事件" }
-func (p *recordingLifecycle) Init(plugin.InitContext, map[string]any) error { return nil }
-func (p *recordingLifecycle) SystemPrompt() string                          { return "" }
-func (p *recordingLifecycle) Tools() []plugin.Tool                          { return nil }
+func (p *compactRecorder) Name() string                                  { return p.name }
+func (p *compactRecorder) Description() string                           { return "记录压缩事件" }
+func (p *compactRecorder) Init(plugin.InitContext, map[string]any) error { return nil }
+func (p *compactRecorder) SystemPrompt() string                          { return "" }
+func (p *compactRecorder) Tools() []plugin.Tool                          { return nil }
 
-func (p *recordingLifecycle) OnCompact(ctx context.Context, ev plugin.CompactEvent) (string, error) {
+func (p *compactRecorder) OnCompact(ctx context.Context, ev plugin.CompactEvent) (string, error) {
 	p.got = append(p.got, ev)
 	// 顺带验证核心把该组的可见域放进了 ctx：归档与记忆分库都靠它
 	if sc := plugin.ScopeFrom(ctx); sc.Write != ev.Scope {
@@ -69,7 +69,7 @@ func TestCompactSplitsByScope(t *testing.T) {
 		}
 	}
 
-	rec := &recordingLifecycle{name: "recorder"}
+	rec := &compactRecorder{name: "recorder"}
 	provider := &mockProvider{turns: []mockTurn{{content: "摘要甲"}, {content: "摘要乙"}}}
 	ag := New(provider, newTestManager(t, rec), store, Options{Model: "test"})
 
@@ -120,7 +120,7 @@ func TestCompactKeepsSmallGroupVerbatim(t *testing.T) {
 		store.Append(meta.ID, m)
 	}
 
-	rec := &recordingLifecycle{name: "recorder"}
+	rec := &compactRecorder{name: "recorder"}
 	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
 	ag := New(provider, newTestManager(t, rec), store, Options{Model: "test"})
 	ag.Compact(context.Background(), meta.ID, func(Event) {})
@@ -178,7 +178,7 @@ func TestCompactUntaggedHistoryUnchanged(t *testing.T) {
 	store.Append(meta.ID, msg(llm.RoleUser, "问"))
 	store.Append(meta.ID, msg(llm.RoleAssistant, "答"))
 
-	rec := &recordingLifecycle{name: "recorder"}
+	rec := &compactRecorder{name: "recorder"}
 	provider := &mockProvider{turns: []mockTurn{{content: "摘要正文"}}}
 	ag := New(provider, newTestManager(t, rec), store, Options{Model: "test"})
 

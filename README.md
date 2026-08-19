@@ -459,7 +459,7 @@ internal/config/         配置加载（YAML + ${VAR} 环境变量替换）
 internal/llm/            Provider 接口 + OpenAI 兼容 / Anthropic 实现
 internal/modelcfg/       模型与提供商配置（models.json 覆盖层，热切换）
 internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下文预算）
-internal/plugin/         插件协议（Plugin / Tool / Configurable / Lifecycle / 可见域 / 依赖）+ Manager（开关与聚合）
+internal/plugin/         插件协议（Plugin / Tool / Configurable / 观察者 / 可见域 / 依赖）+ Manager（开关与聚合）
 internal/plugin/builtin/ 内置系统插件（注册顺序即提示词拼接顺序）：
                          readfile / execcmd / webfetch / memory / sessionsearch /
                          roleplay / dualpersona / scene / bodysense / mood /
@@ -477,7 +477,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 可选接口（不实现则零成本）：
 
 - `Configurable`（`ConfigFields()`）——声明可配置项，设置页据此生成表单并持久化。字段类型有 `int` / `bool` / `string` / `select` / `text`（多行，渲染成 textarea）。
-- `Lifecycle`（`OnCompact()`）——在会话历史被摘要替换**之前**收到通知，可借此归档或提炼；返回的注记会追加到摘要末尾，从而只落进该会话的历史。事件广播给所有订阅者（`memory` 与 `session_search` 都订阅了它，各做各的事），返回错误只记日志，不阻断压缩。历史带可见域标签时按标签分组，每组一次事件。
+- `CompactObserver`（`OnCompact()`）——在会话历史被摘要替换**之前**收到通知，可借此归档或提炼；返回的注记会追加到摘要末尾，从而只落进该会话的历史。事件广播给所有订阅者（`memory` 与 `session_search` 都订阅了它，各做各的事），返回错误只记日志，不阻断压缩。历史带可见域标签时按标签分组，每组一次事件。
 - `ScopeDecider`（`DecideScope()`）与 `TurnPrompter`（`TurnPrompt()`）——见下方「可见域」。
 - 操作确认：用 `plugin.ConfirmerFrom(ctx)` 取确认通道，在执行不可逆操作前问一次。第二个返回值为 false 表示当前没有可交互的用户，**不要当作已获同意**；返回 error 同理，拿不到答复不等于得到许可。
 - `Dependent`（`Requires()`）——声明必须同时启用的插件。依赖未满足时拒绝启用（开关在界面上置灰），被依赖的插件也无法在依赖方仍启用时关闭。

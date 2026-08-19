@@ -551,7 +551,7 @@ func (m *Manager) NotifyCompact(ctx context.Context, ev CompactEvent) []string {
 		if !e.enabled {
 			continue
 		}
-		lc, ok := e.plugin.(Lifecycle)
+		lc, ok := e.plugin.(CompactObserver)
 		if !ok {
 			continue
 		}
