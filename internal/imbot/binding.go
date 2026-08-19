@@ -50,6 +50,14 @@ func (b *Binding) UsersFor(sessionID string) []string {
 	return out
 }
 
+// Users 返回本通道上全部跟机器人说过话的用户（映射表的键）。
+// 分通道投递靠它把「唯一的那位用户」接到目标会话上，见 Core.pushTo。
+func (b *Binding) Users() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return sortedKeys(b.m)
+}
+
 func (b *Binding) Set(userID, sessionID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

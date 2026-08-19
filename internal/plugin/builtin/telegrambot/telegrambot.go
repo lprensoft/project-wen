@@ -63,7 +63,10 @@ type Plugin struct {
 	wg     sync.WaitGroup
 }
 
-func New() *Plugin { return &Plugin{} }
+func New() *Plugin {
+	imbot.Declare("telegram_bot", "Telegram")
+	return &Plugin{}
+}
 
 func (p *Plugin) Name() string { return "telegram_bot" }
 
@@ -110,11 +113,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "开启后把每轮的完整思考链推送到 Telegram；关闭（默认）只发最终回复",
+			Description: "开启后把每轮的完整思考链推送到 Telegram；关闭只发最终回复",
 		},
 		{
 			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "开启后推送调用了哪些工具（只有名字，不含参数与结果，避免隐私外泄）；关闭（默认）不推送",
+			Description: "开启后推送调用了哪些工具，只有名字；关闭不推送",
 		},
 	}
 }
@@ -169,6 +172,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
 		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
 		Allow:          p.allowed,
+		Push:           p.push,
+		Notice:         ictx.Notice,
 		Typing:         p.onTyping,
 		RunTurn:        ictx.RunTurn,
 		NewSession:     ictx.NewSession,

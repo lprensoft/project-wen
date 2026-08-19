@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
 
@@ -17,6 +18,16 @@ import (
 // 不能用广播的 ctx——发起方（如心跳）在轮次结束后立即取消它。
 func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	if ev.Origin == "" || ev.Origin == p.Name() {
+		return
+	}
+	// 另一条通道发起的轮次：投递责任归它那一侧的路由，观察者一律不插手。
+	// 没有这一句，两条通道绑在同一会话上时，一边的前台回复会被另一边再推一遍
+	// ——分通道功能正是要让它们绑在同一会话上。
+	if imbot.IsChannel(ev.Origin) {
+		return
+	}
+	// 装了分通道路由时，后台轮次也跟着人格走：不归我服务的会话不推
+	if !imbot.ServedBy(p.Name(), ev.SessionID) {
 		return
 	}
 	if strings.TrimSpace(ev.FinalText) == "" {
@@ -43,4 +54,11 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 			p.send(pctx, chatID, ev.FinalText, "")
 		}(chatID)
 	}
+}
+
+// push 主动推送：Telegram 按 chat_id 直发，没有被动回复窗口的限制，发不出去由
+// send 记日志容忍，所以恒报「已交给平台」。
+func (p *Plugin) push(ctx context.Context, chatID, text string) bool {
+	p.send(ctx, chatID, text, "")
+	return true
 }

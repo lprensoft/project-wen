@@ -68,7 +68,10 @@ type inbound struct {
 	content string
 }
 
-func New() *Plugin { return &Plugin{} }
+func New() *Plugin {
+	imbot.Declare("qq_bot", "QQ")
+	return &Plugin{}
+}
 
 func (p *Plugin) Name() string { return "qq_bot" }
 
@@ -107,11 +110,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "开启后把每轮的完整思考链推送到 QQ；关闭（默认）只发最终回复",
+			Description: "开启后把每轮的完整思考链推送到 QQ；关闭只发最终回复",
 		},
 		{
 			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "开启后推送调用了哪些工具（只有名字，不含参数与结果，避免隐私外泄）；关闭（默认）不推送",
+			Description: "开启后推送调用了哪些工具，只有名字；关闭不推送",
 		},
 		{
 			Key: "format", Label: "消息格式", Type: plugin.FieldSelect, Default: formatMarkdown,
@@ -166,6 +169,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
 		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
 		Allow:          p.allowed,
+		Push:           p.push,
+		Notice:         ictx.Notice,
 		RunTurn:        ictx.RunTurn,
 		NewSession:     ictx.NewSession,
 		Compact:        ictx.Compact,
@@ -186,6 +191,13 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	core.Start(ctx)
 	go p.gatewayLoop(ctx)
 	return nil
+}
+
+// push 主动推送：QQ 没有可回带的 msg_id 时走主动消息，发不出去由 send 记日志容忍，
+// 所以这里恒报「已交给平台」。
+func (p *Plugin) push(ctx context.Context, openid, text string) bool {
+	p.send(ctx, openid, text, "")
+	return true
 }
 
 // allowed 判定用户是否放行：只看配置白名单，空名单拒绝所有人。
