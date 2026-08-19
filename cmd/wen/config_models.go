@@ -1,0 +1,296 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/huh"
+
+	"wen/internal/modelcfg"
+)
+
+// modelsSection 是模型配置：切换当前模型、增删改提供商。
+func modelsSection(b backend) error {
+	for {
+		doc, err := b.loadModels()
+		if err != nil {
+			return err
+		}
+
+		opts := []huh.Option[string]{
+			huh.NewOption("切换当前模型", "current"),
+			huh.NewOption("新增提供商", "add"),
+		}
+		for _, p := range doc.Providers {
+			opts = append(opts, huh.NewOption(
+				fmt.Sprintf("编辑 %s（%s，%d 个模型%s）",
+					p.Name, p.Type, len(p.Models), keyHint(p)),
+				"edit:"+p.Name))
+		}
+		opts = append(opts, huh.NewOption("← 返回", back))
+
+		choice := "current" // 光标停在第一项，见 topMenu 的说明
+		if err := run(huh.NewSelect[string]().
+			Title("模型").
+			Description(fmt.Sprintf("当前：%s / %s\n%s",
+				doc.Current.Provider, doc.Current.Model, b.mode())).
+			Height(16).
+			Options(opts...).
+			Value(&choice)); err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				return nil
+			}
+			return err
+		}
+
+		var opErr error
+		switch {
+		case choice == back:
+			return nil
+		case choice == "current":
+			opErr = switchCurrent(b, doc)
+		case choice == "add":
+			opErr = editProvider(b, doc, providerView{Type: "openai_compat"}, true)
+		case strings.HasPrefix(choice, "edit:"):
+			name := strings.TrimPrefix(choice, "edit:")
+			for _, p := range doc.Providers {
+				if p.Name == name {
+					opErr = editProvider(b, doc, p, false)
+					break
+				}
+			}
+		}
+		if opErr != nil && !errors.Is(opErr, huh.ErrUserAborted) {
+			note("× %v", opErr)
+		}
+	}
+}
+
+func keyHint(p providerView) string {
+	if p.HasAPIKey {
+		return "，密钥 " + p.MaskedKey
+	}
+	return "，未配置密钥"
+}
+
+// switchCurrent 两步选：先提供商，再该提供商下的模型。
+func switchCurrent(b backend, doc modelsDoc) error {
+	provOpts := make([]huh.Option[string], 0, len(doc.Providers))
+	for _, p := range doc.Providers {
+		provOpts = append(provOpts, huh.NewOption(p.Name, p.Name))
+	}
+	if len(provOpts) == 0 {
+		return errors.New("还没有配置任何提供商")
+	}
+	provider := doc.Current.Provider
+	if err := run(huh.NewSelect[string]().Title("提供商").
+		Options(provOpts...).Value(&provider)); err != nil {
+		return err
+	}
+
+	var models []modelcfg.Model
+	for _, p := range doc.Providers {
+		if p.Name == provider {
+			models = p.Models
+		}
+	}
+	if len(models) == 0 {
+		return fmt.Errorf("提供商 %s 下还没有模型，请先在「编辑 %s」里添加", provider, provider)
+	}
+	modelOpts := make([]huh.Option[string], 0, len(models))
+	for _, m := range models {
+		label := m.ID
+		if m.Name != "" {
+			label = fmt.Sprintf("%s（%s）", m.Name, m.ID)
+		}
+		modelOpts = append(modelOpts, huh.NewOption(label, m.ID))
+	}
+	model := doc.Current.Model
+	if err := run(huh.NewSelect[string]().Title("模型").
+		Options(modelOpts...).Value(&model)); err != nil {
+		return err
+	}
+
+	if err := b.setCurrentModel(modelcfg.Selection{Provider: provider, Model: model}); err != nil {
+		return err
+	}
+	note("✓ 当前模型已切换为 %s / %s", provider, model)
+	return nil
+}
+
+// editProvider 编辑（或新增）一个提供商。
+//
+// 模型列表用多行文本编辑，一行一个，格式 `模型id` 或 `模型id | 显示名`。
+// 单个模型上的参数覆盖（context_length、thinking 等）在这里改不了，但会原样保留；
+// 只有把某行删掉时，那条覆盖才随之消失。需要逐项调参就去 Web UI——
+// 在终端里铺开每个模型的六个可选覆盖，翻找的代价大于收益。
+func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
+	name := p.Name
+	typ := p.Type
+	baseURL := p.BaseURL
+	dialect := p.Dialect
+	newKey := ""
+	modelsText := modelsToText(p.Models)
+	cache := cacheToString(p.PromptCache)
+	remove := false
+
+	keyDesc := "留空表示不修改"
+	if !p.HasAPIKey {
+		keyDesc = "尚未配置"
+	}
+
+	typeOpts := make([]huh.Option[string], 0)
+	for _, t := range modelcfg.TypeOptions() {
+		typeOpts = append(typeOpts, huh.NewOption(t["label"], t["value"]))
+	}
+	dialectOpts := make([]huh.Option[string], 0)
+	for _, d := range modelcfg.DialectOptions() {
+		dialectOpts = append(dialectOpts, huh.NewOption(d["label"], d["value"]))
+	}
+
+	fields := []huh.Field{
+		huh.NewInput().Title("名称").Description("唯一标识，也是界面上的显示名").Value(&name).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("名称不能为空")
+				}
+				return nil
+			}),
+		huh.NewSelect[string]().Title("接口类型").Options(typeOpts...).Value(&typ),
+		huh.NewInput().Title("Base URL").Value(&baseURL),
+		huh.NewInput().Title("API Key").Description(keyDesc).
+			EchoMode(huh.EchoModePassword).Value(&newKey),
+		huh.NewSelect[string]().Title("思考参数方言").
+			Description("仅 openai_compat 生效").Options(dialectOpts...).Value(&dialect),
+		huh.NewSelect[string]().Title("提示词缓存").
+			Description("仅 anthropic 生效。命中约十分之一价，未命中的写入多付约四分之一；\n对话间隔常超过几分钟时关掉更省。").
+			Options(
+				huh.NewOption("跟随默认（开启）", ""),
+				huh.NewOption("开启", "on"),
+				huh.NewOption("关闭", "off"),
+			).Value(&cache),
+		huh.NewText().Title("模型列表").
+			Description("一行一个，格式：模型id  或  模型id | 显示名").
+			Lines(8).Value(&modelsText),
+	}
+	if !isNew {
+		fields = append(fields, huh.NewConfirm().
+			Title("删除这个提供商").Affirmative("删除").Negative("保留").Value(&remove))
+	}
+
+	if err := huh.NewForm(huh.NewGroup(fields...)).Run(); err != nil {
+		return err
+	}
+
+	next := doc.toFile()
+	if remove {
+		next.Providers = dropProvider(next.Providers, p.Name)
+		if err := b.saveModels(next); err != nil {
+			return err
+		}
+		note("✓ 提供商 %s 已删除", p.Name)
+		return nil
+	}
+
+	edited := modelcfg.Provider{
+		Name: strings.TrimSpace(name), Type: typ, BaseURL: strings.TrimSpace(baseURL),
+		APIKey:  newKey, // 留空 = 沿用旧值，由服务端的 carryOverKeys 补上
+		Dialect: dialect, PromptCache: stringToCache(cache),
+		Models: textToModels(modelsText, p.Models),
+	}
+	if isNew {
+		next.Providers = append(next.Providers, edited)
+	} else {
+		next.Providers = replaceProvider(next.Providers, p.Name, edited)
+	}
+	if err := b.saveModels(next); err != nil {
+		return err
+	}
+	note("✓ 提供商 %s 已保存", edited.Name)
+	return nil
+}
+
+func dropProvider(list []modelcfg.Provider, name string) []modelcfg.Provider {
+	out := make([]modelcfg.Provider, 0, len(list))
+	for _, p := range list {
+		if p.Name != name {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func replaceProvider(list []modelcfg.Provider, name string, next modelcfg.Provider) []modelcfg.Provider {
+	for i, p := range list {
+		if p.Name == name {
+			list[i] = next
+			return list
+		}
+	}
+	return append(list, next)
+}
+
+func modelsToText(models []modelcfg.Model) string {
+	lines := make([]string, 0, len(models))
+	for _, m := range models {
+		if m.Name != "" {
+			lines = append(lines, m.ID+" | "+m.Name)
+			continue
+		}
+		lines = append(lines, m.ID)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// textToModels 解析模型列表。已存在的 id 保留其参数覆盖——那些字段在这一屏改不了，
+// 若不带过来，一次无关的编辑就会把它们全清掉。
+func textToModels(text string, prev []modelcfg.Model) []modelcfg.Model {
+	byID := map[string]modelcfg.Model{}
+	for _, m := range prev {
+		byID[m.ID] = m
+	}
+	out := []modelcfg.Model{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		id, display, _ := strings.Cut(line, "|")
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		m := byID[id]
+		m.ID = id
+		m.Name = strings.TrimSpace(display)
+		out = append(out, m)
+	}
+	return out
+}
+
+// 提示词缓存是三态：未设置 / 明确开 / 明确关。未设置要原样写回 null，
+// 否则一次保存就把条目从 config.yaml 接管了过来。
+func cacheToString(p *bool) string {
+	switch {
+	case p == nil:
+		return ""
+	case *p:
+		return "on"
+	default:
+		return "off"
+	}
+}
+
+func stringToCache(s string) *bool {
+	switch s {
+	case "on":
+		v := true
+		return &v
+	case "off":
+		v := false
+		return &v
+	default:
+		return nil
+	}
+}

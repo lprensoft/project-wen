@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -159,24 +160,17 @@ func (s *Server) authSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if s.auth.EnvManaged() {
-		writeError(w, http.StatusConflict, "口令由环境变量 "+envPasswordKey+" 提供，无法在界面修改")
-		return
-	}
-	if s.auth.HasPassword() && !s.auth.Verify(req.Current) {
-		writeError(w, http.StatusForbidden, "当前口令不正确")
-		return
-	}
-	if req.New == "" && s.exposed {
-		writeError(w, http.StatusConflict, "服务正在对外监听，清除口令会使它完全开放；请先改回只监听本地")
-		return
-	}
-	if req.New != "" && len(req.New) < 8 {
-		writeError(w, http.StatusBadRequest, "口令至少 8 位")
-		return
-	}
-	if err := s.auth.SetPassword(req.New); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := s.auth.Change(req.Current, req.New, s.exposed); err != nil {
+		switch {
+		case errors.Is(err, ErrWrongCurrent):
+			writeError(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrEnvManaged), errors.Is(err, ErrClearWhileExposed):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, ErrTooShort):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	// 改动口令后让所有已登录会话失效，包括发起这次修改的那个——

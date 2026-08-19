@@ -82,6 +82,23 @@ type Manager struct {
 	statePath string // 运行时开关状态文件（覆盖配置的初始值）
 	entries   map[string]*entry
 	order     []string // 注册顺序（提示词按此序拼接）
+
+	// noInit 表示只登记插件、不初始化它们，见 WithoutInit。
+	noInit bool
+}
+
+// Option 调整 Manager 的行为。
+type Option func(*Manager)
+
+// WithoutInit 让 Manager 只登记插件而绝不调用 Init。
+//
+// 给离线的配置工具用：读 ConfigFields、改开关与参数、写状态文件全都不需要插件
+// 真的跑起来，而照常 Init 会把 QQ 的长连接、心跳与定时任务一并启动——用户只是想
+// 改个参数。校验（NormalizeConfig、依赖与环检测）不依赖 Init，照常生效。
+//
+// 这种 Manager 不可用于服务运行：它的插件从未初始化，工具与提示词都不会正常工作。
+func WithoutInit() Option {
+	return func(m *Manager) { m.noInit = true }
 }
 
 // PluginConfig 来自配置文件 plugins.<name> 段。
@@ -90,8 +107,12 @@ type PluginConfig struct {
 	Config  map[string]any `yaml:"config"`
 }
 
-func NewManager(ictx InitContext, statePath string) *Manager {
-	return &Manager{ictx: ictx, statePath: statePath, entries: map[string]*entry{}}
+func NewManager(ictx InitContext, statePath string, opts ...Option) *Manager {
+	m := &Manager{ictx: ictx, statePath: statePath, entries: map[string]*entry{}}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // validName 限定插件名的取值，因为它会被用来拼持久化目录。
@@ -171,7 +192,7 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 		}
 		e.applyCfg()
 	}
-	if e.enabled {
+	if e.enabled && !m.noInit {
 		if err := p.Init(m.initCtxFor(name), e.cfg); err != nil {
 			e.enabled = false
 			log.Printf("插件 %q 初始化失败，保持禁用: %v", name, err)
@@ -200,7 +221,7 @@ func (m *Manager) SetEnabled(name string, on bool) error {
 			m.mu.Unlock()
 			return err
 		}
-		if !e.inited {
+		if !e.inited && !m.noInit {
 			if err := e.plugin.Init(m.initCtxFor(name), e.cfg); err != nil {
 				m.mu.Unlock()
 				return fmt.Errorf("插件 %q 初始化失败: %w", name, err)
