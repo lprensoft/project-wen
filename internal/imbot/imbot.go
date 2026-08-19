@@ -70,6 +70,14 @@ type Config struct {
 	OnAccepted func(msg Message)
 	// Typing 在跑一轮对话前后调用，供通道发「正在输入」状态。可为 nil。
 	Typing func(ctx context.Context, msg Message, active bool)
+	// Push 是主动推送：没有「本轮入站消息」可回带凭据时把文本发给某个用户。
+	// 返回是否真的交给了平台——微信必须回带该用户最近一次入站消息的
+	// context_token，对方从没说过话时就推不出去，调用方要据此知道这段话没送达。
+	// 为 nil 表示本通道不接受转投。
+	Push func(ctx context.Context, userID, text string) bool
+	// Notice 往会话里留一行只给人看的说明（不进模型上下文），用于报告转投失败
+	// 这类「事情发生在轮次之外、没有回复渠道」的情况。可为 nil。
+	Notice plugin.NoticeFunc
 
 	RunTurn    plugin.RunTurnFunc
 	NewSession plugin.NewSessionFunc
@@ -128,12 +136,14 @@ func New(cfg Config) (*Core, error) {
 // Start 记下生命周期 ctx。worker 是惰性启动的，这里不起 goroutine。
 func (c *Core) Start(ctx context.Context) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	c.mu.Unlock()
+	registerLive(c) // 登记为「活着的通道」，别的通道才能把回复转投过来
 }
 
 // Stop 停掉全部 worker 并等它们退出。可重复调用。
 func (c *Core) Stop() {
+	unregisterLive(c)
 	c.mu.Lock()
 	cancel := c.cancel
 	c.cancel = nil

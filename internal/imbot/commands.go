@@ -60,12 +60,14 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	tctx = plugin.WithConfirmer(tctx, c.confirmerFor(msg))
 	// 按配置转发过程通知：思考链、工具调用（仅名字）。同步发送保证与最终回复的顺序
 	if c.cfg.ShowThinking || c.cfg.ShowTools {
+		// 过程通知与最终回复走同一条出口：装了分通道路由时，思考链跟着回复一起
+		// 转投，否则某一侧人格的思考过程会漏在另一侧的窗口里
 		tctx = plugin.WithTurnNotes(tctx, func(n plugin.TurnNote) {
 			switch {
 			case n.Kind == plugin.NoteThinking && c.cfg.ShowThinking:
-				c.send(ctx, msg, ThinkingLine(n.Text))
+				c.reply(ctx, msg, sid, ThinkingLine(n.Text))
 			case n.Kind == plugin.NoteToolCalls && c.cfg.ShowTools:
-				c.send(ctx, msg, ToolsLine(n.Tools))
+				c.reply(ctx, msg, sid, ToolsLine(n.Tools))
 			}
 		})
 	}
@@ -84,7 +86,38 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	if strings.TrimSpace(final) == "" {
 		final = "（本轮没有文本回复）"
 	}
-	c.send(ctx, msg, final)
+	c.reply(ctx, msg, sid, final)
+}
+
+// reply 把助手这一轮的产出投出去：默认原路回，装了路由且目标是别的通道时转投过去。
+//
+// 转投失败不回落到来源通道。分通道的全部意义就是让某一侧人格的话不出现在另一侧的
+// 窗口里，回落等于把它直接摆过去，还是在人最不设防的时候。失败按丢弃处理，留一行
+// 日志与一条会话注记——话本身仍在会话文件里，Web UI 翻得到。
+//
+// 只用于助手的产出。命令回执、错误提示、确认请求都归来源通道：那是对说话的人的
+// 即时反馈，尤其确认请求的 pending 登记在来源通道的 broker 上，投到别处就没人能答。
+func (c *Core) reply(ctx context.Context, msg Message, sessionID, text string) {
+	target := Target(sessionID)
+	if target == "" || target == c.cfg.PluginName {
+		c.send(ctx, msg, text)
+		return
+	}
+	if Deliver(ctx, target, sessionID, text) {
+		return
+	}
+	log.Printf("%s: 本轮回复该发往 %s，那条通道投不出去，已丢弃", c.cfg.PluginName, target)
+	c.notice(ctx, sessionID, "有一段回复该发往「"+target+"」，但那条通道当时投不出去，没能送达。")
+}
+
+// notice 往会话里留一行只给人看的说明；通道没提供 Notice 就只剩日志。
+func (c *Core) notice(ctx context.Context, sessionID, text string) {
+	if c.cfg.Notice == nil {
+		return
+	}
+	if err := c.cfg.Notice(ctx, sessionID, text); err != nil {
+		log.Printf("%s: 写会话注记失败: %v", c.cfg.PluginName, err)
+	}
 }
 
 // typing 发「正在输入」状态，通道没实现就什么也不做。

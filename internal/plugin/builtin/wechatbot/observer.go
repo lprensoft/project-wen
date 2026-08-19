@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
 
@@ -78,6 +79,16 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	if ev.Origin == "" || ev.Origin == p.Name() {
 		return
 	}
+	// 另一条通道发起的轮次：投递责任归它那一侧的路由，观察者一律不插手。
+	// 没有这一句，两条通道绑在同一会话上时，一边的前台回复会被另一边再推一遍
+	// ——分通道功能正是要让它们绑在同一会话上。
+	if imbot.IsChannel(ev.Origin) {
+		return
+	}
+	// 装了分通道路由时，后台轮次也跟着人格走：不归我服务的会话不推
+	if !imbot.ServedBy(p.Name(), ev.SessionID) {
+		return
+	}
 	if strings.TrimSpace(ev.FinalText) == "" {
 		return
 	}
@@ -99,13 +110,31 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	for _, userID := range users {
 		go func(userID string) {
 			defer p.wg.Done()
-			token := tokens.get(userID)
-			if token == "" {
-				// 该用户还没发过消息（或票据文件丢失），没有可用的 context_token
-				log.Printf("wechat_bot: 无法把后台轮次结果推给 %s：缺少 context_token（对方先发一条消息后即可）", userID)
-				return
-			}
-			p.send(pctx, userID, ev.FinalText, token)
+			pushWith(pctx, p, tokens, userID, ev.FinalText)
 		}(userID)
 	}
+}
+
+// push 主动推送：iLink 发消息必须回带 context_token，主动推送没有「本轮入站消息」
+// 可回带，只能用该用户最近一次入站消息的 token。对方从没说过话时推不出去，如实
+// 报 false——调用方（分通道转投）据此知道这段话没有送达。
+func (p *Plugin) push(ctx context.Context, userID, text string) bool {
+	p.mu.Lock()
+	tokens := p.tokens
+	p.mu.Unlock()
+	return pushWith(ctx, p, tokens, userID, text)
+}
+
+func pushWith(ctx context.Context, p *Plugin, tokens *tokenStore, userID, text string) bool {
+	if tokens == nil {
+		return false
+	}
+	token := tokens.get(userID)
+	if token == "" {
+		// 该用户还没发过消息（或票据文件丢失），没有可用的 context_token
+		log.Printf("wechat_bot: 无法把消息推给 %s：缺少 context_token（对方先发一条消息后即可）", userID)
+		return false
+	}
+	p.send(ctx, userID, text, token)
+	return true
 }

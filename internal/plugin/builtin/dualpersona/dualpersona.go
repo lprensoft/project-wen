@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 )
 
@@ -47,6 +48,11 @@ type Plugin struct {
 	toOuter      []string
 	matchMode    string
 	store        *store
+
+	// 分通道：两个人格各占一条 IM 通道，回复跟着人格走
+	split        bool
+	outerChannel string
+	innerChannel string
 }
 
 func New() *Plugin { return &Plugin{matchMode: defaultMatch} }
@@ -85,6 +91,23 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default:     "",
 		},
 		{
+			Key: "split_channels", Label: "表里人格分通道", Type: plugin.FieldBool,
+			Description: "开启后回复发往当前人格所属的通道，与你从哪条通道说话无关：在 QQ 上说出切换暗号，接手的那一面在微信上回你。需要下面两项各选一条已启用的通道。关闭（默认）时回复一律原路返回。",
+			Default:     false,
+		},
+		{
+			Key: "outer_channel", Label: "表人格所在通道", Type: plugin.FieldSelect,
+			Description: channelDesc("表人格"),
+			Default:     "",
+			Options:     channelOptions(),
+		},
+		{
+			Key: "inner_channel", Label: "里人格所在通道", Type: plugin.FieldSelect,
+			Description: channelDesc("里人格"),
+			Default:     "",
+			Options:     channelOptions(),
+		},
+		{
 			Key: "match_mode", Label: "触发词匹配方式", Type: plugin.FieldSelect,
 			Description: "包含：消息里出现该词即命中；整句相等：整条消息就是该词才命中，更不容易误触发。",
 			Default:     defaultMatch,
@@ -111,7 +134,61 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.toOuter = parseKeywords(plugin.CfgString(cfg, "to_outer", ""))
 	p.matchMode = plugin.CfgString(cfg, "match_mode", defaultMatch)
 	p.store = st
+	p.split = plugin.CfgBool(cfg, "split_channels", false)
+	p.outerChannel = plugin.CfgString(cfg, "outer_channel", "")
+	p.innerChannel = plugin.CfgString(cfg, "inner_channel", "")
+	p.installRouterLocked()
 	return nil
+}
+
+// installRouterLocked 按开关装卸通道路由。两个通道都没选时不装——那种配置下路由
+// 恒答空串，装了也只是让每一轮多绕一次。
+func (p *Plugin) installRouterLocked() {
+	if p.split && (p.outerChannel != "" || p.innerChannel != "") {
+		imbot.SetRouter(p.route)
+		return
+	}
+	imbot.SetRouter(nil)
+}
+
+// Stop 卸掉路由。Manager 在禁用插件、以新配置重新 Init 之前、进程退出时调用；
+// 不卸的话，插件已经关了而各通道还在按最后一次的映射转投。
+func (p *Plugin) Stop() { imbot.SetRouter(nil) }
+
+// route 回答「这个会话的回复该发往哪条通道」。
+//
+// 读的是状态文件里当前的人格，而 DecideScope 在轮次开头就把本轮人格写进去了，
+// 所以说出暗号的那一轮问到的已经是新人格——回复当场就转投过去，正是想要的。
+func (p *Plugin) route(sessionID string) string {
+	s := p.snapshot()
+	if !s.split || s.store == nil {
+		return ""
+	}
+	if s.store.personaFor(sessionID) == personaInner {
+		return s.innerChannel
+	}
+	return s.outerChannel
+}
+
+// channelOptions 列出全部已声明的 IM 通道，未启用的在文案里标出来。
+//
+// 候选取「已声明」而非「已启用」：单选框的取值一旦不在候选里，整份配置就保存不了，
+// 那样临时关掉一条通道会连带让这里的配置失效。
+func channelOptions() []plugin.ConfigOption {
+	opts := []plugin.ConfigOption{{Value: "", Label: "不指定（按原路回复）"}}
+	for _, ch := range imbot.Channels() {
+		label := ch.Label
+		if !ch.Live {
+			label += "（未启用）"
+		}
+		opts = append(opts, plugin.ConfigOption{Value: ch.Name, Label: label})
+	}
+	return opts
+}
+
+func channelDesc(who string) string {
+	return "开启分通道后，" + who + "的回复发到这条通道。选中的通道必须已启用，且你在那边先跟机器人说过话——" +
+		"投递时会把那位用户接到当前会话上（他原先的会话不再是当前会话）。投不出去的那一段回复会被丢弃，只在会话里留一行说明。"
 }
 
 func (p *Plugin) Tools() []plugin.Tool { return nil }
@@ -126,6 +203,9 @@ type settings struct {
 	toOuter      []string
 	matchMode    string
 	store        *store
+	split        bool
+	outerChannel string
+	innerChannel string
 }
 
 func (p *Plugin) snapshot() settings {
@@ -137,6 +217,9 @@ func (p *Plugin) snapshot() settings {
 		toOuter:      p.toOuter,
 		matchMode:    p.matchMode,
 		store:        p.store,
+		split:        p.split,
+		outerChannel: p.outerChannel,
+		innerChannel: p.innerChannel,
 	}
 }
 

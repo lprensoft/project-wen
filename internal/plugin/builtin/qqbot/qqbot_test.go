@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"wen/internal/imbot"
 	"wen/internal/plugin"
 	"wen/internal/session"
 )
@@ -544,5 +545,43 @@ func TestReplyLimiter(t *testing.T) {
 	l.entries["m2"] = &replyEntry{count: 1, first: time.Now().Add(-2 * time.Hour)}
 	if ok, _ := l.next("m2"); ok {
 		t.Fatal("超过 60 分钟应降级")
+	}
+}
+
+// 另一条通道发起的轮次不该被本通道再推一遍。分通道功能会让两条通道绑在同一个
+// 会话上，没有这条判定就是同一段话在两处各发一遍；投递责任归发起那一侧的路由。
+func TestTurnFromAnotherChannelIsNotPushed(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	imbot.Declare("wechat_bot", "微信")
+	if err := p.core.Bind("user1", "sess-x"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{
+		SessionID: "sess-x", Origin: "wechat_bot", FinalText: "另一条通道的回复",
+	})
+	f.expectNoSend(t, 500*time.Millisecond)
+}
+
+// 装了分通道路由时，后台轮次也跟着人格走：不归本通道服务的会话不推。
+func TestBackgroundTurnRespectsRouting(t *testing.T) {
+	p, f, _ := newInited(t, noopTurn, "user1")
+	if err := p.core.Bind("user1", "sess-r"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { imbot.SetRouter(nil) })
+
+	imbot.SetRouter(func(string) string { return "wechat_bot" })
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{
+		SessionID: "sess-r", Origin: "heartbeat", FinalText: "该发去微信",
+	})
+	f.expectNoSend(t, 500*time.Millisecond)
+
+	imbot.SetRouter(func(string) string { return "qq_bot" })
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{
+		SessionID: "sess-r", Origin: "heartbeat", FinalText: "该发来这里",
+	})
+	if m := f.expectSend(t); !strings.Contains(m.content, "该发来这里") {
+		t.Fatalf("目标是本通道时应照常推送: %+v", m)
 	}
 }
