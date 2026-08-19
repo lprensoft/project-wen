@@ -10,6 +10,7 @@ import (
 func (p *Plugin) StatusLines() []string {
 	p.mu.Lock()
 	cur, dynamic, lastBeat := p.cur, p.dynamic, p.lastBeat
+	pausedUntil, curContext := p.pausedUntil, p.curContext
 	p.mu.Unlock()
 
 	if cur <= 0 { // 尚未 Init（理论上不会被问到），没有可报的节奏
@@ -18,6 +19,13 @@ func (p *Plugin) StatusLines() []string {
 	mode := "固定"
 	if dynamic {
 		mode = "动态"
+	}
+	if curContext != "" {
+		mode += " · " + curContext
+	}
+	if until := time.Until(pausedUntil); until > 0 {
+		return []string{fmt.Sprintf("💓 心跳：暂停中，约 %s后恢复（每 %s，%s）",
+			humanDur(until), humanDur(cur), mode)}
 	}
 	return []string{fmt.Sprintf("💓 心跳：每 %s（%s），%s",
 		humanDur(cur), mode, nextBeatDesc(lastBeat.Add(cur)))}
