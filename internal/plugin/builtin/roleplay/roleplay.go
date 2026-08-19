@@ -98,18 +98,18 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "humanize", Label: "启用自然表达规则", Type: plugin.FieldBool,
-			Description: "抑制三段式、否定对举、过渡套话、客套收尾等让中文显得机械的表达。",
+			Description: "抑制「不是…而是…」、先总后分再总结、过渡套话、结尾客套等让中文显得机械的表达。",
 			Default:     defaultHumanize,
 		},
 		{
 			Key: "time_rules", Label: "启用时间一致性约束", Type: plugin.FieldBool,
-			Description: "要求涉及时间的表述与本轮状态中的当前时间一致（而不是沿用历史里出现过的时刻），并把运行环境信息排除在角色自我认知之外。",
+			Description: "说到时间时以当前真实时间为准，不沿用历史里出现过的时刻；运行环境（系统、目录等）不进入角色的自我认知。",
 			Default:     defaultTimeRules,
 		},
 		{
 			Key: "memory_rules", Label: "启用记忆与回想约束", Type: plugin.FieldBool,
-			Description: "引导给生活类记忆标上会淡忘、结论被推翻时修订旧记忆，" +
-				"并要求不去翻历史对话的原文复述细节——记不清就照记不清说。",
+			Description: "让角色像人一样记：生活琐事会随时间淡忘，说法变了就更新旧记忆；" +
+				"回想时只说要点，不逐字复述历史原文，记不清就承认记不清。",
 			Default: defaultMemoryRules,
 		},
 		{
@@ -125,7 +125,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "max_text_bytes", Label: "设定文本上限（字节）", Type: plugin.FieldInt,
-			Description: "角色设定与我的信息的合计上限。它们每轮全额重发且不参与预算裁剪，超出部分会被截断。",
+			Description: "角色设定与我的信息的合计上限。它们每轮都完整发给模型，超出部分截断。",
 			Default:     defaultMaxTextBytes,
 			Min:         plugin.IntPtr(512),
 			Max:         plugin.IntPtr(64 * 1024),

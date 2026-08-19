@@ -84,7 +84,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
 		{
 			Key: "bot_token", Label: "Bot Token", Type: plugin.FieldString, Default: "",
-			Description: "找 @BotFather 用 /newbot 建一个机器人拿到的令牌，形如 123456:ABC-DEF…。仅存于本机的插件状态文件（0600 权限），不入库",
+			Description: "找 @BotFather 用 /newbot 建一个机器人拿到的令牌，形如 123456:ABC-DEF…。只保存在本机，不会上传到任何地方",
 		},
 		{
 			Key: "whitelist", Label: "chat_id 白名单", Type: plugin.FieldText, Default: "",
@@ -113,11 +113,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "开启后把每轮的完整思考链推送到 Telegram；关闭只发最终回复",
+			Description: "把每轮的思考过程也推送过来（可能很长）",
 		},
 		{
 			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "开启后推送调用了哪些工具，只有名字；关闭不推送",
+			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
 		},
 	}
 }

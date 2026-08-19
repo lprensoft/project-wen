@@ -95,8 +95,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
 		{
 			Key: "persona_location", Label: "角色所在的城市", Type: plugin.FieldString,
-			Description: "角色身处的地方，如「杭州」「上海」「Hangzhou」。这是主要的那一个——" +
-				"角色自己那边的天气才会进入它的环境与状态。留空则不注入角色这边的天气。",
+			Description: "角色身处的城市，如「杭州」「上海」「Hangzhou」。" +
+				"角色这边的天气会成为它的环境与状态的一部分。留空则不注入。",
 			Default: "",
 		},
 		{
@@ -109,8 +109,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			// 提示词是模型以第一人称读的，那里的「我」指它自己。与 roleplay 的
 			// 「我的信息」是同一处人称约定。
 			Key: "user_location", Label: "我所在的城市", Type: plugin.FieldString,
-			Description: "两人不在一处时你所在的地方，作为角色知道的一件事（用于关心的方向）。" +
-				"仅在上一项关闭时生效；留空则不注入你这边的天气。",
+			Description: "两人不在一处时你所在的城市，角色会知道你那边的天气。" +
+				"仅在上一项关闭时生效；留空则不注入。",
 			Default: "",
 		},
 		{

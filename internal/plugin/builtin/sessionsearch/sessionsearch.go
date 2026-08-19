@@ -70,12 +70,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Max:         plugin.IntPtr(5000),
 		},
 		{
-			Key:     "max_snippets",
-			Label:   "每个会话最多返回片段数",
-			Type:    plugin.FieldInt,
-			Default: defaultMaxSnippets,
-			Min:     plugin.IntPtr(1),
-			Max:     plugin.IntPtr(20),
+			Key:         "max_snippets",
+			Label:       "每个会话最多返回片段数",
+			Type:        plugin.FieldInt,
+			Description: "同一个会话里命中多处时，最多返回几段原文。",
+			Default:     defaultMaxSnippets,
+			Min:         plugin.IntPtr(1),
+			Max:         plugin.IntPtr(20),
 		},
 		{
 			Key:         "max_bytes",
@@ -90,7 +91,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:   "max_archives",
 			Label: "保留的压缩归档数",
 			Type:  plugin.FieldInt,
-			Description: "会话历史被压缩摘要替换之前先原样归档，检索时一并覆盖；" +
+			Description: "会话历史被压缩摘要替换之前先原样归档，检索时归档也在查找范围内；" +
 				"超出数量时删除最旧的，填 0 表示不归档（被压缩过的会话将只剩摘要可查）。",
 			Default: defaultMaxArchives,
 			Min:     plugin.IntPtr(0),

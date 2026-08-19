@@ -107,23 +107,22 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "dynamic", Label: "动态心跳", Type: plugin.FieldBool, Default: true,
-			Description: "允许模型在对话中自己定下次主动开口的时间（工具 set_heartbeat_interval）或暂停心跳（pause_heartbeat），并在无人聊天时逐步放缓到最慢间隔；关闭则固定按基础间隔，模型也改不动",
+			Description: "允许角色自己定下次主动开口的时间、或暂停一段时间，并在无人聊天时逐步放缓到最慢间隔；关闭则固定按基础间隔，角色也改不动",
 		},
 		{
 			Key: "context_prompts", Label: "情境提示词", Type: plugin.FieldText, Default: "",
-			Description: "按情境覆盖上面的心跳提示词，消除「每次醒来都说同一套」的机械感。每段以「[情境名]」单独起一行，" +
-				"之后的行是该情境下的心跳提示词，可写多段（如 [睡前] [闲聊] [干活]）。模型调整节奏时用 context 参数切换情境，" +
-				"传「默认」切回上面的提示词。留空则始终用上面的提示词。",
+			Description: "按情境给心跳配不同的提示词。每段以「[情境名]」单独起一行，之后的行是该情境的内容，" +
+				"可写多段（如 [睡前] [闲聊] [干活]），由角色自行切换，说「默认」切回上面的提示词。留空则始终用上面的。",
 		},
 		{
 			Key: "min_minutes", Label: "最快间隔（分钟）", Type: plugin.FieldInt,
 			Default: defMinMinutes, Min: plugin.IntPtr(1), Max: plugin.IntPtr(1440),
-			Description: "动态提频的下限",
+			Description: "角色把节奏调快时，最快不超过这个",
 		},
 		{
 			Key: "max_minutes", Label: "最慢间隔（分钟）", Type: plugin.FieldInt,
 			Default: defMaxMinutes, Min: plugin.IntPtr(1), Max: plugin.IntPtr(2880),
-			Description: "动态降频与空闲衰减的上限",
+			Description: "角色调慢、以及无人聊天时自动放缓的上限",
 		},
 	}
 }
