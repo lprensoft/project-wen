@@ -36,6 +36,7 @@ import (
 	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/skills"
+	"wen/internal/plugin/builtin/telegrambot"
 	"wen/internal/plugin/builtin/weather"
 	"wen/internal/plugin/builtin/webfetch"
 	"wen/internal/plugin/builtin/wechatbot"
@@ -278,10 +279,11 @@ var needsSetupPlugins = map[string]bool{
 	"mood":         true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
 	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
 
-	"heartbeat":  true,
-	"skills":     true, // 技能目录是空的，开着只会多两个用不上的工具
-	"qq_bot":     true, // 不填 AppID/AppSecret 没法工作
-	"wechat_bot": true, // 不扫码绑定没法工作
+	"heartbeat":    true,
+	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
+	"qq_bot":       true, // 不填 AppID/AppSecret 没法工作
+	"wechat_bot":   true, // 不扫码绑定没法工作
+	"telegram_bot": true, // 不填 Bot Token 没法工作
 }
 
 // buildPlugins 注册全部内置系统插件，注册顺序即提示词拼接顺序。
@@ -310,7 +312,8 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// 能力判据，落在 [角色设定 · 最高优先级] 之前会被那句「以下设定优先于其它一般性
 		// 指令」一并压过去，成为可读可不读的建议。
 		skills.New(),
-		heartbeat.New(), scheduler.New(), qqbot.New(), wechatbot.New(),
+		heartbeat.New(), scheduler.New(),
+		qqbot.New(), wechatbot.New(), telegrambot.New(),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍

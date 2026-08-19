@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -139,6 +140,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录")
+	}
+	// 目录按约定可能还不存在。收信游标是第一个落盘的东西（比会话绑定还早），
+	// 不先建出来的话首条消息的游标就存不下
+	if err := os.MkdirAll(ictx.StateDir, 0o755); err != nil {
+		return fmt.Errorf("创建状态目录失败: %w", err)
 	}
 	tokens, err := loadTokens(ictx.StateDir)
 	if err != nil {
