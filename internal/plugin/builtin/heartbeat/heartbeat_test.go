@@ -325,7 +325,26 @@ func TestResetClockNeverRewinds(t *testing.T) {
 	}
 }
 
-// 持久化的间隔在重启后生效并按新配置限幅。
+// earnRhythm 让插件处在「动态判定已经把节奏调整成 iv」的状态并落盘，
+// 模拟聊了一阵之后的样子。
+func earnRhythm(t *testing.T, p *Plugin, iv time.Duration) {
+	t.Helper()
+	p.mu.Lock()
+	p.cur = iv
+	p.adjusted = true
+	dir, st := p.snapshotStateLocked()
+	p.mu.Unlock()
+	persistState(dir, st)
+}
+
+func curOf(t *testing.T, p *Plugin) time.Duration {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cur
+}
+
+// 动态判定挣来的节奏在重启后生效并按新配置限幅。
 func TestIntervalPersistence(t *testing.T) {
 	stateDir := t.TempDir()
 	sessDir := t.TempDir()
@@ -335,11 +354,7 @@ func TestIntervalPersistence(t *testing.T) {
 	if err := p.Init(ictx, nil); err != nil {
 		t.Fatal(err)
 	}
-	p.mu.Lock()
-	p.cur = 10 * time.Minute
-	dir, st := p.snapshotStateLocked()
-	p.mu.Unlock()
-	persistState(dir, st)
+	earnRhythm(t, p, 10*time.Minute)
 	p.Stop()
 
 	p2 := New()
@@ -347,11 +362,104 @@ func TestIntervalPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p2.Stop()
-	p2.mu.Lock()
-	cur := p2.cur
-	p2.mu.Unlock()
-	if cur != 10*time.Minute {
+	if cur := curOf(t, p2); cur != 10*time.Minute {
 		t.Fatalf("重启后应恢复持久化间隔 10m，得到 %v", cur)
+	}
+}
+
+// 关掉动态心跳后，间隔必须跟随基础间隔。
+//
+// 回归：状态文件只存了间隔，没存「它是怎么来的」。静态模式下 cur 恒等于 base，
+// 于是落盘的是一份「当时的基础间隔」的副本；下次 Init 又把这份副本读回来盖住新配
+// 的值——用户在设置页把基础间隔从 30 改成 45，心跳照旧 30 分钟一次，且永远改不动。
+func TestStaticIntervalFollowsBase(t *testing.T) {
+	ictx := plugin.InitContext{
+		StateDir: t.TempDir(), Sessions: mustStore(t, t.TempDir()), RunTurn: noTurn,
+	}
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30, "dynamic": false}); err != nil {
+		t.Fatal(err)
+	}
+	p.Stop()
+
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 45, "dynamic": false}); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if cur := curOf(t, p); cur != 45*time.Minute {
+		t.Errorf("静态心跳应跟随基础间隔：cur=%v，want 45m", cur)
+	}
+}
+
+// 开着动态心跳时，改基础间隔不得抹掉已经调整出来的节奏。
+func TestDynamicRhythmSurvivesBaseChange(t *testing.T) {
+	ictx := plugin.InitContext{
+		StateDir: t.TempDir(), Sessions: mustStore(t, t.TempDir()), RunTurn: noTurn,
+	}
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	earnRhythm(t, p, 60*time.Minute)
+	p.Stop()
+
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 45, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if cur := curOf(t, p); cur != 60*time.Minute {
+		t.Errorf("动态节奏应当保住：cur=%v，want 60m", cur)
+	}
+}
+
+// 开着动态心跳但一次都没调整过时，间隔同样跟随基础间隔——
+// 那个持久化值不是节奏，只是上一次基础间隔的副本，没什么可保的。
+func TestUnadjustedIntervalFollowsBase(t *testing.T) {
+	ictx := plugin.InitContext{
+		StateDir: t.TempDir(), Sessions: mustStore(t, t.TempDir()), RunTurn: noTurn,
+	}
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	p.Stop()
+
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 45, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if cur := curOf(t, p); cur != 45*time.Minute {
+		t.Errorf("没挣来过节奏时应跟随基础间隔：cur=%v，want 45m", cur)
+	}
+}
+
+// 关掉动态心跳会把已有节奏丢掉，而不是存着等下次打开时复活：
+// 关掉期间跑的是基础间隔，再打开时该从那里继续。
+func TestDisablingDynamicDropsRhythm(t *testing.T) {
+	ictx := plugin.InitContext{
+		StateDir: t.TempDir(), Sessions: mustStore(t, t.TempDir()), RunTurn: noTurn,
+	}
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	earnRhythm(t, p, 60*time.Minute)
+	p.Stop()
+
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30, "dynamic": false}); err != nil {
+		t.Fatal(err)
+	}
+	p.Stop()
+	if cur := curOf(t, p); cur != 30*time.Minute {
+		t.Fatalf("关掉动态后应跟随基础间隔：cur=%v", cur)
+	}
+
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30, "dynamic": true}); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	if cur := curOf(t, p); cur != 30*time.Minute {
+		t.Errorf("重新打开动态后不该复活旧节奏：cur=%v，want 30m", cur)
 	}
 }
 

@@ -57,6 +57,7 @@ type Plugin struct {
 
 	// 运行状态
 	cur        time.Duration // 当前心跳间隔（持久化到 state.json）
+	adjusted   bool          // cur 是动态判定调整出来的，而非基础间隔的副本
 	lastActive time.Time     // 最近一次真人交互轮次的时间
 	lastBeat   time.Time
 	adjusting  bool // 有一次动态判定在途，避免堆积
@@ -144,7 +145,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	// 间隔与倒计时起点都接着上次：只存间隔是不够的，「每 60 分钟一次」还得知道
 	// 「上次是几点」才推得出下一次
 	st := p.loadStateLocked()
-	p.cur = st.interval(p.base, p.clamp)
+	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.clamp)
 	p.lastActive = p.probeLastActiveLocked()
 	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, time.Now())
 
@@ -180,16 +181,24 @@ func (p *Plugin) Stop() {
 // 不会触发。定时类状态一律记「上一次发生的时刻」而不是「还剩多久」——进程内的
 // 定时器只是执行手段，不是状态载体。
 type state struct {
-	IntervalSeconds int       `json:"interval_seconds"`
-	LastBeat        time.Time `json:"last_beat,omitempty"`
+	IntervalSeconds int `json:"interval_seconds"`
+	// Adjusted 表示上面那个间隔是动态判定**调整出来**的，而不只是当时基础间隔的
+	// 一份副本。少了这一位，两者在文件里长得一模一样，于是「上一次的基础间隔」
+	// 会盖住新配的基础间隔——设置页上那一项就永远改不动了。
+	Adjusted bool      `json:"adjusted,omitempty"`
+	LastBeat time.Time `json:"last_beat,omitempty"`
 }
 
-// interval 返回可用的间隔：持久化值经限幅，缺失或非法时退回基础间隔。
-func (st state) interval(base time.Duration, clamp func(time.Duration) time.Duration) time.Duration {
-	if st.IntervalSeconds <= 0 {
-		return base
+// resolve 定出本次启动的心跳间隔，以及它是不是一个动态判定挣来的节奏。
+//
+// 只有「开着动态心跳」且「确实调整过」时才沿用持久化值——那才是需要跨重启保住的
+// 东西。关掉动态心跳、或者根本没调整过，一律跟随基础间隔：此时没有任何节奏可保，
+// 沿用旧值只会让用户改了基础间隔却看不到变化。
+func (st state) resolve(base time.Duration, dynamic bool, clamp func(time.Duration) time.Duration) (time.Duration, bool) {
+	if !dynamic || !st.Adjusted || st.IntervalSeconds <= 0 {
+		return base, false
 	}
-	return clamp(time.Duration(st.IntervalSeconds) * time.Second)
+	return clamp(time.Duration(st.IntervalSeconds)*time.Second), true
 }
 
 // startupGrace 是重启后补心跳的宽限期。
@@ -239,6 +248,7 @@ func (p *Plugin) loadStateLocked() state {
 func (p *Plugin) snapshotStateLocked() (string, state) {
 	return p.stateDir, state{
 		IntervalSeconds: int(p.cur / time.Second),
+		Adjusted:        p.adjusted,
 		LastBeat:        p.lastBeat,
 	}
 }
