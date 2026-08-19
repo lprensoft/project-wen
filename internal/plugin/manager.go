@@ -389,6 +389,15 @@ func enabledAs[T any](m *Manager) []named[T] {
 	return out
 }
 
+// reversed 返回切片的逆序副本，供按逆注册序征询的回调使用（见 TranslateFailure）。
+func reversed[T any](s []T) []T {
+	out := make([]T, len(s))
+	for i, v := range s {
+		out[len(s)-1-i] = v
+	}
+	return out
+}
+
 // safely 执行一次插件回调，panic 只记日志：单个插件不该连累整轮对话。
 // 从前只有轮次结束的广播做了这层保护，其余回调点各自裸调——同样是插件代码，
 // 没有理由区别对待。
@@ -564,12 +573,15 @@ const failureTextMaxRunes = 500
 
 // TranslateFailure 在一轮对话失败后，给插件一个把失败转成一句面向用户回复的机会。
 //
-// 单所有者：按注册顺序第一个返回非空文本的插件胜出，其余被忽略并记日志——
-// 两个插件各给一句「台词」是无法合并的组合，与 DecideScope 同理。
+// 单所有者：第一个返回非空文本的插件胜出，其余被忽略并记日志——两个插件各给
+// 一句「台词」是无法合并的组合，与 DecideScope 同理。但征询按**逆注册序**进行，
+// 与 DecideScope 相反：提示词注入的约定是靠后注册的片段覆盖靠前的（里人格设定
+// 「优先于上文的角色设定」正是这个语义），一句台词该由最上层的那个声音说出，
+// 所以最后注册的转译者最先拿到机会。
 func (m *Manager) TranslateFailure(ctx context.Context, ev TurnFailure) (string, bool) {
 	var out string
 	owner := ""
-	for _, e := range enabledAs[FailureTranslator](m) {
+	for _, e := range reversed(enabledAs[FailureTranslator](m)) {
 		var (
 			text string
 			ok   bool

@@ -48,6 +48,7 @@ type Plugin struct {
 	toOuter      []string
 	matchMode    string
 	store        *store
+	complete     plugin.CompleteFunc
 
 	// 分通道：两个人格各占一条 IM 通道，回复跟着人格走
 	split        bool
@@ -134,6 +135,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.toOuter = parseKeywords(plugin.CfgString(cfg, "to_outer", ""))
 	p.matchMode = plugin.CfgString(cfg, "match_mode", defaultMatch)
 	p.store = st
+	p.complete = ictx.Complete
 	p.split = plugin.CfgBool(cfg, "split_channels", false)
 	p.outerChannel = plugin.CfgString(cfg, "outer_channel", "")
 	p.innerChannel = plugin.CfgString(cfg, "inner_channel", "")
@@ -203,6 +205,7 @@ type settings struct {
 	toOuter      []string
 	matchMode    string
 	store        *store
+	complete     plugin.CompleteFunc
 	split        bool
 	outerChannel string
 	innerChannel string
@@ -217,6 +220,7 @@ func (p *Plugin) snapshot() settings {
 		toOuter:      p.toOuter,
 		matchMode:    p.matchMode,
 		store:        p.store,
+		complete:     p.complete,
 		split:        p.split,
 		outerChannel: p.outerChannel,
 		innerChannel: p.innerChannel,
