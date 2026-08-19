@@ -118,8 +118,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "max_inject_bytes", Label: "接触记录注入字节上限", Type: plugin.FieldInt,
-			Description: "记录随每轮对话重复发送，因此需要上界。超出时先省略次数只留阶段，再按阶段归并，" +
-				"仍超出则只注明部位数。另注：roleplay 的「【】互动演绎」关闭时本插件基本没有作用对象。",
+			Description: "记录随每轮对话重复发送，因此需要上限。超出时先省略次数只留阶段，再按阶段归并，仍超出则只注明部位数。",
 			Default: defaultMaxInjectBytes,
 			Min:     plugin.IntPtr(256),
 			Max:     plugin.IntPtr(16 * 1024),

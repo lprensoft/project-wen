@@ -70,7 +70,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:         "max_list",
 			Label:       "清单最多列出",
 			Type:        plugin.FieldInt,
-			Description: "常驻清单里最多列出多少个技能。超出的部分不会消失，模型可以用 list_skills 看到完整清单。",
+			Description: "常驻清单里最多列出多少个技能。超出的部分不会消失，模型仍可自行查看完整清单。",
 			Default:     defaultMaxList,
 			Min:         plugin.IntPtr(1),
 			Max:         plugin.IntPtr(200),

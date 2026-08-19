@@ -125,15 +125,15 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 				{Value: formatPlain, Label: "纯文本"},
 			},
 			Description: "markdown：原样发送，由微信的 ClawBot 界面渲染加粗、引用等格式；" +
-				"纯文本：发送前转成可读纯文本（剥标记、引用换｜前缀），供不渲染 markdown 的客户端使用",
+				"纯文本：发送前去掉格式标记，适合不显示格式的客户端",
 		},
 		{
 			Key: "show_thinking", Label: "展示思考过程", Type: plugin.FieldBool, Default: false,
-			Description: "开启后把每轮的完整思考链推送到微信；关闭只发最终回复",
+			Description: "把每轮的思考过程也推送过来（可能很长）",
 		},
 		{
 			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
-			Description: "开启后推送调用了哪些工具，只有名字；关闭不推送",
+			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
 		},
 	}
 }

@@ -165,7 +165,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:         "max_index_entries",
 			Label:       "索引最多列出条数",
 			Type:        plugin.FieldInt,
-			Description: "超出后按最近更新保留，其余可用 list_memories 查看。",
+			Description: "超出后按最近更新保留，其余模型仍可自行查看，不会丢失。",
 			Default:     defaultMaxIndexEntries,
 			Min:         plugin.IntPtr(0),
 			Max:         plugin.IntPtr(2000),
@@ -174,7 +174,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:   "max_index_bytes",
 			Label: "索引最大字节数",
 			Type:  plugin.FieldInt,
-			Description: "索引会随每一轮对话重复发送，因此需要上界。" +
+			Description: "索引会随每一轮对话重复发送，因此需要上限。" +
 				"超出时先省略各条的摘要只保留标题，仍超出才截断。",
 			Default: defaultMaxIndexBytes,
 			Min:     plugin.IntPtr(0),
@@ -194,7 +194,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Label: "压缩时自动提炼记忆",
 			Type:  plugin.FieldBool,
 			Description: "会话历史被压缩摘要替换之前，用一次独立的模型调用从其中提炼值得长期保留的结论。" +
-				"关闭后只能靠模型在对话中主动调用 save_memory。每次压缩会因此多一次模型调用。",
+				"关闭后只有角色自己想起来才会保存记忆。每次压缩会因此多一次模型调用。",
 			Default: defaultAutoExtract,
 		},
 		{
@@ -255,7 +255,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key:         "decay_blur_days",
 			Label:       "细节淡忘天数",
 			Type:        plugin.FieldInt,
-			Description: "一条会淡忘的记忆多少天没有被提及后，正文塌缩成摘要只留要点。",
+			Description: "一条会淡忘的记忆多少天没有被提及后，细节丢失，只剩一句要点。",
 			Default:     defaultBlurDays,
 			Min:         plugin.IntPtr(1),
 			Max:         plugin.IntPtr(3650),

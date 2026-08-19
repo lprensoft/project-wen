@@ -93,7 +93,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "split_channels", Label: "表里人格分通道", Type: plugin.FieldBool,
-			Description: "开启后回复发往当前人格所属的通道，与你从哪条通道说话无关：在 QQ 上说出切换暗号，接手的那一面在微信上回你。需要下面两项各选一条已启用的通道。关闭（默认）时回复一律原路返回。",
+			Description: "开启后回复发往当前人格所属的通道，与你从哪条通道说话无关：在 QQ 上说出切换暗号，接手的那一面在微信上回你。需要下面两项各选一条已启用的通道。关闭时回复一律原路返回。",
 			Default:     false,
 		},
 		{
@@ -189,8 +189,8 @@ func channelOptions() []plugin.ConfigOption {
 }
 
 func channelDesc(who string) string {
-	return "开启分通道后，" + who + "的回复发到这条通道。选中的通道必须已启用，且你在那边先跟机器人说过话——" +
-		"投递时会把那位用户接到当前会话上（他原先的会话不再是当前会话）。投不出去的那一段回复会被丢弃，只在会话里留一行说明。"
+	return "开启分通道后，" + who + "的回复发到这条通道。需选一条已启用的通道，且你在那边先跟机器人说过话。" +
+		"发不出去的回复会被丢弃，会话里会留一行说明。"
 }
 
 func (p *Plugin) Tools() []plugin.Tool { return nil }

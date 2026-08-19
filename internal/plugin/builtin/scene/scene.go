@@ -61,14 +61,14 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "max_scenes", Label: "注入的场景条数上限", Type: plugin.FieldInt,
-			Description: "超出后按最近更新保留，其余可用 list_scenes 查看。",
+			Description: "超出后按最近更新保留，其余模型仍可自行查看，不会丢失。",
 			Default:     defaultMaxScenes,
 			Min:         plugin.IntPtr(0),
 			Max:         plugin.IntPtr(500),
 		},
 		{
 			Key: "max_inject_bytes", Label: "场景记忆注入字节上限", Type: plugin.FieldInt,
-			Description: "场景记忆随每轮对话重复发送，因此需要上界。" +
+			Description: "场景记忆随每轮对话重复发送，因此需要上限。" +
 				"超出时先省略描述只留名称，仍超出则只注明条数。",
 			Default: defaultMaxInjectBytes,
 			Min:     plugin.IntPtr(512),
