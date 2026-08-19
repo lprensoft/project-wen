@@ -31,7 +31,8 @@ const (
 const defaultPrompt = `【心跳】这是一次定时唤醒，当前没有新的用户消息。请回顾本会话的进展：
 - 若有未完成的任务、值得跟进的事项或需要主动提醒用户的内容，直接说给用户听；
 - 若确实无事可说，用一句简短的话表明你还在即可，不要编造进展。
-若你判断下次该早些或晚些再开口，用 set_heartbeat_interval 定下时间。`
+若你判断下次该早些或晚些再开口，用 set_heartbeat_interval 定下时间；
+对方要去睡或长时间离开时，用 pause_heartbeat 暂停到合适的时候再醒。`
 
 // beatTimeout 是单次心跳轮次的时长上限。
 const beatTimeout = 10 * time.Minute
@@ -45,11 +46,12 @@ type Plugin struct {
 	mu sync.Mutex
 
 	// 配置（Init 写入）
-	base    time.Duration
-	minIv   time.Duration
-	maxIv   time.Duration
-	prompt  string
-	dynamic bool
+	base     time.Duration
+	minIv    time.Duration
+	maxIv    time.Duration
+	prompt   string
+	dynamic  bool
+	contexts map[string]string // 情境名 → 覆盖用的心跳提示词
 
 	// 能力与路径（Init 写入）
 	stateDir   string
@@ -58,10 +60,13 @@ type Plugin struct {
 	sessions   plugin.SessionQuery // 只读：挑选最近活跃的会话
 
 	// 运行状态
-	cur        time.Duration // 当前心跳间隔（持久化到 state.json）
-	adjusted   bool          // cur 是动态判定调整出来的，而非基础间隔的副本
-	lastActive time.Time     // 最近一次真人交互轮次的时间
-	lastBeat   time.Time
+	cur         time.Duration // 当前心跳间隔（持久化到 state.json）
+	adjusted    bool          // cur 是动态判定调整出来的，而非基础间隔的副本
+	lastActive  time.Time     // 最近一次真人交互轮次的时间
+	lastBeat    time.Time
+	curContext  string    // 当前情境（模型经工具切换，持久化）
+	pausedUntil time.Time // 暂停到某时刻（模型经工具设定；真人一说话即清除）
+	pausedAt    time.Time // 暂停设于何时（重启后判断暂停是否仍有效要用）
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -84,7 +89,9 @@ func (p *Plugin) SystemPrompt() string { return "" }
 // Tools 一律返回工具，不按「动态心跳」开关增减：Tools 在插件注册时就会被调用
 // （那时还没 Init），按运行期状态增减会让工具名的冲突检查看到一张空表。
 // 关掉动态心跳时由工具自己拒绝并说明理由。
-func (p *Plugin) Tools() []plugin.Tool { return []plugin.Tool{&setIntervalTool{p: p}} }
+func (p *Plugin) Tools() []plugin.Tool {
+	return []plugin.Tool{&setIntervalTool{p: p}, &pauseTool{p: p}}
+}
 
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	return []plugin.ConfigField{
@@ -100,7 +107,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "dynamic", Label: "动态心跳", Type: plugin.FieldBool, Default: true,
-			Description: "允许模型在对话中自己定下次主动开口的时间（工具 set_heartbeat_interval），并在无人聊天时逐步放缓到最慢间隔；关闭则固定按基础间隔，模型也改不动",
+			Description: "允许模型在对话中自己定下次主动开口的时间（工具 set_heartbeat_interval）或暂停心跳（pause_heartbeat），并在无人聊天时逐步放缓到最慢间隔；关闭则固定按基础间隔，模型也改不动",
+		},
+		{
+			Key: "context_prompts", Label: "情境提示词", Type: plugin.FieldText, Default: "",
+			Description: "按情境覆盖上面的心跳提示词，消除「每次醒来都说同一套」的机械感。每段以「[情境名]」单独起一行，" +
+				"之后的行是该情境下的心跳提示词，可写多段（如 [睡前] [闲聊] [干活]）。模型调整节奏时用 context 参数切换情境，" +
+				"传「默认」切回上面的提示词。留空则始终用上面的提示词。",
 		},
 		{
 			Key: "min_minutes", Label: "最快间隔（分钟）", Type: plugin.FieldInt,
@@ -140,6 +153,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.base, p.minIv, p.maxIv = base, minIv, maxIv
 	p.prompt = plugin.CfgString(cfg, "prompt", defaultPrompt)
 	p.dynamic = plugin.CfgBool(cfg, "dynamic", true)
+	p.contexts = parseContexts(cfgRawText(cfg, "context_prompts"))
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession
@@ -151,6 +165,19 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.cur, p.adjusted = st.resolve(p.base, p.dynamic, p.normalize)
 	p.lastActive = p.probeLastActiveLocked()
 	p.lastBeat = p.resumeLastBeat(st.LastBeat, p.lastActive, time.Now())
+	// 情境跟着状态走；配置里已经删掉的情境名不保留，否则 beat 会去查一个不存在的键
+	if _, ok := p.contexts[st.Context]; ok {
+		p.curContext = st.Context
+	} else {
+		p.curContext = ""
+	}
+	// 暂停同属动态节奏：关掉动态心跳就没有「模型定的暂停」可言。
+	// 设下暂停之后真人说过话的话，说话那刻已把暂停清掉——重启不该让它复活，
+	// 所以要对照「暂停设于何时」而不能只看「暂停到何时」。
+	p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
+	if p.dynamic && st.PausedUntil.After(time.Now()) && !p.lastActive.After(st.PausedAt) {
+		p.pausedUntil, p.pausedAt = st.PausedUntil, st.PausedAt
+	}
 
 	// 起点当场落盘，别等第一次心跳才写：否则「启用后还没跳过一次就重启」这一段
 	// 时间里状态文件仍是空的，倒计时又会从头开始。persistState 不碰 p.mu，
@@ -190,6 +217,12 @@ type state struct {
 	// 会盖住新配的基础间隔——设置页上那一项就永远改不动了。
 	Adjusted bool      `json:"adjusted,omitempty"`
 	LastBeat time.Time `json:"last_beat,omitempty"`
+	// Context 是模型切到的情境（对应配置里的情境提示词名）。
+	Context string `json:"context,omitempty"`
+	// PausedUntil / PausedAt：暂停到何时、设于何时。要恢复暂停必须两个都看——
+	// 设下之后真人说过话的话暂停已被清除，只看「到何时」会让它跨重启复活。
+	PausedUntil time.Time `json:"paused_until,omitempty"`
+	PausedAt    time.Time `json:"paused_at,omitempty"`
 }
 
 // resolve 定出本次启动的心跳间隔，以及它是不是一个动态判定挣来的节奏。
@@ -253,6 +286,9 @@ func (p *Plugin) snapshotStateLocked() (string, state) {
 		IntervalSeconds: int(p.cur / time.Second),
 		Adjusted:        p.adjusted,
 		LastBeat:        p.lastBeat,
+		Context:         p.curContext,
+		PausedUntil:     p.pausedUntil,
+		PausedAt:        p.pausedAt,
 	}
 }
 

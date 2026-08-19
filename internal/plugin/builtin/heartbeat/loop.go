@@ -19,7 +19,7 @@ func (p *Plugin) loop(ctx context.Context) {
 
 	for {
 		p.mu.Lock()
-		next := p.lastBeat.Add(p.cur)
+		next := p.nextBeatLocked()
 		p.mu.Unlock()
 
 		timer := time.NewTimer(time.Until(next)) // 已过期时零延时触发
@@ -36,6 +36,16 @@ func (p *Plugin) loop(ctx context.Context) {
 			p.beat(ctx)
 		}
 	}
+}
+
+// nextBeatLocked 推算下一次心跳时刻：常规是「上次心跳 + 当前间隔」，暂停把它
+// 压后到暂停结束——暂停不改间隔本身，到点后按原节奏继续。调用方需持有 p.mu。
+func (p *Plugin) nextBeatLocked() time.Time {
+	next := p.lastBeat.Add(p.cur)
+	if p.pausedUntil.After(next) {
+		return p.pausedUntil
+	}
+	return next
 }
 
 // resetClockLocked 把心跳倒计时的起点推到 at，并唤醒循环重算下一次心跳时刻。
@@ -60,7 +70,7 @@ func (p *Plugin) resetClockLocked(at time.Time) {
 func (p *Plugin) beat(ctx context.Context) {
 	p.mu.Lock()
 	p.lastBeat = time.Now()
-	runTurn, prompt := p.runTurn, p.prompt
+	runTurn, prompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
 
@@ -76,7 +86,7 @@ func (p *Plugin) beat(ctx context.Context) {
 	defer cancel()
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
 	tctx = plugin.WithEphemeralInput(tctx)
-	if _, err := runTurn(tctx, sid, gapNote(prompt, lastActive, time.Now())); err != nil {
+	if _, err := runTurn(tctx, sid, gapNote(prompt, lastActive, time.Now(), cur)); err != nil {
 		if errors.Is(err, plugin.ErrSessionBusy) {
 			log.Printf("heartbeat: 会话 %s 忙，本次心跳跳过", sid)
 		} else if ctx.Err() == nil { // 停止时的取消错误不值得记
@@ -107,6 +117,14 @@ func (p *Plugin) pickSession() (string, time.Time, error) {
 	return sid, time.Time{}, err // 刚建的会话没有“上次对话”可言
 }
 
+// coldWakeNote 是冷唤醒的重定向提示。间隔一长，会话里最后的话题早已过时，
+// 顺着上文接话只会显得没睡醒；先回顾再开口才接得自然。
+const coldWakeNote = "距上次对话已久：先回顾已保存的记忆与最近经历，再决定要不要开口、说什么，不要顺着久远的上文接话。"
+
+// coldWakeAfter 是冷唤醒的最低门槛；实际门槛取它与三个当前间隔中的较大者——
+// 心跳本来就以天计的人，半天不算「久」。
+const coldWakeAfter = 12 * time.Hour
+
 // gapNote 在心跳提示词末尾附上距上次真人对话的时长。
 //
 // 模型能从环境块知道“现在几点”，却无从得知“上一条消息是什么时候”——历史消息
@@ -114,8 +132,8 @@ func (p *Plugin) pickSession() (string, time.Time, error) {
 // 没聊了”这类写死的模糊措辞，而刚聊完五分钟与隔了一夜显然该说不同的话。
 //
 // 时间未知或不足一分钟时不附：“未知”只是噪声，而刚聊完就心跳本就不应发生（真人
-// 轮次会重置心跳时钟）。
-func gapNote(prompt string, lastActive, now time.Time) string {
+// 轮次会重置心跳时钟）。间隔超过冷唤醒门槛时另附一句重定向提示。
+func gapNote(prompt string, lastActive, now time.Time, cur time.Duration) string {
 	if lastActive.IsZero() {
 		return prompt
 	}
@@ -123,7 +141,11 @@ func gapNote(prompt string, lastActive, now time.Time) string {
 	if gap < time.Minute {
 		return prompt
 	}
-	return prompt + "\n\n【距上次对话】" + humanDur(gap)
+	out := prompt + "\n\n【距上次对话】" + humanDur(gap)
+	if gap >= max(coldWakeAfter, 3*cur) {
+		out += "\n" + coldWakeNote
+	}
+	return out
 }
 
 // maybeDecay 空闲衰减：距最近真人交互超过一个当前间隔时，把间隔放缓一档（×1.5），
@@ -161,9 +183,22 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.lastActive = ev.EndedAt
 	// 真人刚聊完，心跳倒计时从此刻重新开始：心跳是「没人说话时才主动开口」的机制，
 	// 聊天途中插进来的心跳既打断对话，也让间隔配置失去意义。
 	p.resetClockLocked(ev.EndedAt)
+	// 人来说话就是醒了：暂停即刻作废。清除要落盘（否则重启后暂停复活），但只在
+	// 确实有暂停要清时才写——本方法在轮次收尾的同步路径上，不为每轮都付一次写盘。
+	persist := false
+	var dir string
+	var st state
+	if !p.pausedUntil.IsZero() {
+		p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
+		dir, st = p.snapshotStateLocked()
+		persist = true
+	}
+	p.mu.Unlock()
+	if persist {
+		persistState(dir, st)
+	}
 }
