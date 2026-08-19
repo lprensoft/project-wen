@@ -55,6 +55,7 @@ type Plugin struct {
 	refresh    time.Duration
 	stale      time.Duration
 	client     *http.Client
+	stateDir   string // 观测缓存的落盘位置；为空表示无处可存，退化成纯内存缓存
 
 	// 后台刷新循环。Init 可重入，每次先停旧的再起新的。
 	cancel context.CancelFunc
@@ -134,7 +135,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 // Init 应用配置并（重）启动后台刷新循环。可重入：先停掉上一轮循环。
 //
 // 这里不发网络请求：启动时断网不该让插件启用失败，取不到就是没有天气可注入而已。
-func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
+func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	personaLoc, userLoc, sameCity := normalizeLocations(cfg)
 
 	refreshMin := plugin.CfgInt(cfg, "refresh_minutes", defaultRefreshMinutes)
@@ -161,8 +162,14 @@ func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
 	}
 	p.dataMu.Unlock()
 
+	// 装回上次的观测：重启不该产生空窗，也不该白烧一次 API 调用。
+	// StateDir 为空时退化成纯内存缓存——天气不落盘也能工作，只是失去跨重启的连续性，
+	// 不值得为此拒绝启用。
+	p.loadInto(ictx.StateDir, wanted)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.stateDir = ictx.StateDir
 	p.personaLoc, p.userLoc, p.sameCity = personaLoc, userLoc, sameCity
 	p.refresh = time.Duration(refreshMin) * time.Minute
 	p.stale = time.Duration(staleMin) * time.Minute
@@ -176,7 +183,7 @@ func (p *Plugin) Init(_ plugin.InitContext, cfg map[string]any) error {
 	var ctx context.Context
 	ctx, p.cancel = context.WithCancel(context.Background())
 	p.wg.Add(1)
-	go p.loop(ctx, p.client, wanted, p.refresh)
+	go p.loop(ctx, p.client, wanted, p.refresh, p.stateDir)
 	return nil
 }
 
@@ -284,10 +291,22 @@ func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, erro
 
 // ---------- 后台刷新 ----------
 
-func (p *Plugin) loop(ctx context.Context, client *http.Client, locs []string, refresh time.Duration) {
+func (p *Plugin) loop(ctx context.Context, client *http.Client, locs []string, refresh time.Duration, dir string) {
 	defer p.wg.Done()
 
+	// 首次刷新的时机由上次观测推算：缓存还新鲜就等到该刷新的时刻，
+	// 没有缓存（首次启用，或刚换了城市）则立刻取。
+	// 只有第一次这样算，其后是普通的定时器——否则某处地点持续取不到时，
+	// 「早就该刷新了」会让循环空转。
+	first := time.NewTimer(p.untilRefresh(locs, refresh, time.Now()))
+	select {
+	case <-ctx.Done():
+		first.Stop()
+		return
+	case <-first.C:
+	}
 	p.refreshAll(ctx, client, locs)
+	p.save(dir)
 
 	t := time.NewTicker(refresh)
 	defer t.Stop()
@@ -297,6 +316,7 @@ func (p *Plugin) loop(ctx context.Context, client *http.Client, locs []string, r
 			return
 		case <-t.C:
 			p.refreshAll(ctx, client, locs)
+			p.save(dir)
 		}
 	}
 }
