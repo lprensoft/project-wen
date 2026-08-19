@@ -3,8 +3,11 @@ package weather
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"wen/internal/plugin"
 )
 
 func writeFile(path, content string) error {
@@ -98,13 +101,17 @@ func TestLoadRejectsUndatedReport(t *testing.T) {
 	}
 }
 
-// 没有可用的持久化目录时退化成纯内存缓存，不该报错也不该乱写文件。
-func TestNoStateDirDegradesQuietly(t *testing.T) {
-	p := withObs(t, "杭州", time.Now())
-	p.save("") // 不 panic、不写盘
-	p.loadInto("", []string{"杭州"})
-	if _, ok := p.fresh("杭州", 30*time.Minute, time.Now()); !ok {
-		t.Error("内存缓存不该受影响")
+// 拿不到持久化目录时拒绝启用，与其余需要落盘的插件一致（见 CLAUDE.md 的持久化约定）。
+// 真实程序里 StateDir 永远由 Manager 给出，这条守的是约定本身：
+// 破一个例，下一个插件就不知道该照谁写。
+func TestInitRequiresStateDir(t *testing.T) {
+	p := New()
+	err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "杭州"})
+	if err == nil {
+		t.Fatal("没有持久化目录时应拒绝启用")
+	}
+	if !strings.Contains(err.Error(), "持久化目录") {
+		t.Errorf("错误信息应说明缺的是什么: %v", err)
 	}
 }
 

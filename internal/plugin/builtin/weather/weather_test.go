@@ -101,7 +101,7 @@ func TestWantedLocationsDedups(t *testing.T) {
 func TestInitRejectsStaleShorterThanRefresh(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	err := p.Init(plugin.InitContext{}, map[string]any{
+	err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "refresh_minutes": 60, "stale_minutes": 30,
 	})
 	if err == nil {
@@ -133,7 +133,7 @@ func TestConfigDefaults(t *testing.T) {
 func TestNoLocationInjectsNothing(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "", "user_location": ""}); err != nil {
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"persona_location": "", "user_location": ""}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if got := p.SystemPrompt(); got != "" {
@@ -149,7 +149,7 @@ func TestSystemPromptWithLocation(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "杭州"}); err != nil {
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"persona_location": "杭州"}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	prompt := p.SystemPrompt()
@@ -167,7 +167,7 @@ func TestSystemPromptWithLocation(t *testing.T) {
 func TestTurnPromptSameCity(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": true, "stale_minutes": 60,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -190,7 +190,7 @@ func TestTurnPromptSameCity(t *testing.T) {
 func TestTurnPromptTwoCities(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": false, "user_location": "上海", "stale_minutes": 60,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -216,7 +216,7 @@ func TestTurnPromptTwoCities(t *testing.T) {
 func TestTurnPromptOneSideStale(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": false, "user_location": "上海", "stale_minutes": 60,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -237,7 +237,7 @@ func TestTurnPromptOneSideStale(t *testing.T) {
 func TestTurnPromptAllStaleInjectsNothing(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "stale_minutes": 60,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -305,7 +305,7 @@ func TestInitIsReentrant(t *testing.T) {
 	p := New()
 	defer p.Stop()
 	for i := 0; i < 3; i++ {
-		if err := p.Init(plugin.InitContext{}, map[string]any{"persona_location": "杭州"}); err != nil {
+		if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{"persona_location": "杭州"}); err != nil {
 			t.Fatalf("第 %d 次 Init: %v", i, err)
 		}
 	}
@@ -317,7 +317,7 @@ func TestInitIsReentrant(t *testing.T) {
 func TestInitKeepsCacheForStillWantedCities(t *testing.T) {
 	p := New()
 	defer p.Stop()
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": false, "user_location": "上海",
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -327,7 +327,7 @@ func TestInitKeepsCacheForStillWantedCities(t *testing.T) {
 	setObs(p, "上海", report("上海", "阴", 27, 0))
 
 	// 改成同城：上海不再需要
-	if err := p.Init(plugin.InitContext{}, map[string]any{
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
 		"persona_location": "杭州", "same_city": true,
 	}); err != nil {
 		t.Fatalf("Init: %v", err)
