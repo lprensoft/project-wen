@@ -25,6 +25,7 @@ const (
 	defaultHumanize    = true
 	defaultTimeRules   = true
 	defaultMemoryRules = true
+	defaultBoundaries  = true
 	// defaultMaxTextBytes 限制角色设定与用户信息的合计长度。这些内容每轮随 system
 	// 消息全额重发、且不参与预算裁剪，还计入自动压缩判据，必须有硬上限。
 	defaultMaxTextBytes = 8 * 1024
@@ -40,6 +41,7 @@ type Plugin struct {
 	humanize          bool
 	timeRules         bool
 	memoryRules       bool
+	boundaries        bool
 	maxTextBytes      int
 	translateFailures bool
 	failureLine       string
@@ -52,6 +54,7 @@ func New() *Plugin {
 		humanize:          defaultHumanize,
 		timeRules:         defaultTimeRules,
 		memoryRules:       defaultMemoryRules,
+		boundaries:        defaultBoundaries,
 		maxTextBytes:      defaultMaxTextBytes,
 		translateFailures: defaultTranslateFailures,
 		failureLine:       defaultFailureLine,
@@ -86,6 +89,12 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key: "interaction", Label: "启用【】互动演绎", Type: plugin.FieldBool,
 			Description: "每次回复先以【】写场景、动作与表情，再说话；一轮中可多次出现。",
 			Default:     defaultInteraction,
+		},
+		{
+			Key: "boundaries", Label: "启用边界表达", Type: plugin.FieldBool,
+			Description: "角色可以以自己的身份表达不愿意：轻则带开话头，再则说出感受请求停顿，" +
+				"极限处直接拒绝——全部第一人称、从感受出发。边界划在哪里由角色设定与演绎决定。",
+			Default: defaultBoundaries,
 		},
 		{
 			Key: "humanize", Label: "启用自然表达规则", Type: plugin.FieldBool,
@@ -137,6 +146,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.humanize = plugin.CfgBool(cfg, "humanize", defaultHumanize)
 	p.timeRules = plugin.CfgBool(cfg, "time_rules", defaultTimeRules)
 	p.memoryRules = plugin.CfgBool(cfg, "memory_rules", defaultMemoryRules)
+	p.boundaries = plugin.CfgBool(cfg, "boundaries", defaultBoundaries)
 	p.maxTextBytes = limit
 	p.translateFailures = plugin.CfgBool(cfg, "translate_failures", defaultTranslateFailures)
 	p.failureLine = strings.TrimSpace(plugin.CfgString(cfg, "failure_line", defaultFailureLine))
@@ -154,6 +164,7 @@ type settings struct {
 	humanize          bool
 	timeRules         bool
 	memoryRules       bool
+	boundaries        bool
 	translateFailures bool
 	failureLine       string
 	complete          plugin.CompleteFunc
@@ -170,6 +181,7 @@ func (p *Plugin) snapshot() settings {
 		humanize:          p.humanize,
 		timeRules:         p.timeRules,
 		memoryRules:       p.memoryRules,
+		boundaries:        p.boundaries,
 		translateFailures: p.translateFailures,
 		failureLine:       p.failureLine,
 		complete:          p.complete,
@@ -193,6 +205,9 @@ func (p *Plugin) SystemPrompt() string {
 		if s.persona != "" && s.userProfile != "" {
 			parts = append(parts, heightRules)
 		}
+	}
+	if s.boundaries {
+		parts = append(parts, boundaryRules)
 	}
 	if s.humanize {
 		parts = append(parts, humanizeRules)
