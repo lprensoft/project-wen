@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/mattn/go-runewidth"
 
 	"wen/internal/plugin"
 )
@@ -23,11 +24,12 @@ func pluginsSection(b backend) error {
 		if len(list) > 0 {
 			choice = list[0].Name
 		}
+		opts := pluginOptions(list)
 		if err := run(huh.NewSelect[string]().
 			Title("插件").
-			Description(b.mode()).
-			Height(20).
-			Options(pluginOptions(list)...).
+			Description(fit(b.mode())).
+			Height(listHeight(len(opts))).
+			Options(opts...).
 			Value(&choice)); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {
 				return nil
@@ -64,27 +66,33 @@ func pluginOptions(list []plugin.Status) []huh.Option[string] {
 		byCat[cat] = append(byCat[cat], p)
 	}
 
-	width := 0
+	// 名字与分组各自对齐成一列，描述占剩下的宽度并按需截断——
+	// 完整描述在插件详情那一屏里给（见 pluginHint），列表这里只求一眼扫过去
+	nameW, catW := 0, 0
 	for _, p := range list {
-		width = max(width, len([]rune(p.Name)))
+		nameW = max(nameW, runewidth.StringWidth(p.Name))
+	}
+	for _, cat := range order {
+		catW = max(catW, runewidth.StringWidth("【"+cat+"】"))
 	}
 
-	opts := make([]huh.Option[string], 0, len(list)+len(order)+1)
+	opts := make([]huh.Option[string], 0, len(list)+1)
 	for _, cat := range order {
 		for i, p := range byCat[cat] {
 			mark := "○"
 			if p.Enabled {
 				mark = "●"
 			}
-			group := "  "
+			group := ""
 			if i == 0 {
 				group = "【" + cat + "】"
 			}
-			label := fmt.Sprintf("%s %s %-*s  %s", group, mark, width, p.Name, p.Description)
+			desc := p.Description
 			if len(p.Unmet) > 0 {
-				label += fmt.Sprintf("（需先启用 %s）", strings.Join(p.Unmet, "、"))
+				desc = "（需先启用 " + strings.Join(p.Unmet, "、") + "）" + desc
 			}
-			opts = append(opts, huh.NewOption(label, p.Name))
+			label := fmt.Sprintf("%s %s %s  %s", pad(group, catW), mark, pad(p.Name, nameW), desc)
+			opts = append(opts, huh.NewOption(fit(label), p.Name))
 		}
 	}
 	return append(opts, huh.NewOption("← 返回", back))

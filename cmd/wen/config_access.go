@@ -33,7 +33,7 @@ func accessSection(b backend) error {
 		choice := opts[0].Value // 光标停在第一项，见 topMenu 的说明
 		if err := run(huh.NewSelect[string]().
 			Title("访问控制").
-			Description(describeAuth(st) + "\n口令存于 <配置目录>/auth.json，不写入 config.yaml。").
+			Description(fitLines(describeAuth(st) + "\n口令存于 <配置目录>/auth.json，不写入 config.yaml。")).
 			Options(opts...).
 			Value(&choice)); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {

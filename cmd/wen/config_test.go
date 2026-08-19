@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-runewidth"
+
 	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 )
@@ -165,5 +167,70 @@ func TestOnlineBackendRequests(t *testing.T) {
 	err := b.setPluginConfig("broken", map[string]any{"上限": "99"})
 	if err == nil || !strings.Contains(err.Error(), "不能大于 10") {
 		t.Errorf("错误未原样交出: %v", err)
+	}
+}
+
+// 列表项必须严格占一行：huh 的视口按行算高度，一旦某项折行，光标往下挪一格
+// 就会滚动好几行，表现为「刚进来按一下方向键，第一项就没了」。
+func TestPluginOptionsFitOneLine(t *testing.T) {
+	list := []plugin.Status{
+		{Name: "read_file", Category: "基础工具", Enabled: true,
+			Description: "读取本地文本文件内容"},
+		{Name: "exec_command", Category: "基础工具", Enabled: true,
+			Description: "在工作目录下执行 shell 命令，危险操作先由用户确认"},
+		{Name: "dual_persona", Category: "角色演绎", Enabled: false,
+			Description: "表里两套人格：里人格的对话与记忆对表人格不可见，由触发词在两者之间切换",
+			Unmet:       []string{"roleplay"}},
+	}
+
+	opts := pluginOptions(list)
+	if len(opts) != len(list)+1 { // 末尾是「← 返回」
+		t.Fatalf("选项数 = %d, want %d", len(opts), len(list)+1)
+	}
+
+	limit := labelWidth()
+	for _, o := range opts {
+		if strings.Contains(o.Key, "\n") {
+			t.Errorf("选项含换行: %q", o.Key)
+		}
+		if w := runewidth.StringWidth(o.Key); w > limit {
+			t.Errorf("选项宽 %d 列，超过上限 %d: %q", w, limit, o.Key)
+		}
+	}
+
+	// 插件名要对齐成一列：同组内两项的名字应从同一列开始
+	first, second := opts[0].Key, opts[1].Key
+	if runewidth.StringWidth(first[:strings.Index(first, "read_file")]) !=
+		runewidth.StringWidth(second[:strings.Index(second, "exec_command")]) {
+		t.Errorf("插件名未对齐:\n  %q\n  %q", first, second)
+	}
+
+	// 依赖未满足要在列表里就看得见，不必进详情才知道为什么开不起来
+	if !strings.Contains(opts[2].Key, "roleplay") {
+		t.Errorf("未提示未满足的依赖: %q", opts[2].Key)
+	}
+}
+
+func TestFitTruncatesByDisplayWidth(t *testing.T) {
+	long := strings.Repeat("中文", 200)
+	got := fit(long)
+	if w := runewidth.StringWidth(got); w > labelWidth() {
+		t.Errorf("截断后仍宽 %d 列，上限 %d", w, labelWidth())
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Error("截断后应以省略号收尾")
+	}
+	if short := fit("短"); short != "短" {
+		t.Errorf("未超宽的文本被改动了: %q", short)
+	}
+}
+
+// 装得下就不该滚动——滚动正是问题的来源。
+func TestListHeightDoesNotScrollWhenItFits(t *testing.T) {
+	if got := listHeight(3); got != 3 {
+		t.Errorf("3 项时高度 = %d, want 3（等于项数即不滚动）", got)
+	}
+	if got := listHeight(1000); got >= 1000 {
+		t.Errorf("项数远超屏幕时应受限于屏幕高度，得到 %d", got)
 	}
 }
