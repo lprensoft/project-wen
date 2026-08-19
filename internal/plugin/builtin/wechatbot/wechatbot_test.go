@@ -418,7 +418,9 @@ func TestCommands(t *testing.T) {
 
 	f.pushText(binderID, "/status")
 	m = f.expectSend(t)
-	for _, want := range []string{"📊 Wen Agent v9.9.9", "testprov / m1", "131,072", "1,234", "0.94"} {
+	// 措辞由 internal/statustext 的测试盯着，这里只验证命令确实接到了那份渲染
+	for _, want := range []string{"📊 Wen Agent v9.9.9", "testprov / m1 · 思考深度 off",
+		"1,234 / 131,072 tokens（占用 0.9%）"} {
 		if !strings.Contains(m.text, want) {
 			t.Fatalf("/status 缺少 %q:\n%s", want, m.text)
 		}

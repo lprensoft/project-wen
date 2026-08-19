@@ -17,18 +17,18 @@ func (p *Plugin) StatusLines() []string {
 		return nil
 	}
 	var parts []string
-	if s.turnExtract {
-		parts = append(parts, fmt.Sprintf("每 %d 轮对话提炼一次", s.turnEvery))
-	}
-	if s.autoExtract {
-		parts = append(parts, "压缩前提炼一次")
+	switch {
+	case s.turnExtract && s.autoExtract:
+		parts = append(parts, fmt.Sprintf("每 %d 轮及压缩前提炼", s.turnEvery))
+	case s.turnExtract:
+		parts = append(parts, fmt.Sprintf("每 %d 轮提炼", s.turnEvery))
+	case s.autoExtract:
+		parts = append(parts, "压缩前提炼")
+	default:
+		parts = append(parts, "仅模型主动保存")
 	}
 	if s.decay {
-		parts = append(parts, fmt.Sprintf("标记为会淡忘的记忆 %d 天未提及只剩要点、%d 天后移出",
-			s.blurDays, s.forgetDays))
+		parts = append(parts, fmt.Sprintf("%d 天淡忘、%d 天移出", s.blurDays, s.forgetDays))
 	}
-	if len(parts) == 0 {
-		return []string{"🧠 记忆：只在模型主动保存时记录"}
-	}
-	return []string{"🧠 记忆：" + strings.Join(parts, "；")}
+	return []string{"🧠 记忆：" + strings.Join(parts, " · ")}
 }
