@@ -49,24 +49,32 @@ type persistedState struct {
 	// LastSweep 是上次淡忘清扫的日期。不存的话每次重启都会重扫一遍——
 	// 清扫本身是幂等的，但那是一趟无谓的全库遍历。
 	LastSweep time.Time `json:"last_sweep,omitempty"`
+	// LastTimeline 是上次时间线日切的日期，理由同上（收束还多一次模型调用）。
+	LastTimeline time.Time `json:"last_timeline,omitempty"`
+}
+
+// dayMarks 是两个按天触发的水位，跟窗口缓冲同一个文件持久化。
+type dayMarks struct {
+	lastSweep    time.Time
+	lastTimeline time.Time
 }
 
 func windowPath(dir string) string { return filepath.Join(dir, windowFile) }
 
 // loadWindowState 读回上次的窗口缓冲。文件缺失或损坏时返回空——
 // 缓冲丢了只是少提炼一次，不值得让插件起不来。
-func loadWindowState(dir string) (map[windowKey]*window, time.Time) {
+func loadWindowState(dir string) (map[windowKey]*window, dayMarks) {
 	if dir == "" {
-		return nil, time.Time{}
+		return nil, dayMarks{}
 	}
 	raw, err := os.ReadFile(windowPath(dir))
 	if err != nil {
-		return nil, time.Time{}
+		return nil, dayMarks{}
 	}
 	var st persistedState
 	if json.Unmarshal(raw, &st) != nil {
 		log.Printf("记忆提炼：窗口缓冲已损坏，忽略并重新开始累计")
-		return nil, time.Time{}
+		return nil, dayMarks{}
 	}
 
 	out := map[windowKey]*window{}
@@ -84,15 +92,15 @@ func loadWindowState(dir string) (map[windowKey]*window, time.Time) {
 		}
 		out[windowKey{session: pw.Session, tag: pw.Tag}] = w
 	}
-	return out, st.LastSweep
+	return out, dayMarks{lastSweep: st.LastSweep, lastTimeline: st.LastTimeline}
 }
 
 // saveWindowState 落盘当前缓冲。失败只影响下次启动的连续性，不打断任何事。
-func saveWindowState(dir string, windows map[windowKey]*window, lastSweep time.Time) {
+func saveWindowState(dir string, windows map[windowKey]*window, marks dayMarks) {
 	if dir == "" {
 		return
 	}
-	st := persistedState{LastSweep: lastSweep}
+	st := persistedState{LastSweep: marks.lastSweep, LastTimeline: marks.lastTimeline}
 	for key, w := range windows {
 		if len(w.turns) == 0 {
 			continue
