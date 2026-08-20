@@ -398,3 +398,35 @@ func TestExtractPromptMentionsDecayOnlyWhenEnabled(t *testing.T) {
 		t.Error("开启淡忘后应要求模型给出该字段")
 	}
 }
+
+// 两份判据必须逐句同源：promptGuide 管当场保存、extractPrompt 管自动提炼，
+// 措辞不一致时同一句话会在两条路径上得到相反的取舍——生活类内容曾因此在
+// 自动提炼这条主力路径上被窄判据挡在门外（promptGuide 修过的问题在这条路径的残留）。
+func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
+	defs := []string{
+		"偏好：对方明确表达的、长期有效的喜好与要求",
+		"约定：两人之间或协作上定下来的规则与安排",
+		"事实：关于对方及其处境的、不易重新得知的信息",
+		"踩坑：已经验证过的失败原因与正确做法",
+	}
+	for _, d := range defs {
+		if !strings.Contains(extractPrompt, d) {
+			t.Errorf("extractPrompt 缺少判据 %q", d)
+		}
+		if !strings.Contains(promptGuide, d) {
+			t.Errorf("promptGuide 缺少判据 %q（两份判据应同源）", d)
+		}
+	}
+	// 生活语境的关键措辞不得再从提炼路径缺席
+	for _, want := range []string{"身份、作息", "喜欢什么、不喜欢什么", "近况"} {
+		if !strings.Contains(extractPrompt, want) {
+			t.Errorf("extractPrompt 缺少生活语境措辞 %q", want)
+		}
+	}
+	// 旧的纯工程窄措辞不得回归
+	for _, bad := range []string{"工作方式或表达方式要求", "项目或协作上确定下来"} {
+		if strings.Contains(extractPrompt, bad) {
+			t.Errorf("extractPrompt 仍含纯工程窄判据 %q", bad)
+		}
+	}
+}
