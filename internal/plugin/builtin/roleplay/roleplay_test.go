@@ -129,6 +129,88 @@ func TestPersonaTakesPriorityInBudget(t *testing.T) {
 	}
 }
 
+func TestVoiceSamplesInjectedAfterPersona(t *testing.T) {
+	p := newTestPlugin(t, map[string]any{
+		"persona":       "你是林绘。",
+		"voice_samples": "对方：今天累吗？\n林绘：【揉了揉眼睛】还行，就是眼睛有点酸。",
+		"user_profile":  "对方姓沈。",
+	})
+	got := p.SystemPrompt()
+	// 样例是「这个角色是谁」的延伸，注入位置紧跟角色设定、在对方信息之前
+	iPersona := strings.Index(got, "[角色设定")
+	iSamples := strings.Index(got, "[台词样例]")
+	iProfile := strings.Index(got, "[对方信息]")
+	if iSamples < 0 {
+		t.Fatal("样例未注入")
+	}
+	if !(iPersona < iSamples && iSamples < iProfile) {
+		t.Errorf("注入顺序应为 设定 < 样例 < 对方信息，得到 %d %d %d", iPersona, iSamples, iProfile)
+	}
+	// 防火墙：样例里的人和事不得被当成历史
+	if !strings.Contains(got, "不是发生过的历史") {
+		t.Error("样例段应声明其内容不是历史")
+	}
+}
+
+func TestVoiceSamplesAloneStillInjected(t *testing.T) {
+	// 只填样例不填设定时，样例本身就是最小的角色设定（声音即人）
+	p := newTestPlugin(t, map[string]any{"voice_samples": "对方：在吗\n角色：嗯。"})
+	if !strings.Contains(p.SystemPrompt(), "[台词样例]") {
+		t.Error("没有角色设定时样例也应注入")
+	}
+	// 留空则整段不注入
+	q := newTestPlugin(t, map[string]any{"persona": "角色"})
+	if strings.Contains(q.SystemPrompt(), "[台词样例]") {
+		t.Error("样例为空时不应注入该段")
+	}
+}
+
+func TestVoiceSamplesClippedAtSegmentBoundary(t *testing.T) {
+	// 样例排在预算最末：被拦腰砍断的样例是坏范本，超出时按空行整段丢弃
+	seg := strings.Repeat("样", 100) // 300 字节一段
+	p := newTestPlugin(t, map[string]any{
+		"persona":        strings.Repeat("设", 100),
+		"voice_samples":  seg + "\n\n" + seg + "\n\n" + seg,
+		"max_text_bytes": 800,
+	})
+	s := p.snapshot()
+	if s.persona == "" || strings.Contains(s.persona, "截断") {
+		t.Error("预算应先满足角色设定")
+	}
+	if s.voiceSamples == "" {
+		t.Fatal("放得下的段落应保留")
+	}
+	if got := strings.Count(s.voiceSamples, seg); got != 1 {
+		t.Errorf("300 字节预算外的段应整段丢弃，保留了 %d 段", got)
+	}
+	if !strings.Contains(s.voiceSamples, "已略去") {
+		t.Error("丢弃了段落应留下说明")
+	}
+	// 一段都放不下时整个不要，不做字节级截断
+	q := newTestPlugin(t, map[string]any{
+		"persona": strings.Repeat("设", 100), "voice_samples": seg + "\n\n" + seg,
+		"max_text_bytes": 350,
+	})
+	if q.snapshot().voiceSamples != "" {
+		t.Errorf("一段都放不下时应整个丢弃: %q", q.snapshot().voiceSamples)
+	}
+}
+
+func TestVoiceSamplesCRLFNormalized(t *testing.T) {
+	// textarea 提交的换行可能是 \r\n，按段截断认的是 \n\n 空行
+	seg := strings.Repeat("样", 200)
+	p := newTestPlugin(t, map[string]any{
+		"voice_samples": seg + "\r\n\r\n" + seg, "max_text_bytes": 700,
+	})
+	s := p.snapshot()
+	if strings.Contains(s.voiceSamples, "\r") {
+		t.Error("换行未归一")
+	}
+	if got := strings.Count(s.voiceSamples, seg); got != 1 {
+		t.Errorf("\\r\\n 分段应同样按段丢弃，保留了 %d 段", got)
+	}
+}
+
 func TestRequiresMemoryAndSessionSearch(t *testing.T) {
 	got := New().Requires()
 	if len(got) != 2 || got[0] != "memory" || got[1] != "session_search" {
@@ -284,8 +366,9 @@ func TestLabelAndPromptUseOppositePerson(t *testing.T) {
 
 func TestConfigFieldsDeclareTextType(t *testing.T) {
 	want := map[string]string{
-		"persona":      plugin.FieldText,
-		"user_profile": plugin.FieldText,
+		"persona":       plugin.FieldText,
+		"user_profile":  plugin.FieldText,
+		"voice_samples": plugin.FieldText,
 	}
 	got := map[string]string{}
 	for _, f := range New().ConfigFields() {

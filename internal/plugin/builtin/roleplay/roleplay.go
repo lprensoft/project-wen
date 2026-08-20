@@ -1,6 +1,6 @@
-// Package roleplay 提供角色扮演的系统插件：把用户配置的角色设定与用户自己的信息作为
-// 最高优先级提示词注入，附一套让中文表达脱离机械感的规则、一套以【】做场景与动作
-// 演绎的规则，以及时间一致性约束。
+// Package roleplay 提供角色扮演的系统插件：把用户配置的角色设定、台词样例与用户自己的
+// 信息作为最高优先级提示词注入，附一套让中文表达脱离机械感的规则、一套以【】做场景与
+// 动作演绎的规则，以及时间一致性约束。
 //
 // 注意界面与提示词的人称是相反的：设置页上那一项叫「我的信息」（填的人是用户自己），
 // 而注入给模型的段落写作「对方信息」——提示词是模型以第一人称读的，那里的「我」指它。
@@ -37,6 +37,7 @@ type Plugin struct {
 
 	persona           string
 	userProfile       string
+	voiceSamples      string
 	interaction       bool
 	humanize          bool
 	timeRules         bool
@@ -65,7 +66,7 @@ func (p *Plugin) Name() string { return "roleplay" }
 
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 func (p *Plugin) Description() string {
-	return "按设定扮演角色：注入角色设定与我的信息，以【】演绎场景动作，约束表达方式与时间一致性"
+	return "按设定扮演角色：注入角色设定、台词样例与我的信息，以【】演绎场景动作，约束表达方式与时间一致性"
 }
 
 // Requires 硬依赖记忆与会话检索：角色的连续性建立在「记得住」与「查得到」之上。
@@ -84,6 +85,14 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key: "user_profile", Label: "我的信息", Type: plugin.FieldText,
 			Description: "你的基本情况，作为角色一开始就知道的信息。可以留空，改在对话中告诉它，由记忆插件记下来。",
 			Default:     "",
+		},
+		{
+			Key: "voice_samples", Label: "台词样例", Type: plugin.FieldText,
+			Description: "角色实际说话的样例，用来锚定语气——比性格描述管用得多。建议三到五段，" +
+				"每段一来一回（你说什么、角色怎么答），段与段之间空一行；覆盖不同情绪的场合" +
+				"（高兴时、被烦到时、认真说事时），开了【】演绎就在样例里也带上【】。" +
+				"样例里的人和事只是示范，不会被角色当成真实经历。",
+			Default: "",
 		},
 		{
 			Key: "interaction", Label: "启用【】互动演绎", Type: plugin.FieldBool,
@@ -125,10 +134,11 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 		},
 		{
 			Key: "max_text_bytes", Label: "设定文本上限（字节）", Type: plugin.FieldInt,
-			Description: "角色设定与我的信息的合计上限。它们每轮都完整发给模型，超出部分截断。",
-			Default:     defaultMaxTextBytes,
-			Min:         plugin.IntPtr(512),
-			Max:         plugin.IntPtr(64 * 1024),
+			Description: "角色设定、我的信息与台词样例的合计上限。它们每轮都完整发给模型，" +
+				"超出时按 设定 > 我的信息 > 样例 的顺序保留。",
+			Default: defaultMaxTextBytes,
+			Min:     plugin.IntPtr(512),
+			Max:     plugin.IntPtr(64 * 1024),
 		},
 	}
 }
@@ -136,12 +146,15 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	persona := strings.TrimSpace(plugin.CfgString(cfg, "persona", ""))
 	profile := strings.TrimSpace(plugin.CfgString(cfg, "user_profile", ""))
+	// textarea 提交的换行可能是 \r\n，而样例的按段截断认的是空行，先归一
+	samples := strings.TrimSpace(strings.ReplaceAll(plugin.CfgString(cfg, "voice_samples", ""), "\r\n", "\n"))
 	limit := plugin.CfgInt(cfg, "max_text_bytes", defaultMaxTextBytes)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// 两段共享一个预算，角色设定优先：它是这个插件存在的理由
-	p.persona, p.userProfile = clipPair(persona, profile, limit)
+	// 三段共享一个预算，截断顺序 设定 > 我的信息 > 样例：设定是这个插件存在的
+	// 理由，样例没了角色仍然成立，只是味道淡
+	p.persona, p.userProfile, p.voiceSamples = clipTriple(persona, profile, samples, limit)
 	p.interaction = plugin.CfgBool(cfg, "interaction", defaultInteraction)
 	p.humanize = plugin.CfgBool(cfg, "humanize", defaultHumanize)
 	p.timeRules = plugin.CfgBool(cfg, "time_rules", defaultTimeRules)
@@ -160,6 +173,7 @@ func (p *Plugin) Tools() []plugin.Tool { return nil }
 type settings struct {
 	persona           string
 	userProfile       string
+	voiceSamples      string
 	interaction       bool
 	humanize          bool
 	timeRules         bool
@@ -177,6 +191,7 @@ func (p *Plugin) snapshot() settings {
 	return settings{
 		persona:           p.persona,
 		userProfile:       p.userProfile,
+		voiceSamples:      p.voiceSamples,
 		interaction:       p.interaction,
 		humanize:          p.humanize,
 		timeRules:         p.timeRules,
@@ -195,6 +210,11 @@ func (p *Plugin) SystemPrompt() string {
 	var parts []string
 	if s.persona != "" {
 		parts = append(parts, personaHeader+"\n\n"+s.persona)
+	}
+	// 紧跟角色设定：样例是「这个角色是谁」的延伸。不设 persona 非空的门槛——
+	// 只填样例不填设定时，样例本身就是最小的角色设定
+	if s.voiceSamples != "" {
+		parts = append(parts, samplesHeader+"\n\n"+s.voiceSamples)
 	}
 	if s.userProfile != "" {
 		parts = append(parts, userHeader+"\n\n"+s.userProfile)
