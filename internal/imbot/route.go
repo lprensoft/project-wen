@@ -115,7 +115,12 @@ func ServedBy(channel, sessionID string) bool {
 }
 
 // Deliver 把一段文本投到指定通道上该会话对应的用户，返回是否真的交给了平台。
+// 原样一条发出；助手的最终回复走 deliverTo 的 paced 路径，由目标通道按自己的开关分条。
 func Deliver(ctx context.Context, channel, sessionID, text string) bool {
+	return deliverTo(ctx, channel, sessionID, text, false)
+}
+
+func deliverTo(ctx context.Context, channel, sessionID, text string, paced bool) bool {
 	regMu.RLock()
 	core := liveCores[channel]
 	regMu.RUnlock()
@@ -123,7 +128,7 @@ func Deliver(ctx context.Context, channel, sessionID, text string) bool {
 		log.Printf("imbot: 通道 %s 当前未启用，无法投递", channel)
 		return false
 	}
-	return core.pushTo(ctx, sessionID, text)
+	return core.pushTo(ctx, sessionID, text, paced)
 }
 
 func registerLive(c *Core) {
@@ -153,7 +158,7 @@ func unregisterLive(c *Core) {
 //
 // 已知用户不止一个就放弃，不广播——把一侧人格的话发给该通道上每一个聊过天的人，
 // 是这个功能能造成的最坏后果，宁可不送达。
-func (c *Core) pushTo(ctx context.Context, sessionID, text string) bool {
+func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) bool {
 	if c.cfg.Push == nil {
 		log.Printf("%s: 未提供主动推送能力，无法接收转投", c.cfg.PluginName)
 		return false
@@ -181,7 +186,13 @@ func (c *Core) pushTo(ctx context.Context, sessionID, text string) bool {
 	pctx := c.lifeCtx(ctx)
 	ok := false
 	for _, u := range users {
-		if c.cfg.Push(pctx, u, text) {
+		var sent bool
+		if paced {
+			sent = c.pushPaced(pctx, u, text)
+		} else {
+			sent = c.cfg.Push(pctx, u, text)
+		}
+		if sent {
 			ok = true
 		}
 	}

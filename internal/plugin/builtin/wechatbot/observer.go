@@ -98,7 +98,7 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 		p.mu.Unlock()
 		return
 	}
-	core, tokens, pctx := p.core, p.tokens, p.ctx
+	core, pctx := p.core, p.ctx
 	users := core.UsersFor(ev.SessionID)
 	if len(users) == 0 {
 		p.mu.Unlock()
@@ -110,7 +110,7 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	for _, userID := range users {
 		go func(userID string) {
 			defer p.wg.Done()
-			pushWith(pctx, p, tokens, userID, ev.FinalText)
+			core.PushReply(pctx, userID, ev.FinalText)
 		}(userID)
 	}
 }

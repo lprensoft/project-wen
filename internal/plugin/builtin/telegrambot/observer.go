@@ -51,7 +51,7 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	for _, chatID := range users {
 		go func(chatID string) {
 			defer p.wg.Done()
-			p.send(pctx, chatID, ev.FinalText, "")
+			core.PushReply(pctx, chatID, ev.FinalText)
 		}(chatID)
 	}
 }

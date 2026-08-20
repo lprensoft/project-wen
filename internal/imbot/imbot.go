@@ -64,6 +64,16 @@ type Config struct {
 	// PushNotices 开启后把会话注记（后台工作留下的说明，如提炼的记录）推给绑定用户。
 	PushNotices bool
 
+	// MergeWindow 是入站合并窗口：同一用户在这段时间内连发的普通消息合成一轮，
+	// 每来一条重新计时，总等待封顶为窗口的 mergeCapFactor 倍。0 表示关闭，逐条成轮。
+	MergeWindow time.Duration
+	// HumanPace 开启后，助手的回复拆成几条、带打字间隔陆续发出，并在本通道发起的
+	// 轮次里注入「像发消息那样说话」的引导（见 pace.go）。命令回执、错误提示、
+	// 确认请求与过程通知不受影响。
+	HumanPace bool
+	// sleep 是分条发送之间的等待，留空用真实计时；测试注入以免真等。
+	sleep func(ctx context.Context, d time.Duration)
+
 	// Allow 判定用户是否放行。为 nil 表示一律拒绝——白名单为空时拒绝所有人是各通道
 	// 一致的既定行为，把它做成默认值可以避免某条通道忘了实现就变成对全网开放。
 	Allow func(userID string) bool
@@ -94,6 +104,7 @@ type Core struct {
 	binding *Binding
 	dedup   *Deduper
 	broker  *confirmBroker
+	merge   *merger // 入站合并窗口；MergeWindow 为 0 时为 nil
 
 	mu      sync.Mutex
 	ctx     context.Context
@@ -126,13 +137,20 @@ func New(cfg Config) (*Core, error) {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = DefaultQueueSize
 	}
-	return &Core{
+	c := &Core{
 		cfg:     cfg,
 		binding: binding,
 		dedup:   NewDeduper(),
 		broker:  newConfirmBroker(),
 		workers: map[string]chan Message{},
-	}, nil
+	}
+	if cfg.MergeWindow > 0 {
+		// 到期冲刷发生在计时器 goroutine 上，没有入站的 ctx 可用，拿 Core 自己的生命周期 ctx
+		c.merge = newMerger(cfg.MergeWindow, func(msgs []Message) {
+			c.enqueue(c.lifeCtx(context.Background()), mergeMessages(msgs))
+		})
+	}
+	return c, nil
 }
 
 // Start 记下生命周期 ctx。worker 是惰性启动的，这里不起 goroutine。
@@ -150,6 +168,9 @@ func (c *Core) Stop() {
 	cancel := c.cancel
 	c.cancel = nil
 	c.mu.Unlock()
+	if c.merge != nil {
+		c.merge.stop()
+	}
 	if cancel != nil {
 		cancel()
 		c.wg.Wait()
@@ -207,6 +228,11 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 		return
 	}
 
+	// 命令不参与合并、立即处理；窗口里已经攒着的先作为一轮入队，顺序才与到达一致
+	if c.merge != nil && strings.HasPrefix(text, "/") {
+		c.merge.flushUser(msg.UserID)
+	}
+
 	switch text {
 	case "/apply", "/deny":
 		approved := text == "/apply"
@@ -226,6 +252,10 @@ func (c *Core) Handle(ctx context.Context, msg Message) {
 		return
 	}
 
+	if c.merge != nil && !strings.HasPrefix(text, "/") {
+		c.merge.add(msg)
+		return
+	}
 	c.enqueue(ctx, msg)
 }
 
@@ -264,7 +294,8 @@ func (c *Core) enqueue(ctx context.Context, msg Message) {
 	}
 }
 
-// worker 串行处理单个用户的消息。
+// worker 串行处理单个用户的消息。开着合并窗口时，一次把队里已有的都取出来：
+// 上一轮跑着的时候攒下的几条，出队时同样合成一轮（命令仍各自独立）。
 func (c *Core) worker(ctx context.Context, q chan Message) {
 	defer c.wg.Done()
 	for {
@@ -272,7 +303,21 @@ func (c *Core) worker(ctx context.Context, q chan Message) {
 		case <-ctx.Done():
 			return
 		case msg := <-q:
-			c.process(ctx, msg)
+			if c.merge == nil {
+				c.process(ctx, msg)
+				continue
+			}
+			batch := []Message{msg}
+		drain:
+			for {
+				select {
+				case m := <-q:
+					batch = append(batch, m)
+				default:
+					break drain
+				}
+			}
+			c.processBatch(ctx, batch)
 		}
 	}
 }

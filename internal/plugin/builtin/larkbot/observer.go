@@ -50,7 +50,7 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	for _, openID := range users {
 		go func(openID string) {
 			defer p.wg.Done()
-			p.send(pctx, openID, ev.FinalText, "")
+			core.PushReply(pctx, openID, ev.FinalText)
 		}(openID)
 	}
 }
