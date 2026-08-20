@@ -85,8 +85,20 @@ func (p *Plugin) SystemPrompt() string { return "" }
 
 func (p *Plugin) Tools() []plugin.Tool { return nil }
 
+// TurnPrompt 在本通道发起的轮次里注入「像发消息那样说话」的引导（开着「像人一样
+// 发消息」时）。判定与文本都在骨架里，这里只转交；别的通道、Web UI 发起的轮次返回空串。
+func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return "", nil
+	}
+	return core.TurnPrompt(ctx), nil
+}
+
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
-	return []plugin.ConfigField{
+	fields := []plugin.ConfigField{
 		{
 			Key: "app_id", Label: "AppID", Type: plugin.FieldString, Default: "",
 			Description: "QQ 开放平台机器人的 AppID（q.qq.com 开发设置页）",
@@ -129,6 +141,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "markdown：按原生 markdown 消息发送（表格与图片会转成文字），平台拒绝时对该用户自动退回纯文本；纯文本：一律转成可读纯文本发送",
 		},
 	}
+	// 收发节奏的两项与别的通道共用一份声明，见 imbot.PaceFields
+	return append(fields, imbot.PaceFields()...)
 }
 
 // Init 应用配置并（重）启动网关连接。可重入：先停旧连接与骨架。
@@ -148,6 +162,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 			whitelist[s] = true
 		}
 	}
+
+	mergeWindow, humanPace := imbot.PaceConfig(cfg)
 
 	p.Stop()
 
@@ -173,6 +189,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
 		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
 		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
+		MergeWindow:    mergeWindow,
+		HumanPace:      humanPace,
 		Allow:          p.allowed,
 		Push:           p.push,
 		Notice:         ictx.Notice,

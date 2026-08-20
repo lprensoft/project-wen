@@ -103,8 +103,20 @@ func (p *Plugin) SystemPrompt() string { return "" }
 
 func (p *Plugin) Tools() []plugin.Tool { return nil }
 
+// TurnPrompt 在本通道发起的轮次里注入「像发消息那样说话」的引导（开着「像人一样
+// 发消息」时）。判定与文本都在骨架里，这里只转交；别的通道、Web UI 发起的轮次返回空串。
+func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return "", nil
+	}
+	return core.TurnPrompt(ctx), nil
+}
+
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
-	return []plugin.ConfigField{
+	fields := []plugin.ConfigField{
 		{
 			Key: "whitelist", Label: "用户白名单", Type: plugin.FieldText, Default: "",
 			Description: "每行一个微信用户 ID（形如 xxx@im.wechat）。扫码绑定人始终放行；名单外用户一律拒绝，其 ID 会记录到运行日志方便抄入",
@@ -140,6 +152,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
 		},
 	}
+	// 收发节奏的两项与别的通道共用一份声明，见 imbot.PaceFields
+	return append(fields, imbot.PaceFields()...)
 }
 
 // Init 应用配置并（重）启动。可重入：先停旧循环与骨架。
@@ -169,6 +183,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		}
 	}
 
+	mergeWindow, humanPace := imbot.PaceConfig(cfg)
+
 	p.Stop()
 
 	p.mu.Lock()
@@ -191,6 +207,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
 		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
 		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
+		MergeWindow:    mergeWindow,
+		HumanPace:      humanPace,
 		Allow:          p.allowed,
 		Push:           p.push,
 		Notice:         ictx.Notice,
@@ -241,8 +259,20 @@ func (p *Plugin) rememberToken(msg imbot.Message) {
 }
 
 // onTyping 把骨架的「正在输入」回调接到微信协议层。
+//
+// 主动推送（后台轮次的分条）没有本轮入站消息，骨架只给得出用户标识；那时用该用户
+// 最近一次入站的 context_token，与推送本身用的是同一份票据。
 func (p *Plugin) onTyping(ctx context.Context, msg imbot.Message, active bool) {
-	p.setTyping(ctx, msg.UserID, msg.ReplyTo, active)
+	token := msg.ReplyTo
+	if token == "" {
+		p.mu.Lock()
+		tokens := p.tokens
+		p.mu.Unlock()
+		if tokens != nil {
+			token = tokens.get(msg.UserID)
+		}
+	}
+	p.setTyping(ctx, msg.UserID, token, active)
 }
 
 // startPolling （重）启动长轮询循环：先停掉旧循环，再以当前凭证起新的。

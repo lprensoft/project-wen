@@ -86,7 +86,7 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 	if strings.TrimSpace(final) == "" {
 		final = "（本轮没有文本回复）"
 	}
-	c.reply(ctx, msg, sid, final)
+	c.replyFinal(ctx, msg, sid, final)
 }
 
 // reply 把助手这一轮的产出投出去：默认原路回，装了路由且目标是别的通道时转投过去。
@@ -97,13 +97,29 @@ func (c *Core) chat(ctx context.Context, msg Message) {
 //
 // 只用于助手的产出。命令回执、错误提示、确认请求都归来源通道：那是对说话的人的
 // 即时反馈，尤其确认请求的 pending 登记在来源通道的 broker 上，投到别处就没人能答。
+//
+// reply 用于过程通知（思考链、工具名），原样一条发出；replyFinal 用于本轮的最终
+// 回复，按 HumanPace 分条带节奏——分条属于「角色在说话」，过程通知不是。
 func (c *Core) reply(ctx context.Context, msg Message, sessionID, text string) {
+	c.deliver(ctx, msg, sessionID, text, false)
+}
+
+func (c *Core) replyFinal(ctx context.Context, msg Message, sessionID, text string) {
+	c.deliver(ctx, msg, sessionID, text, true)
+}
+
+func (c *Core) deliver(ctx context.Context, msg Message, sessionID, text string, paced bool) {
 	target := Target(sessionID)
 	if target == "" || target == c.cfg.PluginName {
-		c.send(ctx, msg, text)
+		if paced {
+			c.sendPaced(ctx, msg, text)
+		} else {
+			c.send(ctx, msg, text)
+		}
 		return
 	}
-	if Deliver(ctx, target, sessionID, text) {
+	// 转投到别的通道时，分不分条由那条通道自己的开关决定：节奏是出口的属性
+	if deliverTo(ctx, target, sessionID, text, paced) {
 		return
 	}
 	log.Printf("%s: 本轮回复该发往 %s，那条通道投不出去，已丢弃", c.cfg.PluginName, target)

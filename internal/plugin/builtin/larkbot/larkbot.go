@@ -161,9 +161,21 @@ func (p *Plugin) SystemPrompt() string { return "" }
 
 func (p *Plugin) Tools() []plugin.Tool { return nil }
 
+// TurnPrompt 在本通道发起的轮次里注入「像发消息那样说话」的引导（开着「像人一样
+// 发消息」时）。判定与文本都在骨架里，这里只转交；别的通道、Web UI 发起的轮次返回空串。
+func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core == nil {
+		return "", nil
+	}
+	return core.TurnPrompt(ctx), nil
+}
+
 func (p *Plugin) ConfigFields() []plugin.ConfigField {
 	label := p.v.label
-	return []plugin.ConfigField{
+	fields := []plugin.ConfigField{
 		{
 			Key: "app_id", Label: "App ID", Type: plugin.FieldString, Default: "",
 			Description: joinCN("在", label, "开发者后台（"+p.v.consoleURL+"）建一个自建应用后获得，形如 cli_xxx"),
@@ -209,6 +221,8 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
 		},
 	}
+	// 收发节奏的两项与别的通道共用一份声明，见 imbot.PaceFields
+	return append(fields, imbot.PaceFields()...)
 }
 
 // Init 应用配置并（重）启动长连接。可重入：先停旧连接与骨架。
@@ -234,6 +248,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	}
 	base := strings.TrimRight(plugin.CfgString(cfg, "api_base", p.v.defaultBase), "/")
 
+	mergeWindow, humanPace := imbot.PaceConfig(cfg)
+
 	p.Stop()
 
 	p.mu.Lock()
@@ -254,6 +270,8 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
 		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
 		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
+		MergeWindow:    mergeWindow,
+		HumanPace:      humanPace,
 		Allow:          p.allowed,
 		Push:           p.push,
 		Notice:         ictx.Notice,
