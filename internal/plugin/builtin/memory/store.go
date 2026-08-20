@@ -20,7 +20,7 @@ import (
 )
 
 // Types 是记忆的分类取值（同时决定索引中的分组顺序）。
-var Types = []string{"偏好", "约定", "事实", "踩坑"}
+var Types = []string{"偏好", "约定", "事实", "踩坑", "经历"}
 
 const (
 	defaultType = "事实"
