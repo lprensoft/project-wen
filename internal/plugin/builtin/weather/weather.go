@@ -33,8 +33,8 @@ const (
 	// defaultTomorrowFrom 是明天的预报从几点起出现在角色眼前。白天的人想的是今天，
 	// 临睡前、计划明天的事时才去看明天；0 表示全天都看。
 	defaultTomorrowFrom = 18
-	defaultStaleMinutes   = 60
-	defaultSameCity       = true
+	defaultStaleMinutes = 60
+	defaultSameCity     = true
 	// minRefreshMinutes 是刷新间隔的下限。数据源是免费的公共接口，取得再勤也没有
 	// 更新的数据，只是白白打对方。
 	minRefreshMinutes = 10
