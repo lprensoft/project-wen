@@ -18,10 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"wen/internal/agent"
 	"wen/internal/config"
-	"wen/internal/llm"
-	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/belongings"
 	"wen/internal/plugin/builtin/bodysense"
@@ -46,7 +43,6 @@ import (
 	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/runlock"
 	"wen/internal/server"
-	"wen/internal/session"
 	"wen/internal/version"
 )
 
@@ -66,119 +62,11 @@ func runServe(args []string) {
 		cfg.Server.Port = *port
 	}
 
-	workdir := cfg.Agent.Workdir
-	if workdir == "" {
-		workdir, _ = os.Getwd()
-	}
-
-	// Agent 与插件互相需要：插件在 Agent 之前构造，故各能力都用闭包延迟到实际使用时取值。
-	// store 是例外，它只依赖配置，因此提前建好直接交给插件——插件的 Init 就要用它
-	// （心跳启动时要读上次真人交互的时间）。整个进程共用这一个实例：两个 Store 的
-	// 会话锁互不相识。
-	var (
-		ag      *agent.Agent
-		models  *modelcfg.Store
-		plugins *plugin.Manager
-	)
-	store, err := session.NewStore(cfg.SessionDir())
-	if err != nil {
-		log.Fatalf("初始化 session 存储失败: %v", err)
-	}
-
-	ictx := plugin.InitContext{
-		Workdir:    workdir,
-		Sessions:   store,
-		SessionDir: cfg.SessionDir(),
-		Complete: func(ctx context.Context, prompt string) (string, error) {
-			if ag == nil {
-				return "", fmt.Errorf("模型尚未就绪")
-			}
-			return ag.Complete(ctx, prompt)
-		},
-		RunTurn: func(ctx context.Context, sessionID, input string) (string, error) {
-			if ag == nil {
-				return "", fmt.Errorf("模型尚未就绪")
-			}
-			return ag.RunTurn(ctx, sessionID, input)
-		},
-		Notice: func(ctx context.Context, sessionID, text string) error {
-			if ag == nil {
-				return fmt.Errorf("会话尚未就绪")
-			}
-			return ag.AppendNotice(ctx, sessionID, text)
-		},
-		NewSession: func() (string, error) {
-			m, err := store.Create()
-			return m.ID, err
-		},
-		Compact: func(ctx context.Context, sessionID string) error {
-			if ag == nil {
-				return fmt.Errorf("模型尚未就绪")
-			}
-			return ag.CompactTurn(ctx, sessionID)
-		},
-		// 与 server 的 GET /api/status 同源，保证远端界面与 Web UI 的状态输出一致
-		Status: func(sessionID string) (plugin.StatusInfo, error) {
-			if models == nil {
-				return plugin.StatusInfo{}, fmt.Errorf("状态尚未就绪")
-			}
-			provider, model, thinking, contextLength := models.Status()
-			info := plugin.StatusInfo{
-				Version:  version.Version,
-				Provider: provider, Model: model, Thinking: thinking,
-				ContextLength: contextLength, MeasuredTokens: -1,
-			}
-			if plugins != nil {
-				info.PluginLines = plugins.StatusLines()
-			}
-			if sessionID == "" {
-				return info, nil
-			}
-			meta, msgs, err := store.Get(sessionID)
-			if err != nil {
-				return info, nil // 会话不存在只影响会话部分
-			}
-			info.HasSession = true
-			info.MessageCount = len(msgs)
-			info.EstTokens = agent.EstimateStoredTokens(msgs)
-			if meta.LastUsage != nil {
-				info.MeasuredTokens = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
-				info.CachedTokens = meta.LastUsage.CachedTokens
-				info.CacheWriteTokens = meta.LastUsage.CacheWriteTokens
-				info.PromptTokens = meta.LastUsage.PromptTokens
-			}
-			return info, nil
-		},
-	}
-	plugins = buildPlugins(cfg, ictx)
-
-	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
-	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
-	if err != nil {
-		log.Fatalf("加载模型配置失败: %v", err)
-	}
-	cur, err := models.Resolve()
-	if err != nil {
-		log.Fatalf("模型配置无效: %v", err)
-	}
-	provider, err := llm.New(llm.Config{
-		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
-		PromptCache: cur.PromptCache,
-	})
+	rt, err := buildRuntime(cfg, runtimeOverrides{})
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-
-	ag = agent.New(provider, plugins, store, agent.Options{
-		Model:         cur.ModelID,
-		Temperature:   cur.Temperature,
-		MaxTokens:     cur.MaxTokens,
-		SystemPrompt:  cfg.Agent.SystemPrompt,
-		MaxTurns:      cfg.Agent.MaxTurns,
-		Workdir:       workdir,
-		Thinking:      cur.Thinking,
-		ContextLength: cur.ContextLength,
-	})
+	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
 	auth, err := server.NewAuthStore(cfg.BaseDir)
 	if err != nil {
