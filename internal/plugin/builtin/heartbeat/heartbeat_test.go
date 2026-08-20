@@ -677,3 +677,117 @@ func TestDecayStaysOnWholeMinutes(t *testing.T) {
 		t.Fatalf("衰减最终应封顶在最慢间隔，得到 %v", p.cur)
 	}
 }
+
+// 见人恢复常态：真人轮次把衰减或调慢出来的节奏拉回基础值并落盘；
+// 比基础值快的设定保留——热聊中调快的节奏不该被一条新消息打回去。
+func TestTurnEndRestoresBaseline(t *testing.T) {
+	p, _ := newInited(t, noTurn, map[string]any{"interval_minutes": 30})
+
+	p.mu.Lock()
+	p.cur, p.adjusted = 90*time.Minute, true
+	p.mu.Unlock()
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, EndedAt: time.Now()})
+	p.mu.Lock()
+	cur, adjusted := p.cur, p.adjusted
+	st := p.loadStateLocked()
+	p.mu.Unlock()
+	if cur != 30*time.Minute || adjusted {
+		t.Fatalf("真人轮次后应恢复基础节奏，得到 %v adjusted=%v", cur, adjusted)
+	}
+	if st.IntervalSeconds != int(30*time.Minute/time.Second) || st.Adjusted {
+		t.Fatalf("恢复基础节奏要落盘，state=%+v", st)
+	}
+
+	p.mu.Lock()
+	p.cur, p.adjusted = 10*time.Minute, true
+	p.mu.Unlock()
+	p.OnTurnEnd(context.Background(), plugin.TurnEndEvent{Interactive: true, EndedAt: time.Now()})
+	p.mu.Lock()
+	cur, adjusted = p.cur, p.adjusted
+	p.mu.Unlock()
+	if cur != 10*time.Minute || !adjusted {
+		t.Fatalf("快于基础值的设定不该被打回，得到 %v adjusted=%v", cur, adjusted)
+	}
+}
+
+// 暂停到点后的第一拍是「睡醒」：节奏恢复基础值（快慢都不保留），暂停记录清除。
+func TestBeatWakesFromPauseToBaseline(t *testing.T) {
+	p, _ := newInited(t, noTurn, map[string]any{"interval_minutes": 30})
+	p.mu.Lock()
+	p.cur, p.adjusted = 15*time.Minute, true
+	p.pausedUntil, p.pausedAt = time.Now().Add(-time.Minute), time.Now().Add(-8*time.Hour)
+	p.mu.Unlock()
+
+	p.beat(context.Background())
+
+	p.mu.Lock()
+	cur, adjusted, paused := p.cur, p.adjusted, p.pausedUntil
+	p.mu.Unlock()
+	if cur != 30*time.Minute || adjusted {
+		t.Fatalf("睡醒应恢复基础节奏，得到 %v adjusted=%v", cur, adjusted)
+	}
+	if !paused.IsZero() {
+		t.Fatal("睡醒后暂停记录应清除")
+	}
+}
+
+// 停机期间暂停到点：重启等同睡醒，节奏回基础值，不让睡前的节奏越过暂停期存活。
+func TestInitWakesFromExpiredPause(t *testing.T) {
+	store := mustStore(t, t.TempDir())
+	stateDir := t.TempDir()
+	ictx := plugin.InitContext{
+		StateDir: stateDir, Sessions: store, RunTurn: noTurn,
+		NewSession: func() (string, error) { m, err := store.Create(); return m.ID, err },
+	}
+	persistState(stateDir, state{
+		IntervalSeconds: int(90 * time.Minute / time.Second),
+		Adjusted:        true,
+		LastBeat:        time.Now().Add(-9 * time.Hour),
+		PausedUntil:     time.Now().Add(-time.Hour),
+		PausedAt:        time.Now().Add(-9 * time.Hour),
+	})
+
+	p := New()
+	if err := p.Init(ictx, map[string]any{"interval_minutes": 30}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Stop)
+	p.Stop()
+
+	p.mu.Lock()
+	cur, adjusted, paused := p.cur, p.adjusted, p.pausedUntil
+	p.mu.Unlock()
+	if cur != 30*time.Minute || adjusted {
+		t.Fatalf("停机期间暂停到点，重启应恢复基础节奏，得到 %v adjusted=%v", cur, adjusted)
+	}
+	if !paused.IsZero() {
+		t.Fatal("已到点的暂停不该复活")
+	}
+}
+
+// TurnPrompt 亮出当前节奏；暂停时改报暂停；固定节奏不注入（调整会被拒绝，
+// 亮出来只会诱导模型去调）。
+func TestTurnPrompt(t *testing.T) {
+	p, _ := newInited(t, noTurn, map[string]any{"interval_minutes": 30})
+	out, err := p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "30 分钟") || !strings.Contains(out, "set_heartbeat_interval") {
+		t.Fatalf("应亮出当前节奏与调整途径: %q", out)
+	}
+
+	p.mu.Lock()
+	p.pausedUntil = time.Now().Add(2 * time.Hour)
+	p.mu.Unlock()
+	out, _ = p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if !strings.Contains(out, "暂停") {
+		t.Fatalf("暂停期间应报暂停: %q", out)
+	}
+
+	ps, _ := newInited(t, noTurn, map[string]any{"interval_minutes": 30, "dynamic": false})
+	out, _ = ps.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if out != "" {
+		t.Fatalf("固定节奏不该注入: %q", out)
+	}
+}

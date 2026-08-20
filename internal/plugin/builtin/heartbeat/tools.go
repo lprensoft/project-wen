@@ -128,8 +128,9 @@ type pauseTool struct{ p *Plugin }
 func (t *pauseTool) Name() string { return "pause_heartbeat" }
 
 func (t *pauseTool) Description() string {
-	return "暂停主动开口一段时间，到点后按原节奏恢复——对方说要去睡、要出门长时间离开时用它，" +
-		"免得在不合适的时候被定时唤醒。期间对方随时来消息不受影响，且对方一说话暂停即自动取消。"
+	return "暂停主动开口一段时间，到点恢复常规节奏（睡醒回到平常状态）——对方说要去睡、" +
+		"要出门长时间离开时用它，免得在不合适的时候被定时唤醒。" +
+		"期间对方随时来消息不受影响，且对方一说话暂停即自动取消。"
 }
 
 func (t *pauseTool) Schema() json.RawMessage {
@@ -179,7 +180,7 @@ func (t *pauseTool) Execute(_ context.Context, args json.RawMessage) (string, er
 	persistState(dir, st)
 	log.Printf("heartbeat: 模型暂停心跳至 %s（%s）", until.Format("2006-01-02 15:04"), a.Reason)
 
-	out := "好，接下来 " + humanDur(time.Duration(capped)*time.Minute) + "内不再主动开口，到点按原节奏恢复；对方一说话即恢复。"
+	out := "好，接下来 " + humanDur(time.Duration(capped)*time.Minute) + "内不再主动开口，到点恢复常规节奏；对方一说话即恢复。"
 	if capped != a.Minutes {
 		out += fmt.Sprintf("（你报的是 %d 分钟，已按上限收到 %d 分钟）", a.Minutes, capped)
 	}
