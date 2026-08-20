@@ -234,6 +234,75 @@ func TestTurnPromptEmptyWhenNoInnerPersona(t *testing.T) {
 	}
 }
 
+func TestTurnPromptInnerSamplesAfterPersona(t *testing.T) {
+	p := newTestPlugin(t, map[string]any{
+		"inner_persona":       "另一面，说话更直接。",
+		"inner_voice_samples": "对方：睡了吗\n它：【没抬眼】没。说事。",
+	})
+
+	// 表人格模式下样例同样一个字都不能漏
+	if got, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{Scope: scopeFor(personaOuter)}); got != "" {
+		t.Errorf("表人格模式下不该注入样例:\n%s", got)
+	}
+
+	got, err := p.TurnPrompt(context.Background(), plugin.TurnEvent{Scope: scopeFor(personaInner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iPersona := strings.Index(got, "[里人格设定")
+	iSamples := strings.Index(got, "[里人格台词样例")
+	if iSamples < 0 {
+		t.Fatal("里人格模式应注入台词样例")
+	}
+	if iPersona < 0 || iPersona > iSamples {
+		t.Errorf("注入顺序应为 设定 < 样例，得到 %d %d", iPersona, iSamples)
+	}
+	// 覆盖声明：上下文里同时存在表人格的样例，必须显式压住
+	if !strings.Contains(got, "优先于上文的台词样例") {
+		t.Error("样例段应声明优先于上文的样例")
+	}
+	// 防火墙：样例里的人和事不得被当成历史
+	if !strings.Contains(got, "不是发生过的历史") {
+		t.Error("样例段应声明其内容不是历史")
+	}
+}
+
+func TestTurnPromptSamplesAloneStillInjected(t *testing.T) {
+	// 只填样例不填设定时，样例本身就是最小的人格设定
+	p := newTestPlugin(t, map[string]any{"inner_voice_samples": "对方：在吗\n它：嗯。"})
+	got, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{Scope: scopeFor(personaInner)})
+	if !strings.Contains(got, "[里人格台词样例") {
+		t.Error("没有里人格设定时样例也应注入")
+	}
+	if strings.Contains(got, "[里人格设定") {
+		t.Error("设定为空时不该注入空的设定段")
+	}
+}
+
+func TestInnerTextsClippedToBudget(t *testing.T) {
+	// 这部分内容在里人格轮次每轮重发且不命中缓存，必须有硬上限；
+	// 超出时设定优先，样例按空行整段丢弃（textarea 的 \r\n 要先归一）
+	seg := strings.Repeat("样", 100) // 300 字节一段
+	p := newTestPlugin(t, map[string]any{
+		"inner_persona":       strings.Repeat("设", 100),
+		"inner_voice_samples": seg + "\r\n\r\n" + seg + "\r\n\r\n" + seg,
+		"max_text_bytes":      800,
+	})
+	got, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{Scope: scopeFor(personaInner)})
+	if strings.Contains(got, "截断") {
+		t.Error("预算应先满足里人格设定")
+	}
+	if strings.Contains(got, "\r") {
+		t.Error("换行未归一")
+	}
+	if n := strings.Count(got, seg); n != 1 {
+		t.Errorf("预算外的样例段应整段丢弃，保留了 %d 段", n)
+	}
+	if !strings.Contains(got, "已略去") {
+		t.Error("丢弃了段落应留下说明")
+	}
+}
+
 func TestSystemPromptAlwaysEmpty(t *testing.T) {
 	// 设定与人格有关，只能按轮注入；静态注入会让表人格也看到
 	if got := newTestPlugin(t, defaultCfg()).SystemPrompt(); got != "" {
@@ -281,9 +350,10 @@ func TestConfigFieldsValidate(t *testing.T) {
 	}
 	// 三个多行字段都必须是 text，否则界面上会渲染成单行输入
 	want := map[string]string{
-		"inner_persona": plugin.FieldText,
-		"to_inner":      plugin.FieldText,
-		"to_outer":      plugin.FieldText,
+		"inner_persona":       plugin.FieldText,
+		"inner_voice_samples": plugin.FieldText,
+		"to_inner":            plugin.FieldText,
+		"to_outer":            plugin.FieldText,
 	}
 	got := map[string]string{}
 	for _, f := range fields {
