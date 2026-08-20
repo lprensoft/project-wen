@@ -222,3 +222,68 @@ func TestCompactEmptySession(t *testing.T) {
 		t.Error("空会话应报错而不是静默成功")
 	}
 }
+
+// compactPrompterStub 给压缩提示词追加一段要求，并记下每次收到的可见域。
+type compactPrompterStub struct {
+	name   string
+	frag   string
+	scopes []string
+}
+
+func (p *compactPrompterStub) Name() string                                  { return p.name }
+func (p *compactPrompterStub) Description() string                           { return "追加压缩要求" }
+func (p *compactPrompterStub) Init(plugin.InitContext, map[string]any) error { return nil }
+func (p *compactPrompterStub) SystemPrompt() string                          { return "" }
+func (p *compactPrompterStub) Tools() []plugin.Tool                          { return nil }
+func (p *compactPrompterStub) CompactPrompt(ctx context.Context) string {
+	p.scopes = append(p.scopes, plugin.ScopeFrom(ctx).Write)
+	return p.frag
+}
+
+func TestCompactPromptCarriesPluginRequirements(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	for _, m := range []session.StoredMessage{bulk(llm.RoleUser, "a"), bulk(llm.RoleAssistant, "a")} {
+		if err := store.Append(meta.ID, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stub := &compactPrompterStub{name: "stub", frag: "- 保留关系状态"}
+	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
+	ag := New(provider, newTestManager(t, stub), store, Options{Model: "test"})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+
+	if len(provider.reqs) != 1 {
+		t.Fatalf("应只有一次摘要请求，得到 %d", len(provider.reqs))
+	}
+	prompt := provider.reqs[0].Messages[0].Content
+	if !strings.Contains(prompt, compactExtrasHeader+"- 保留关系状态\n") {
+		t.Errorf("插件的要求应随补充段进入提示词:\n%s", truncateRunes(prompt, 400))
+	}
+	// 补充段在基础要求之后、历史正文之前：它要盖过基础要求，又不能混进对话内容
+	if strings.Index(prompt, compactExtrasHeader) > strings.Index(prompt, compactHistoryHeader) {
+		t.Error("补充段应位于历史正文之前")
+	}
+	if len(stub.scopes) != 1 || stub.scopes[0] != "a" {
+		t.Errorf("本组的可见域应随 ctx 交给插件: %v", stub.scopes)
+	}
+}
+
+func TestCompactPromptPlainWithoutPrompters(t *testing.T) {
+	store, _ := session.NewStore(t.TempDir())
+	meta, _ := store.Create()
+	for _, m := range []session.StoredMessage{bulk(llm.RoleUser, ""), bulk(llm.RoleAssistant, "")} {
+		store.Append(meta.ID, m)
+	}
+	provider := &mockProvider{turns: []mockTurn{{content: "摘要"}}}
+	ag := New(provider, newTestManager(t, &compactRecorder{name: "r"}), store, Options{Model: "test"})
+	ag.Compact(context.Background(), meta.ID, func(Event) {})
+
+	prompt := provider.reqs[0].Messages[0].Content
+	if strings.Contains(prompt, compactExtrasHeader) {
+		t.Error("没有插件追加要求时不该出现补充段")
+	}
+	if !strings.HasPrefix(prompt, compactPrompt) || !strings.Contains(prompt, compactHistoryHeader) {
+		t.Error("基础要求与历史正文应原样保留")
+	}
+}
