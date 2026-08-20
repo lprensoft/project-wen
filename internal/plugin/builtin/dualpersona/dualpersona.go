@@ -1,8 +1,8 @@
 // Package dualpersona 提供表里两套人格的系统插件。
 //
-// 表人格的设定由 roleplay 提供，本插件只管三件事：里人格自己的设定、两个方向的
-// 切换触发词，以及每轮的可见域裁决——里人格的消息带标签落盘，表人格读不到它们，
-// 里人格读得到全部。
+// 表人格的设定由 roleplay 提供，本插件只管三件事：里人格自己的设定与台词样例、
+// 两个方向的切换触发词，以及每轮的可见域裁决——里人格的消息带标签落盘，表人格
+// 读不到它们，里人格读得到全部。
 //
 // 它不引用 roleplay 的任何类型。里人格激活时 roleplay 注入的表人格设定仍留在
 // 上下文里，这是对的：里人格「看得到全部」，本就该知道表面那层长什么样；而注册顺序
@@ -22,6 +22,7 @@ import (
 
 	"wen/internal/imbot"
 	"wen/internal/plugin"
+	"wen/internal/textclip"
 )
 
 // 两个人格对应的可见域标签。会被拼进持久化目录，取值与插件名同规。
@@ -29,6 +30,10 @@ const (
 	personaOuter = "outer"
 	personaInner = "inner"
 )
+
+// defaultMaxTextBytes 限制里人格设定与台词样例的合计长度。这部分内容在里人格轮次
+// 随 TurnPrompt 每轮重发且不命中提示词缓存，比 system 里的静态注入更要控制体量。
+const defaultMaxTextBytes = 8 * 1024
 
 // 触发词的匹配方式。
 const (
@@ -44,6 +49,7 @@ type Plugin struct {
 	mu sync.RWMutex
 
 	innerPersona string
+	innerSamples string
 	toInner      []string
 	toOuter      []string
 	matchMode    string
@@ -82,6 +88,13 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default:     "",
 		},
 		{
+			Key: "inner_voice_samples", Label: "里人格台词样例", Type: plugin.FieldText,
+			Description: "只在里人格激活时注入。里人格实际说话的样例，用来锚定语气：建议三到五段，" +
+				"每段一来一回（你说什么、它怎么答），覆盖不同情绪的场合，段与段之间空一行。" +
+				"表人格配了台词样例时这里最好也配一份，否则里人格的腔调容易被表人格的样例带跑。",
+			Default: "",
+		},
+		{
 			Key: "to_inner", Label: "切到里人格的触发词", Type: plugin.FieldText,
 			Description: "一行一个，命中任一即切换。命中的那条消息照常发给模型，由新人格作答，不做任何提示。",
 			Default:     "",
@@ -109,6 +122,14 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Options:     channelOptions(),
 		},
 		{
+			Key: "max_text_bytes", Label: "设定文本上限（字节）", Type: plugin.FieldInt,
+			Description: "里人格设定与台词样例的合计上限。它们在里人格轮次每轮重发且不命中提示词缓存，" +
+				"超出时优先保留设定，样例按段丢弃。",
+			Default: defaultMaxTextBytes,
+			Min:     plugin.IntPtr(512),
+			Max:     plugin.IntPtr(64 * 1024),
+		},
+		{
 			Key: "match_mode", Label: "触发词匹配方式", Type: plugin.FieldSelect,
 			Description: "包含：消息里出现该词即命中；整句相等：整条消息就是该词才命中，更不容易误触发。",
 			Default:     defaultMatch,
@@ -128,9 +149,16 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		return err
 	}
 
+	persona := strings.TrimSpace(plugin.CfgString(cfg, "inner_persona", ""))
+	// textarea 提交的换行可能是 \r\n，而样例的按段截断认的是空行，先归一
+	samples := strings.TrimSpace(strings.ReplaceAll(plugin.CfgString(cfg, "inner_voice_samples", ""), "\r\n", "\n"))
+	limit := plugin.CfgInt(cfg, "max_text_bytes", defaultMaxTextBytes)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.innerPersona = strings.TrimSpace(plugin.CfgString(cfg, "inner_persona", ""))
+	// 两段共享一个预算，设定优先：样例没了里人格仍然成立，只是味道淡
+	p.innerPersona = textclip.Clip(persona, limit)
+	p.innerSamples = textclip.ClipSegments(samples, limit-len(p.innerPersona))
 	p.toInner = parseKeywords(plugin.CfgString(cfg, "to_inner", ""))
 	p.toOuter = parseKeywords(plugin.CfgString(cfg, "to_outer", ""))
 	p.matchMode = plugin.CfgString(cfg, "match_mode", defaultMatch)
@@ -201,6 +229,7 @@ func (p *Plugin) SystemPrompt() string { return "" }
 // settings 是一次调用期间使用的配置快照（SetConfig 会在运行时重新 Init）。
 type settings struct {
 	innerPersona string
+	innerSamples string
 	toInner      []string
 	toOuter      []string
 	matchMode    string
@@ -216,6 +245,7 @@ func (p *Plugin) snapshot() settings {
 	defer p.mu.RUnlock()
 	return settings{
 		innerPersona: p.innerPersona,
+		innerSamples: p.innerSamples,
 		toInner:      p.toInner,
 		toOuter:      p.toOuter,
 		matchMode:    p.matchMode,
@@ -276,19 +306,36 @@ const innerHeader = `[里人格设定 · 优先于上文的角色设定]
 以下设定优先于上文的角色设定。冲突之处以这里为准，未提到的部分沿用上文的角色。
 不说明自己换了人格，不提及另一面的存在，不解释这段设定。`
 
-// TurnPrompt 只在里人格激活时注入里人格设定。
+// innerSamplesHeader 引入里人格的台词样例。此时上下文里可能同时存在表人格的样例
+// （在 system 里、每轮全额重发），历史又多是表人格声音的实例——里人格的腔调全靠
+// 这段近距离注入压住远处的范例，覆盖声明因此必须显式。防火墙与延伸两条与 roleplay
+// 的样例段同义：模型不区分「示范」与「历史」，样例外的场合会回归通用腔。
+const innerSamplesHeader = `[里人格台词样例 · 优先于上文的台词样例]
+以下是当前人格说话的实际样例，说话的方式以这里为准，不再参照上文的任何样例：
+- 称呼、口癖、句子的长短与留白、什么时候不把话说满，都照这个样子来。
+- 样例中出现的具体人和事都是虚构的示范，不是发生过的历史——不引用、不当作记忆，
+  也不在对话中提起。
+- 样例没有覆盖的情绪与场合，按当前人格的声音自行延伸，不滑回上文样例的腔调，
+  也不退回平淡的书面语。`
+
+// TurnPrompt 只在里人格激活时注入里人格的设定与台词样例。
 //
 // 表人格激活时返回空串——注入任何提及里人格的内容，哪怕是「你不知道还有另一面」，
-// 都等于让表人格知道了它的存在。
+// 都等于让表人格知道了它的存在。样例不设「必须先有设定」的门槛：只填样例时，
+// 样例本身就是最小的人格设定。
 func (p *Plugin) TurnPrompt(_ context.Context, ev plugin.TurnEvent) (string, error) {
 	if ev.Scope.Write != personaInner {
 		return "", nil
 	}
 	s := p.snapshot()
-	if s.innerPersona == "" {
-		return "", nil
+	var parts []string
+	if s.innerPersona != "" {
+		parts = append(parts, innerHeader+"\n\n"+s.innerPersona)
 	}
-	return innerHeader + "\n\n" + s.innerPersona, nil
+	if s.innerSamples != "" {
+		parts = append(parts, innerSamplesHeader+"\n\n"+s.innerSamples)
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // parseKeywords 按行切分触发词：去空白、丢空行、统一小写（匹配不区分大小写）。
