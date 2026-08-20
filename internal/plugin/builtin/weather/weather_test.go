@@ -362,3 +362,62 @@ func TestPluginContract(t *testing.T) {
 	var _ plugin.TurnPrompter = p
 	var _ plugin.Actionable = p
 }
+
+func TestMentionsTomorrow(t *testing.T) {
+	for in, want := range map[string]bool{
+		"明天会下雨吗": true, "明早要出门": true, "明晚一起吃饭": true, "明日复明日": true,
+		"今天好热": false, "后天呢": false, "": false,
+	} {
+		if got := mentionsTomorrow(in); got != want {
+			t.Errorf("mentionsTomorrow(%q) = %v", in, got)
+		}
+	}
+}
+
+func TestTurnPromptShowsTomorrowOnlyInWindow(t *testing.T) {
+	p := New()
+	defer p.Stop()
+	if err := p.Init(plugin.InitContext{StateDir: t.TempDir()}, map[string]any{
+		"persona_location": "杭州", "same_city": true, "stale_minutes": 1440, "tomorrow_from_hour": 18,
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	p.Stop()
+
+	day := time.Now()
+	at := func(h int) time.Time { return time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, time.Local) }
+	const layout = "2006-01-02"
+	r := report("杭州 · 浙江 · 中国", "多云", 24, 0)
+	r.Fetched = at(9) // 观测时刻也绑在注入的时钟上，别被过期判定挡掉
+	r.Today = DayInfo{Date: day.Format(layout), Condition: "多云", MinC: 20, MaxC: 28}
+	r.Tomorrow = DayInfo{Date: day.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18}
+	setObs(p, "杭州", r)
+
+	// 上午：今天在、明天不在，也没给角色「看过」
+	p.now = func() time.Time { return at(10) }
+	out, _ := p.TurnPrompt(context.Background(), plugin.TurnEvent{UserInput: "今天好闷"})
+	if !strings.Contains(out, "今天预计多云") || strings.Contains(out, "明天") {
+		t.Errorf("白天不该有明天: %q", out)
+	}
+	if seen := p.obs["杭州"].cur.Tomorrow.Seen; !seen.IsZero() {
+		t.Errorf("没注入就不该记为看过: %v", seen)
+	}
+	// 上午但对方问起明天：看一眼，并从此刻起算「看过」
+	out, _ = p.TurnPrompt(context.Background(), plugin.TurnEvent{UserInput: "明天会下雨吗"})
+	if !strings.Contains(out, "明天预计中雨") || strings.Contains(out, "早些时候") {
+		t.Errorf("问起明天应注入且不该标早就知道了: %q", out)
+	}
+	if seen := p.obs["杭州"].cur.Tomorrow.Seen; !seen.Equal(at(10)) {
+		t.Errorf("首次注入应记下时刻，得到 %v", seen)
+	}
+	// 傍晚：窗口内照常出现，距首次看到已超三小时 → 标早就知道了
+	p.now = func() time.Time { return at(19) }
+	out, _ = p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if !strings.Contains(out, "明天预计中雨，12~18℃（早些时候就知道了）") {
+		t.Errorf("傍晚应注入并标早就知道了: %q", out)
+	}
+	// Seen 只记第一次，不被后来的注入覆盖
+	if seen := p.obs["杭州"].cur.Tomorrow.Seen; !seen.Equal(at(10)) {
+		t.Errorf("Seen 不该被覆盖，得到 %v", seen)
+	}
+}

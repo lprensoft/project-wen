@@ -23,11 +23,11 @@ const cueTTL = 90 * time.Minute
 // maybePostCue 对比一处地点的前后两次观测，值得开口时投递理由。
 // 现况转变以 (weather, 地点) 为键：同一地点更晚的转变覆盖更早的——先下起又停了时，
 // 该说的是「停了」，而不是按顺序把两件事都播一遍。
-func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) {
+func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) bool {
 	s := p.snapshot()
 	prefix := s.rolePrefix(loc)
 	if prefix == "" {
-		return // 配置已不再关心的地点
+		return false // 配置已不再关心的地点
 	}
 	// 现况的转变：前一次观测断档太久（超过两个刷新周期）就当没有先前状态
 	if prevOK && cur.Fetched.Sub(prev.Fetched) <= 2*s.refresh {
@@ -35,36 +35,39 @@ func (p *Plugin) maybePostCue(loc string, prev Report, prevOK bool, cur Report) 
 			cue.Post(cue.Cue{Source: "weather", Key: loc, Text: text, Expire: cur.Fetched.Add(cueTTL)})
 		}
 	}
-	p.forecastCue(prefix, loc, prev, cur)
+	return p.forecastCue(prefix, loc, prev, cur, s.inTomorrowWindow(cur.Fetched))
 }
 
 // forecastCue 盯着明天的预报：预报里出现降水时投一条理由——「明天有雨，记得带伞」
 // 是最经典的主动关心；降水又从预报里消失时撤回，还没说出口的不该再说。
 //
-// 只在「第一次看到这一天有雨」时投（上一次观测同一天的预报已是降水就不再投）：
-// 理由可能已被心跳说出口，每次刷新都重投会让它反复念叨。理由的有效期到今天为止
-// ——过了午夜「明天有雨」这句话就指错了日子。
-func (p *Plugin) forecastCue(prefix, loc string, prev, cur Report) {
+// 只在「看明天」的时段里投（白天的人不会为明天的雨开口），且每一天只投一次
+// （Cued 随观测延续，刷新不重投）：理由可能已被心跳说出口，重投会让它反复念叨。
+// 理由的有效期到今天为止——过了午夜「明天有雨」这句话就指错了日子。
+// 返回本次是否投递了，调用方据此把 Cued 记到缓存上。
+func (p *Plugin) forecastCue(prefix, loc string, prev, cur Report, inWindow bool) bool {
 	tm := cur.Tomorrow
 	if !tm.known() {
-		return
+		return false
 	}
 	key := loc + "|" + tm.Date
-	seenSameDay := prev.Tomorrow.known() && prev.Tomorrow.Date == tm.Date
+	prevWetCued := prev.Tomorrow.known() && prev.Tomorrow.Date == tm.Date && isWet(prev.Tomorrow.Condition) && prev.Tomorrow.Cued
 	switch {
 	case isWet(tm.Condition):
-		if seenSameDay && isWet(prev.Tomorrow.Condition) {
-			return // 上次已经看到并投递过
+		if tm.Cued || !inWindow {
+			return false // 已投过，或还没到看明天的时候
 		}
 		expire, err := time.ParseInLocation("2006-01-02", tm.Date, time.Local)
 		if err != nil {
-			return
+			return false
 		}
 		text := fmt.Sprintf("%s%s明天预报有%s（%.0f~%.0f℃）。", prefix, cur.Place, tm.Condition, tm.MinC, tm.MaxC)
 		cue.Post(cue.Cue{Source: "weather", Key: key, Text: text, Expire: expire})
-	case seenSameDay && isWet(prev.Tomorrow.Condition):
+		return true
+	case prevWetCued:
 		cue.Drop("weather", key) // 雨从预报里消失了，撤回还没说出口的那句
 	}
+	return false
 }
 
 // rolePrefix 给出「这处地点是谁的」的措辞前缀，与 TurnPrompt 的注入措辞一致。

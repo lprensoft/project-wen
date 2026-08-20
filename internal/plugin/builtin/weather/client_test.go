@@ -72,6 +72,9 @@ func TestFetchCurrentParsesDays(t *testing.T) {
 	if rep.Yesterday.Date != "2026-08-19" || rep.Yesterday.Condition != "阴" {
 		t.Errorf("昨天 = %+v", rep.Yesterday)
 	}
+	if rep.Today.Date != "2026-08-20" || !rep.Today.known() {
+		t.Errorf("今天 = %+v", rep.Today)
+	}
 	if rep.Tomorrow.Date != "2026-08-21" || rep.Tomorrow.Condition != "中雨" || rep.Tomorrow.MinC != 12.1 {
 		t.Errorf("明天 = %+v", rep.Tomorrow)
 	}
