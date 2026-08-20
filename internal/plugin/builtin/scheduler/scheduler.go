@@ -55,7 +55,9 @@ func (p *Plugin) Description() string {
 
 func (p *Plugin) SystemPrompt() string {
 	return "你可以管理定时任务：用 schedule_task 创建（支持一次性、按分钟周期、每日定点三种），" +
-		"用 list_tasks 查看，用 cancel_task 取消。用户提出“稍后/定时/每天提醒或执行某事”时应使用这些工具。"
+		"用 list_tasks 查看，用 cancel_task 取消。用户提出“稍后/定时/每天提醒或执行某事”时应使用这些工具。" +
+		"对方随口提到将来的事（约好的时间、要办的事、值得关心的时点）时，即使没有明说要提醒，" +
+		"也可以顺手定一个一次性任务，到时候主动提起。"
 }
 
 func (p *Plugin) Tools() []plugin.Tool {

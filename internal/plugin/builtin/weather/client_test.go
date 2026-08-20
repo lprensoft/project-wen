@@ -58,6 +58,42 @@ const geoOK = `{"results":[{"name":"杭州","latitude":30.2936,"longitude":120.1
 
 const fcOK = `{"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3}}`
 
+// fcOKDaily 带昨天/今天/明天三天的概要（past_days=1 + forecast_days=2 的形状）。
+const fcOKDaily = `{"current":{"temperature_2m":18.4,"relative_humidity_2m":82,"apparent_temperature":16.9,"weather_code":61,"wind_speed_10m":9.3},` +
+	`"daily":{"time":["2026-08-19","2026-08-20","2026-08-21"],"weather_code":[3,61,63],` +
+	`"temperature_2m_max":[24.2,20.1,17.8],"temperature_2m_min":[16.5,15.3,12.1]}}`
+
+func TestFetchCurrentParsesDays(t *testing.T) {
+	stubServer(t, geoOK, fcOKDaily)
+	rep, err := fetchCurrent(context.Background(), http.DefaultClient, Place{Name: "杭州"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Yesterday.Date != "2026-08-19" || rep.Yesterday.Condition != "阴" {
+		t.Errorf("昨天 = %+v", rep.Yesterday)
+	}
+	if rep.Tomorrow.Date != "2026-08-21" || rep.Tomorrow.Condition != "中雨" || rep.Tomorrow.MinC != 12.1 {
+		t.Errorf("明天 = %+v", rep.Tomorrow)
+	}
+}
+
+// daily 形状不符（长度不齐、字段缺失）时整体放弃这两项，现况照常。
+func TestFetchCurrentBadDailyShape(t *testing.T) {
+	bad := `{"current":{"temperature_2m":18.4,"weather_code":61},` +
+		`"daily":{"time":["2026-08-19","2026-08-20"],"weather_code":[3],"temperature_2m_max":[24.2],"temperature_2m_min":[16.5]}}`
+	stubServer(t, geoOK, bad)
+	rep, err := fetchCurrent(context.Background(), http.DefaultClient, Place{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Yesterday.known() || rep.Tomorrow.known() {
+		t.Errorf("形状不符应整体放弃: %+v %+v", rep.Yesterday, rep.Tomorrow)
+	}
+	if rep.Condition != "小雨" {
+		t.Errorf("现况不该受影响: %q", rep.Condition)
+	}
+}
+
 func TestGeocodeParsesFirstResult(t *testing.T) {
 	stubServer(t, geoOK, fcOK)
 	pl, err := geocode(context.Background(), http.DefaultClient, "杭州")
@@ -118,7 +154,8 @@ func TestFetchCurrentSendsCoordinates(t *testing.T) {
 	if _, err := fetchCurrent(context.Background(), http.DefaultClient, Place{Lat: 30.2936, Lon: 120.1614}); err != nil {
 		t.Fatalf("fetchCurrent: %v", err)
 	}
-	for _, want := range []string{"latitude=30.2936", "longitude=120.1614", "temperature_2m"} {
+	for _, want := range []string{"latitude=30.2936", "longitude=120.1614", "temperature_2m",
+		"past_days=1", "forecast_days=2", "daily="} {
 		if !strings.Contains(got, want) {
 			t.Errorf("请求缺少 %q，实际 %q", want, got)
 		}

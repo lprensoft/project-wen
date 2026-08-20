@@ -10,6 +10,9 @@
 //
 // 天气在后台按固定间隔刷新，注入路径只读内存里的缓存：TurnPrompt 在每轮对话的同步
 // 路径上，在那里发网络请求就是让每一轮都替一次超时买单。
+//
+// 除了每轮注入现况，天气出现值得开口的转变（下起来/停了）时还会向 internal/cue
+// 投递一条开口理由，由心跳带进主动开口的轮次（见 cue.go）。
 package weather
 
 import (
@@ -274,14 +277,14 @@ func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, erro
 	var lines []string
 	if s.sameCity {
 		if r, ok := p.fresh(s.personaLoc, s.stale, now); ok {
-			lines = append(lines, fmt.Sprintf("%s（你与对方同在）：%s", r.Place, renderConditions(r)))
+			lines = append(lines, fmt.Sprintf("%s（你与对方同在）：%s", r.Place, renderConditions(r)+renderDays(r, now)))
 		}
 	} else {
 		if r, ok := p.fresh(s.personaLoc, s.stale, now); ok {
-			lines = append(lines, "你所在的"+r.Place+"："+renderConditions(r))
+			lines = append(lines, "你所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now))
 		}
 		if r, ok := p.fresh(s.userLoc, s.stale, now); ok {
-			lines = append(lines, "对方所在的"+r.Place+"："+renderConditions(r))
+			lines = append(lines, "对方所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now))
 		}
 	}
 	if len(lines) == 0 {
@@ -346,8 +349,12 @@ func (p *Plugin) refreshOne(ctx context.Context, client *http.Client, loc string
 	}
 	p.dataMu.Lock()
 	o := p.entryLocked(loc)
+	prev, prevOK := o.cur, o.curOK
 	o.cur, o.curOK, o.lastErr = rep, true, ""
 	p.dataMu.Unlock()
+
+	// 前后两次观测对比出值得开口的转变（下起来/停了）时，投递一条开口理由
+	p.maybePostCue(loc, prev, prevOK, rep)
 }
 
 // observe 取一次观测，地名解析的结果按城市缓存——它几乎不变，不必每次重解析。
@@ -449,4 +456,23 @@ func renderConditions(r Report) string {
 	}
 	fmt.Fprintf(&b, "，风速 %.0f km/h。", r.WindKmh)
 	return b.String()
+}
+
+// renderDays 渲染昨天与明天的概要，接在现况之后。
+//
+// 按日期核对而不是信字段名：观测是缓存的，跨过午夜后缓存里的「明天」其实是今天，
+// 照字面注入就是错话。对不上的那一天直接不注入；旧缓存没有这两项时同样整段为空。
+func renderDays(r Report, now time.Time) string {
+	const layout = "2006-01-02"
+	var parts []string
+	if r.Yesterday.known() && r.Yesterday.Date == now.AddDate(0, 0, -1).Format(layout) {
+		parts = append(parts, fmt.Sprintf("昨天%s，%.0f~%.0f℃", r.Yesterday.Condition, r.Yesterday.MinC, r.Yesterday.MaxC))
+	}
+	if r.Tomorrow.known() && r.Tomorrow.Date == now.AddDate(0, 0, 1).Format(layout) {
+		parts = append(parts, fmt.Sprintf("明天预计%s，%.0f~%.0f℃", r.Tomorrow.Condition, r.Tomorrow.MinC, r.Tomorrow.MaxC))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "；") + "。"
 }

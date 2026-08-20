@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
+	"wen/internal/cue"
 	"wen/internal/plugin"
 )
 
@@ -40,8 +42,18 @@ func (p *Plugin) loop(ctx context.Context) {
 
 // nextBeatLocked 推算下一次心跳时刻：常规是「上次心跳 + 当前间隔」，暂停把它
 // 压后到暂停结束——暂停不改间隔本身，到点后按原节奏继续。调用方需持有 p.mu。
+//
+// 公告板上有待说的开口理由时，把下一拍提前到「上次心跳 + 最快间隔」：理由驱动的
+// 开口不该等满一个常规周期，「刚下起雨」等一小时再说就凉了。只在动态节奏下提前
+// （固定节奏的含义就是雷打不动）；暂停仍然压过一切——睡着的人不为一场雨叫醒，
+// 理由等不到那时自会过期。
 func (p *Plugin) nextBeatLocked() time.Time {
 	next := p.lastBeat.Add(p.cur)
+	if p.dynamic && cue.Pending(time.Now()) {
+		if c := p.lastBeat.Add(p.minIv); c.Before(next) {
+			next = c
+		}
+	}
 	if p.pausedUntil.After(next) {
 		return p.pausedUntil
 	}
@@ -95,13 +107,37 @@ func (p *Plugin) beat(ctx context.Context) {
 	defer cancel()
 	// 心跳提示词是一次性输入：只发给当轮模型，不留在后续上下文，界面不按用户消息展示
 	tctx = plugin.WithEphemeralInput(tctx)
-	if _, err := runTurn(tctx, sid, gapNote(prompt, lastActive, time.Now(), cur)); err != nil {
+	cues := cue.Take(time.Now())
+	input := withCues(gapNote(prompt, lastActive, time.Now(), cur), cues)
+	if _, err := runTurn(tctx, sid, input); err != nil {
+		// 理由没送达就放回公告板等下一拍（已过期的会被 Post 拒收），别让一次
+		// 会话忙把「刚下起雨」整个吞掉
+		for _, c := range cues {
+			cue.Post(c)
+		}
 		if errors.Is(err, plugin.ErrSessionBusy) {
 			log.Printf("heartbeat: 会话 %s 忙，本次心跳跳过", sid)
 		} else if ctx.Err() == nil { // 停止时的取消错误不值得记
 			log.Printf("heartbeat: 心跳轮次失败: %v", err)
 		}
 	}
+}
+
+// withCues 把待说的开口理由附在心跳输入末尾。理由给出的是「发生了什么」，
+// 说不说、怎么说仍归模型——与当下不相干的理由硬播出来比沉默更出戏。
+func withCues(prompt string, cues []cue.Cue) string {
+	if len(cues) == 0 {
+		return prompt
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\n【值得开口的事】")
+	for _, c := range cues {
+		b.WriteString("\n- ")
+		b.WriteString(c.Text)
+	}
+	b.WriteString("\n值得说就自然地提起，不逐条播报；与当下不相干的可以不提。")
+	return b.String()
 }
 
 // pickSession 返回最近活跃的会话，一个都没有时新建一个。
