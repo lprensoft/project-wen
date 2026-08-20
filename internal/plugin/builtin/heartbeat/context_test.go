@@ -115,6 +115,64 @@ func TestSetIntervalSwitchesContext(t *testing.T) {
 	}
 }
 
+// pause_heartbeat 可顺带指定醒来后的情境：「睡前暂停到早上、醒来用早安开场」
+// 本是一个动作，拆成两次调用模型容易只做一半。
+func TestPauseSwitchesContext(t *testing.T) {
+	p := newTestPluginWithContexts(t)
+	out, err := p.Tools()[1].Execute(context.Background(),
+		json.RawMessage(`{"minutes":480,"reason":"她说要睡了","context":"早安"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "早安") {
+		t.Errorf("回显应提到情境切换：%q", out)
+	}
+	p.mu.Lock()
+	cur, paused := p.curContext, p.pausedUntil
+	p.mu.Unlock()
+	if cur != "早安" {
+		t.Errorf("curContext = %q", cur)
+	}
+	if paused.IsZero() {
+		t.Error("暂停应同时生效")
+	}
+
+	// 情境名不对时整个调用失败，暂停不能只生效一半
+	q := newTestPluginWithContexts(t)
+	if _, err := q.Tools()[1].Execute(context.Background(),
+		json.RawMessage(`{"minutes":480,"reason":"睡","context":"不存在的"}`)); err == nil || !strings.Contains(err.Error(), "早安") {
+		t.Fatalf("err = %v，应报错并列出可选情境", err)
+	}
+	q.mu.Lock()
+	paused = q.pausedUntil
+	q.mu.Unlock()
+	if !paused.IsZero() {
+		t.Error("情境出错时不该暂停成功")
+	}
+}
+
+func newTestPluginWithContexts(t *testing.T) *Plugin {
+	t.Helper()
+	p, _ := newInited(t, noTurn, map[string]any{"context_prompts": "[早安]\n说早安。\n[睡前]\n轻声。"})
+	return p
+}
+
+// 两个工具的 schema 都只在配置了情境时声明 context 参数。
+func TestContextParamDeclaredOnlyWithContexts(t *testing.T) {
+	p := newTestPluginWithContexts(t)
+	for i, name := range []string{"set_heartbeat_interval", "pause_heartbeat"} {
+		if got := string(p.Tools()[i].Schema()); !strings.Contains(got, `"context"`) {
+			t.Errorf("%s 配置了情境时应声明 context 参数:\n%s", name, got)
+		}
+	}
+	q, _ := newInited(t, noTurn, map[string]any{"context_prompts": ""})
+	for i, name := range []string{"set_heartbeat_interval", "pause_heartbeat"} {
+		if got := string(q.Tools()[i].Schema()); strings.Contains(got, `"context"`) {
+			t.Errorf("%s 未配置情境时不该声明 context 参数:\n%s", name, got)
+		}
+	}
+}
+
 func TestContextSurvivesRestart(t *testing.T) {
 	stateDir := t.TempDir()
 	cfg := map[string]any{"context_prompts": "[睡前]\n轻声。"}
