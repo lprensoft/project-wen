@@ -518,6 +518,10 @@ func TestPushNotice(t *testing.T) {
 	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-1", Origin: "test_bot", Text: "转投失败"})
 	expectQuiet()
 
+	// 来源为空（前台轮次写下的，如失败转译的报错原文）：不推
+	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-1", Text: "本轮模型调用失败，原始错误：401"})
+	expectQuiet()
+
 	// 没有用户绑定的会话：不推，也不自动接入
 	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-2", Origin: "memory", Text: "无人绑定"})
 	expectQuiet()

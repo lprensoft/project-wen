@@ -278,7 +278,11 @@ func (c *Core) worker(ctx context.Context, q chan Message) {
 }
 
 // PushNotice 把一条会话注记推给绑定该会话的用户（「推送后台通知」开关，经 Push 通道，
-// 推送本身不产生任何会话记录）。三类注记不推：
+// 推送本身不产生任何会话记录）。只推**插件后台工作**留下的注记（来源非空且不是
+// IM 通道），其余一律不推：
+//   - 来源为空的（前台轮次里写下的，如失败转译留下的报错原文）：那轮对话发生在
+//     别的界面上，把它的旁注推到 IM 只会是一条没头没尾的内部信息——失败转译藏起
+//     报错原文正是为了沉浸感，从注记这条边路推出去等于前门挡住后门漏；
 //   - 带可见域标签的：它属于某一面人格，而路由只认「会话→通道」不认标签，拿不准
 //     归属就不送——宁可少推，不把一面人格的动静泄漏到另一面的窗口里；
 //   - IM 通道自己发的（如转投失败的说明）：那是给操作者看的旁注，推给用户只会暴露
@@ -291,7 +295,7 @@ func (c *Core) PushNotice(ev plugin.NoticeEvent) {
 	if !c.cfg.PushNotices || c.cfg.Push == nil {
 		return
 	}
-	if strings.TrimSpace(ev.Text) == "" || ev.Tag != "" || IsChannel(ev.Origin) {
+	if strings.TrimSpace(ev.Text) == "" || ev.Tag != "" || ev.Origin == "" || IsChannel(ev.Origin) {
 		return
 	}
 	if !ServedBy(c.cfg.PluginName, ev.SessionID) {
