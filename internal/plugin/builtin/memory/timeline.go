@@ -51,7 +51,7 @@ const timelinePrompt = `下面是 %s 这一天的对话摘录。请把这一天�
 %s`
 
 // timelineHeader 领起本轮注入的时间线。
-const timelineHeader = `[最近经历]
+const timelineHeader = `[最近几天]
 按日的时间线，新的在前；提到某天的事而这里没有时，说明那天没有留下记录：`
 
 // dayBuf 是一个自然日攒下的对话文本。
