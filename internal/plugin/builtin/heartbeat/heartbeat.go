@@ -39,6 +39,24 @@ const defaultPrompt = `【心跳】这是一次定时唤醒，当前没有新的
 若你判断下次该早些或晚些再开口，用 set_heartbeat_interval 定下时间；
 对方要去睡或长时间离开时，用 pause_heartbeat 暂停到合适的时候再醒。`
 
+// defaultContexts 是情境提示词的默认值：内置一个「生活」情境作范例——角色扮演
+// 场景下让角色在无人时过自己的日子，同时示范配置格式。用户可改可删；清空保存后
+// 就没有情境（FieldText 的空串是合法取值，不会长回来）。
+//
+// 「过自己的日子」不是新机制：心跳轮次本来就带全部启用插件的工具，场景、心情这类
+// 状态模型顺手就能更新，缺的只是一句引导。措辞对工具存在与否不作假设——有就用，
+// 没有这句话自然落空。
+const defaultContexts = `[生活]
+【心跳】这是一次定时唤醒，没有新的用户消息。先过自己的日子，再决定要不要开口：
+- 回想从上次到现在你自己在做什么、此刻在哪、心情与状态如何——你的生活在对话之外
+  也在继续。有可以记录场景、心情、身体状态的工具就顺手把变化更新进去，变化的幅度
+  要与实际过去的时间相称。
+- 然后看有没有值得对对方说的：惦记的事、答应过的跟进、刚发生的变化。有就自然地
+  说，像随手给人发消息那样，一两句就好，不必汇报你刚更新的状态。
+- 没有就保持安静，输出空回复即可。不编造进展，不为了说话而说话。
+下次该早些或晚些醒就用 set_heartbeat_interval 定；对方要睡或长时间离开时用
+pause_heartbeat 暂停到合适的时候。`
+
 // beatTimeout 是单次心跳轮次的时长上限。
 const beatTimeout = 10 * time.Minute
 
@@ -133,9 +151,10 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Description: "允许角色自己定下次主动开口的时间、或暂停一段时间，并在无人聊天时逐步放缓到最慢间隔；关闭则固定按基础间隔，角色也改不动",
 		},
 		{
-			Key: "context_prompts", Label: "情境提示词", Type: plugin.FieldText, Default: "",
+			Key: "context_prompts", Label: "情境提示词", Type: plugin.FieldText, Default: defaultContexts,
 			Description: "按情境给心跳配不同的提示词。每段以「[情境名]」单独起一行，之后的行是该情境的内容，" +
-				"可写多段（如 [睡前] [闲聊] [干活]），由角色自行切换，说「默认」切回上面的提示词。留空则始终用上面的。",
+				"可写多段（如 [睡前] [闲聊] [干活]），由角色自行切换，说「默认」切回上面的提示词。" +
+				"默认内置一个「生活」情境作范例（角色在无人时过自己的日子），可改可删；清空则始终用上面的提示词。",
 		},
 		{
 			Key: "min_minutes", Label: "最快间隔（分钟）", Type: plugin.FieldInt,
@@ -175,7 +194,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.base, p.minIv, p.maxIv = base, minIv, maxIv
 	p.prompt = plugin.CfgString(cfg, "prompt", defaultPrompt)
 	p.dynamic = plugin.CfgBool(cfg, "dynamic", true)
-	p.contexts = parseContexts(cfgRawText(cfg, "context_prompts"))
+	p.contexts = parseContexts(cfgRawText(cfg, "context_prompts", defaultContexts))
 	p.stateDir = ictx.StateDir
 	p.runTurn = ictx.RunTurn
 	p.newSession = ictx.NewSession

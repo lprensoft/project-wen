@@ -35,6 +35,31 @@ func TestParseContexts(t *testing.T) {
 	}
 }
 
+// 没配置过情境时用内置的「生活」范例；用户显式清空后不长回来。
+func TestDefaultContextsShipLifeSample(t *testing.T) {
+	p, _ := newInited(t, noTurn, nil)
+	p.mu.Lock()
+	life, ok := p.contexts["生活"]
+	p.mu.Unlock()
+	if !ok {
+		t.Fatal("默认配置应内置「生活」情境")
+	}
+	for _, want := range []string{"过自己的日子", "不编造进展", "set_heartbeat_interval"} {
+		if !strings.Contains(life, want) {
+			t.Errorf("「生活」情境缺少 %q", want)
+		}
+	}
+
+	// FieldText 的空串是合法取值：清空保存后就没有情境
+	q, _ := newInited(t, noTurn, map[string]any{"context_prompts": ""})
+	q.mu.Lock()
+	n := len(q.contexts)
+	q.mu.Unlock()
+	if n != 0 {
+		t.Errorf("显式清空后不该有情境: %d 个", n)
+	}
+}
+
 func TestBeatPromptFollowsContext(t *testing.T) {
 	p, _ := newInited(t, noTurn, map[string]any{
 		"prompt":          "默认提示词",

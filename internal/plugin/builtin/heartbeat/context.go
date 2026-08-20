@@ -58,13 +58,14 @@ func (p *Plugin) beatPromptLocked() string {
 	return p.prompt
 }
 
-// cfgRawText 读一个多行文本配置项，空串原样返回（FieldText 的空串是合法取值）。
-func cfgRawText(cfg map[string]any, key string) string {
+// cfgRawText 读一个多行文本配置项。键**缺失**时返回默认值（没配置过），键存在时
+// 原样返回——包括空串（FieldText 的空串是合法取值，用户清空后不该长回默认值）。
+func cfgRawText(cfg map[string]any, key, def string) string {
 	if cfg == nil {
-		return ""
+		return def
 	}
 	if s, ok := cfg[key].(string); ok {
 		return s
 	}
-	return ""
+	return def
 }
