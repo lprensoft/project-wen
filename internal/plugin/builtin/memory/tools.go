@@ -29,7 +29,7 @@ func (t *listTool) Schema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"keyword": {"type": "string", "description": "过滤关键词，对标题、摘要与正文做包含匹配；留空表示不过滤"},
-			"type": {"type": "string", "description": "按分类过滤", "enum": ["偏好", "约定", "事实", "踩坑"]}
+			"type": {"type": "string", "description": "按分类过滤", "enum": ["偏好", "约定", "事实", "踩坑", "经历"]}
 		}
 	}`)
 }
@@ -136,7 +136,7 @@ func (t *saveTool) Schema() json.RawMessage {
 		"properties": {
 			"name": {"type": "string", "description": "标题，简短且唯一"},
 			"description": {"type": "string", "description": "一句话摘要，会出现在记忆索引里，过长会被截断"},
-			"type": {"type": "string", "description": "分类", "enum": ["偏好", "约定", "事实", "踩坑"]},
+			"type": {"type": "string", "description": "分类；经历指自己做过、遇到过的事，与关于对方的事实区分", "enum": ["偏好", "约定", "事实", "踩坑", "经历"]},
 			"content": {"type": "string", "description": "完整内容"},
 			"mode": {"type": "string", "description": "同名记忆已存在时的处理方式，默认拒绝", "enum": ["create", "replace"]}%s
 		},

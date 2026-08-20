@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -408,6 +409,7 @@ func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 		"约定：两人之间或协作上定下来的规则与安排",
 		"事实：关于对方及其处境的、不易重新得知的信息",
 		"踩坑：已经验证过的失败原因与正确做法",
+		"经历：自己做过、遇到过的事",
 	}
 	for _, d := range defs {
 		if !strings.Contains(extractPrompt, d) {
@@ -428,5 +430,36 @@ func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 		if strings.Contains(extractPrompt, bad) {
 			t.Errorf("extractPrompt 仍含纯工程窄判据 %q", bad)
 		}
+	}
+}
+
+// 「经历」是第五类：角色自己做过、遇到过的事。两条路径都得认得它——工具能存，
+// 提炼也能挑出来并落盘。
+func TestExperienceTypeSavesAndExtracts(t *testing.T) {
+	c := &fakeComplete{replies: []string{
+		`[{"name":"周末的湖边","description":"和他去湖边散了步","type":"经历","content":"周六下午两个人沿着湖边走了一圈。"}]`,
+	}}
+	p := newPluginWithComplete(t, c, nil)
+
+	raw, _ := json.Marshal(map[string]string{
+		"name": "独自看完的电影", "description": "一个人看了场午夜场", "type": "经历", "content": "片尾曲放完才走。",
+	})
+	if _, err := (&saveTool{p: p}).Execute(context.Background(), raw); err != nil {
+		t.Fatalf("save_memory 应接受「经历」：%v", err)
+	}
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"独自看完的电影", "周末的湖边"} {
+		e, err := p.snapshot().store.Get(name)
+		if err != nil {
+			t.Fatalf("%s 应已落盘：%v", name, err)
+		}
+		if e.Type != "经历" {
+			t.Errorf("%s 的分类 = %q, want 经历", name, e.Type)
+		}
+	}
+	if !strings.Contains(c.prompts[0], "经历：") || !strings.Contains(c.prompts[0], "踩坑|经历") {
+		t.Error("提炼提示词应含「经历」的判据与取值")
 	}
 }
