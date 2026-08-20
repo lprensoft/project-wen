@@ -77,8 +77,16 @@ jobs:
           # 所以判断一律写成 if。
           # 开发版的包名固定用 dev、不嵌提交号：滚动预发布靠同名附件替换旧产物，
           # 名字带提交号的话旧包只会越积越多。对应哪个提交写在发布说明里。
+          # 开发版把界面显示的版本号注入成 git describe 形态（v0.4.1-3-g29a95a4），
+          # 让测试包自我标识而不冒充正式版；--match 'v*' 只认正式版 tag，
+          # 滚动的 dev tag 不参与推算。正式发布不注入，版本号以 internal/version 为准。
+          ldflags="-s -w"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             version="dev"
+            describe=$(git describe --tags --match 'v*' 2>/dev/null || true)
+            if [ -n "$describe" ]; then
+              ldflags="-s -w -X wen/internal/version.Version=${describe}"
+            fi
           else
             version="${GITHUB_REF_NAME}"
           fi
@@ -95,7 +103,7 @@ jobs:
               binary="wen.exe"
             fi
             echo "==> $goos/$goarch"
-            GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w" -o "$work/$binary" ./cmd/wen
+            GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "$ldflags" -o "$work/$binary" ./cmd/wen
 
             # 只给二进制的话，用户拿到手不知道配置从哪来
             cp config.example.yaml README.md CHANGELOG.md LICENSE "$work/"
@@ -159,8 +167,9 @@ jobs:
           last_tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
           {
             echo "开发版构建，对应提交 \`${GITHUB_SHA::7}\`，构建于 $(date -u +'%Y-%m-%d %H:%M') UTC。"
-            echo "程序界面与文件属性里显示的版本号仍是上一个正式版${last_tag:+（$last_tag）}——"
-            echo "版本号只在正式发布时递增。"
+            echo "程序界面与 \`wen version\` 显示形如 \`v0.4.1-3-g29a95a4\` 的开发版号"
+            echo "（上一个正式版-之后的提交数-g提交号）；Windows exe 文件属性里仍是"
+            echo "上一个正式版${last_tag:+（$last_tag）}的版本资源，属正常现象。"
             echo ""
             if [ -n "$last_tag" ]; then
               echo "### 自 $last_tag 以来的改动（提交原文）"
