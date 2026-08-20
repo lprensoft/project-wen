@@ -6,6 +6,10 @@
 // 再开口——该等还是该催，模型在上下文里看得比任何外部判定都清楚。无人聊天时另有一个
 // 内置的衰减定时器每 15 分钟把间隔放缓一档，直到最慢间隔：那时没有新的对话可判断，
 // 机械退避就够了，为此再打一次模型是白花钱。
+//
+// 心跳同时是「开口理由」公告板（internal/cue）的消费方：别的插件投递了值得主动
+// 说的事（如天气刚下起雨）时，下一拍提前到最快间隔，理由随心跳提示词一并交给模型
+// ——主动开口从纯时间驱动变成有事可说的理由驱动。
 package heartbeat
 
 import (
@@ -17,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"wen/internal/cue"
 	"wen/internal/plugin"
 )
 
@@ -209,11 +214,30 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.wake = make(chan struct{}, 1)
 	p.wg.Add(1)
 	go p.loop(p.ctx)
+	// 公告板来了新理由就叫醒循环重算下一拍。锁序恒为 p.mu → cue 内部锁
+	// （Post 的回调在 cue 锁外发起），不成环
+	cue.SetNotify(p.onCue)
 	return nil
 }
 
+// onCue 在公告板有新理由时叫醒循环，让 nextBeatLocked 的提前逻辑立即生效。
+func (p *Plugin) onCue() {
+	p.mu.Lock()
+	wake := p.wake
+	p.mu.Unlock()
+	if wake == nil {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
 // Stop 停止心跳循环。只做取消与有界等待，符合 Stoppable 契约。
+// 叫醒回调一并卸下：插件已停，公告板再叫也没有循环可醒。
 func (p *Plugin) Stop() {
+	cue.SetNotify(nil)
 	p.mu.Lock()
 	cancel := p.cancel
 	p.cancel = nil

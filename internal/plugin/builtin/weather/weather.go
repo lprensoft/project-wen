@@ -10,6 +10,9 @@
 //
 // 天气在后台按固定间隔刷新，注入路径只读内存里的缓存：TurnPrompt 在每轮对话的同步
 // 路径上，在那里发网络请求就是让每一轮都替一次超时买单。
+//
+// 除了每轮注入现况，天气出现值得开口的转变（下起来/停了）时还会向 internal/cue
+// 投递一条开口理由，由心跳带进主动开口的轮次（见 cue.go）。
 package weather
 
 import (
@@ -346,8 +349,12 @@ func (p *Plugin) refreshOne(ctx context.Context, client *http.Client, loc string
 	}
 	p.dataMu.Lock()
 	o := p.entryLocked(loc)
+	prev, prevOK := o.cur, o.curOK
 	o.cur, o.curOK, o.lastErr = rep, true, ""
 	p.dataMu.Unlock()
+
+	// 前后两次观测对比出值得开口的转变（下起来/停了）时，投递一条开口理由
+	p.maybePostCue(loc, prev, prevOK, rep)
 }
 
 // observe 取一次观测，地名解析的结果按城市缓存——它几乎不变，不必每次重解析。
