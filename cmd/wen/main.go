@@ -39,6 +39,7 @@ import (
 	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/skills"
+	"wen/internal/plugin/builtin/stylewatch"
 	"wen/internal/plugin/builtin/telegrambot"
 	"wen/internal/plugin/builtin/weather"
 	"wen/internal/plugin/builtin/webfetch"
@@ -283,6 +284,7 @@ var needsSetupPlugins = map[string]bool{
 	"presence":     true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
 	"belongings":   true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
 	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
+	"style_watch":  true, // 同上：无需配置就能工作，进这张表只因为它依赖默认关闭的 roleplay
 
 	"heartbeat":    true,
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
@@ -309,8 +311,11 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// belongings 排在舞台之后：持有物是舞台上的资产，先立角色与舞台才有归属对象；
 		// body_sense 再排在其后：身体感知要有角色与场景在先，才有作用对象；
 		// presence 收尾：现场快照是角色、舞台、身体、心情都立起来之后「此刻」的定格，
-		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近
+		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近；
+		// style_watch 跟在 presence 之后：它不注入任何提示词，只观察轮次结束，放在
+		// 角色演绎这组的末尾是为了设置页上与 mood、presence 同节展示
 		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), mood.New(), presence.New(),
+		stylewatch.New(),
 		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
 		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。
 		// 早先它们排在最前面，落在 [角色设定 · 最高优先级] 声明之前，那句「以下设定优先于
