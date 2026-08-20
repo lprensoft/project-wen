@@ -281,6 +281,7 @@ var needsSetupPlugins = map[string]bool{
 	"body_sense":   true, // 同上：自带默认部位表，开箱即用，进这张表只因为它依赖默认关闭的 roleplay
 	"mood":         true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
 	"presence":     true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
+	"belongings":   true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
 	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
 
 	"heartbeat":    true,
