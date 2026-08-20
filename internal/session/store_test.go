@@ -208,3 +208,35 @@ func TestInvalidID(t *testing.T) {
 		}
 	}
 }
+
+func TestListOrdersByActivity(t *testing.T) {
+	s := newTestStore(t)
+	old, _ := s.Create()
+	time.Sleep(1100 * time.Millisecond) // ID 精度到秒，确保创建时间可区分
+	fresh, _ := s.Create()
+
+	// 旧会话后来有人来过：它该排到刚创建但没人交互的会话前面
+	if err := s.SetLastActive(old.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	metas, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 2 || metas[0].ID != old.ID || metas[1].ID != fresh.ID {
+		t.Fatalf("list order: got %v, want [%s %s]", ids(metas), old.ID, fresh.ID)
+	}
+	// LastActive 与 List 用同一条规则
+	id, _, err := s.LastActive()
+	if err != nil || id != old.ID {
+		t.Errorf("LastActive = %q, %v; want %q", id, err, old.ID)
+	}
+}
+
+func ids(metas []Meta) []string {
+	out := make([]string, len(metas))
+	for i, m := range metas {
+		out[i] = m.ID
+	}
+	return out
+}

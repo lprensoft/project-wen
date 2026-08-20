@@ -34,6 +34,15 @@ type Meta struct {
 	Tag string `json:"tag,omitempty"`
 }
 
+// activeAt 是「最近活跃」的排序键：最近一次真人交互的时间，旧会话没有该字段时
+// 回落创建时间。List 的排序与 LastActive 的挑选共用这一条规则，不各写一份。
+func (m Meta) activeAt() time.Time {
+	if m.LastActiveAt != nil {
+		return *m.LastActiveAt
+	}
+	return m.CreatedAt
+}
+
 // KindSummary 标记压缩摘要消息（Kind 为空则是普通消息）。
 const KindSummary = "summary"
 
