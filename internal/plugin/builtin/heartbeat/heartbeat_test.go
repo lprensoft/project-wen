@@ -185,6 +185,21 @@ func TestMaybeDecay(t *testing.T) {
 	if p.cur != 30*time.Minute {
 		t.Fatalf("动态关闭时不该衰减，得到 %v", p.cur)
 	}
+
+	// 暂停期间：不衰减——这段安静是模型自己定的，不是「没人想聊」的证据
+	p.dynamic = true
+	p.pausedUntil = time.Now().Add(time.Hour)
+	p.maybeDecay()
+	if p.cur != 30*time.Minute {
+		t.Fatalf("暂停期间不该衰减，得到 %v", p.cur)
+	}
+
+	// 暂停到期后：又是自然安静，衰减照常恢复
+	p.pausedUntil = time.Now().Add(-time.Minute)
+	p.maybeDecay()
+	if p.cur != 45*time.Minute {
+		t.Fatalf("暂停到期后应恢复衰减，得到 %v", p.cur)
+	}
 }
 
 // setTool 造一个能直接调用的工具与它所属的插件。

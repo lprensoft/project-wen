@@ -150,9 +150,12 @@ func gapNote(prompt string, lastActive, now time.Time, cur time.Duration) string
 
 // maybeDecay 空闲衰减：距最近真人交互超过一个当前间隔时，把间隔放缓一档（×1.5），
 // 直到最慢间隔。动态心跳关闭时不衰减——那是「固定节奏」的含义。
+// 暂停期间也不衰减：这段安静是模型自己定下的（pause_heartbeat 承诺「到点按原节奏
+// 恢复」），不是「没人想聊」的证据，衰减再计一次就是把同一份沉默记了两笔账。
+// 豁免只覆盖暂停本身——到点之后若仍无人来聊，又是自然安静，衰减照常恢复计数。
 func (p *Plugin) maybeDecay() {
 	p.mu.Lock()
-	if !p.dynamic || p.cur >= p.maxIv {
+	if !p.dynamic || p.cur >= p.maxIv || time.Now().Before(p.pausedUntil) {
 		p.mu.Unlock()
 		return
 	}
