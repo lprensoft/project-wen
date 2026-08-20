@@ -61,3 +61,15 @@ func (p *Plugin) push(ctx context.Context, openID, text string) bool {
 	p.send(ctx, openID, text, "")
 	return true
 }
+
+// OnNotice 旁听会话注记：开着「推送后台通知」时，把后台工作留下的说明（提炼的
+// 记录等）推给绑定用户。过滤规则（开关、共享域、非 IM 来源、归属通道）都在骨架的
+// PushNotice 里，通道只负责转交。
+func (p *Plugin) OnNotice(_ context.Context, ev plugin.NoticeEvent) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core != nil {
+		core.PushNotice(ev)
+	}
+}

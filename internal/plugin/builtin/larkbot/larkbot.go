@@ -204,6 +204,10 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Key: "show_tools", Label: "展示工具调用", Type: plugin.FieldBool, Default: false,
 			Description: "把每轮调用了哪些工具也推送过来（只有工具名，不含参数与结果）",
 		},
+		{
+			Key: "push_notices", Label: "推送后台通知", Type: plugin.FieldBool, Default: false,
+			Description: "把后台工作留下的说明也推送过来（如记忆提炼的记录）。只推共享内容，推送本身不写入会话",
+		},
 	}
 }
 
@@ -249,6 +253,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 		TurnTimeout:    turnTimeout,
 		ShowThinking:   plugin.CfgBool(cfg, "show_thinking", false),
 		ShowTools:      plugin.CfgBool(cfg, "show_tools", false),
+		PushNotices:    plugin.CfgBool(cfg, "push_notices", false),
 		Allow:          p.allowed,
 		Push:           p.push,
 		Notice:         ictx.Notice,

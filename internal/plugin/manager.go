@@ -655,6 +655,14 @@ func (m *Manager) NotifyTurnEnd(ctx context.Context, ev TurnEndEvent) {
 	}
 }
 
+// NotifyNotice 在一条会话注记落盘后广播给所有实现 NoticeObserver 的启用插件。
+// 在注记写入方的路径上调用，实现须快速返回。
+func (m *Manager) NotifyNotice(ctx context.Context, ev NoticeEvent) {
+	for _, e := range enabledAs[NoticeObserver](m) {
+		safely(e.name, "处理会话注记事件", func() { e.impl.OnNotice(ctx, ev) })
+	}
+}
+
 // ---------- 状态持久化（plugins.state.json） ----------
 
 // persistedEntry 是单个插件的持久化状态（开关 + 界面上改过的配置）。

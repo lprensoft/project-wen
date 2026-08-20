@@ -61,6 +61,8 @@ type Config struct {
 
 	ShowThinking bool
 	ShowTools    bool
+	// PushNotices 开启后把会话注记（后台工作留下的说明，如提炼的记录）推给绑定用户。
+	PushNotices bool
 
 	// Allow 判定用户是否放行。为 nil 表示一律拒绝——白名单为空时拒绝所有人是各通道
 	// 一致的既定行为，把它做成默认值可以避免某条通道忘了实现就变成对全网开放。
@@ -272,6 +274,50 @@ func (c *Core) worker(ctx context.Context, q chan Message) {
 		case msg := <-q:
 			c.process(ctx, msg)
 		}
+	}
+}
+
+// PushNotice 把一条会话注记推给绑定该会话的用户（「推送后台通知」开关，经 Push 通道，
+// 推送本身不产生任何会话记录）。三类注记不推：
+//   - 带可见域标签的：它属于某一面人格，而路由只认「会话→通道」不认标签，拿不准
+//     归属就不送——宁可少推，不把一面人格的动静泄漏到另一面的窗口里；
+//   - IM 通道自己发的（如转投失败的说明）：那是给操作者看的旁注，推给用户只会暴露
+//     另一条通道的存在；
+//   - 装了分通道路由且本会话不归本通道服务的：注记跟着回复走同一条出口。
+//
+// 与转投用的 pushTo 不同，这里只推给**已经绑定**该会话的用户，刻意不做「自动把
+// 唯一已知用户接入会话」：注记是旁注，不值得为它建立会话绑定。
+func (c *Core) PushNotice(ev plugin.NoticeEvent) {
+	if !c.cfg.PushNotices || c.cfg.Push == nil {
+		return
+	}
+	if strings.TrimSpace(ev.Text) == "" || ev.Tag != "" || IsChannel(ev.Origin) {
+		return
+	}
+	if !ServedBy(c.cfg.PluginName, ev.SessionID) {
+		return
+	}
+	users := c.binding.UsersFor(ev.SessionID)
+	if len(users) == 0 {
+		return
+	}
+	// 广播发生在注记写入方的路径上，发送工作放 goroutine；用 Core 的生命周期 ctx，
+	// 写入方的 ctx 可能在广播返回后立即被取消。
+	c.mu.Lock()
+	if c.cancel == nil {
+		c.mu.Unlock()
+		return
+	}
+	ctx := c.ctx
+	c.wg.Add(len(users))
+	c.mu.Unlock()
+	for _, userID := range users {
+		go func(userID string) {
+			defer c.wg.Done()
+			if !c.cfg.Push(ctx, userID, ev.Text) {
+				log.Printf("%s: 注记推送未送达 %s", c.cfg.PluginName, userID)
+			}
+		}(userID)
 	}
 }
 
