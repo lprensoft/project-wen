@@ -69,7 +69,7 @@ func (p *Plugin) Name() string { return "dual_persona" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
-	return "表里两套人格：里人格的对话与记忆对表人格不可见，由触发词在两者之间切换"
+	return "双重人格：表里两套人格，里人格的对话与记忆对表人格不可见，由触发词在两者之间切换"
 }
 
 // Requires 依赖 roleplay：表人格的设定由它提供，没有它这个插件只剩半边。
@@ -105,7 +105,7 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default:     "",
 		},
 		{
-			Key: "split_channels", Label: "表里人格分通道", Type: plugin.FieldBool,
+			Key: "split_channels", Label: "双重人格分通道", Type: plugin.FieldBool,
 			Description: "开启后回复发往当前人格所属的通道，与你从哪条通道说话无关：在 QQ 上说出切换暗号，接手的那一面在微信上回你。需要下面两项各选一条已启用的通道。关闭时回复一律原路返回。",
 			Default:     false,
 		},

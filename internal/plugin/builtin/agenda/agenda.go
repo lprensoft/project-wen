@@ -95,7 +95,7 @@ func (p *Plugin) Name() string { return "agenda" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
-	return "日程：角色每天给自己排一张两到四件事的表，到点去做、做完带回一句经历，未来的约定单独登记并到日排入"
+	return "日程感知：角色每天给自己排一张两到四件事的表，到点去做、做完带回一句经历，未来的约定单独登记并到日排入"
 }
 
 // Requires 硬依赖 roleplay 与 people：没有角色就没有谁的一天，「和谁」的名字只认人物库。
