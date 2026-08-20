@@ -425,6 +425,11 @@ func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 			t.Errorf("extractPrompt 缺少生活语境措辞 %q", want)
 		}
 	}
+	// 单次安排归日程这一句同样两边都要有，且措辞一字不差
+	const agendaRule = "定在某天某时的单次安排（明天下午三点见面、周六去看展）不存为记忆，归日程，过后由时间线记经历。"
+	if !strings.Contains(extractPrompt, agendaRule) || !strings.Contains(promptGuide, agendaRule) {
+		t.Errorf("「单次安排归日程」的判据应在两份提示词里措辞一致")
+	}
 	// 旧的纯工程窄措辞不得回归
 	for _, bad := range []string{"工作方式或表达方式要求", "项目或协作上确定下来"} {
 		if strings.Contains(extractPrompt, bad) {

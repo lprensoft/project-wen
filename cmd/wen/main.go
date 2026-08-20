@@ -23,6 +23,7 @@ import (
 	"wen/internal/llm"
 	"wen/internal/modelcfg"
 	"wen/internal/plugin"
+	"wen/internal/plugin/builtin/agenda"
 	"wen/internal/plugin/builtin/belongings"
 	"wen/internal/plugin/builtin/bodysense"
 	"wen/internal/plugin/builtin/dualpersona"
@@ -290,6 +291,7 @@ var needsSetupPlugins = map[string]bool{
 	"people":       true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
 	"relationship": true, // 同上：无配置项，进这张表只因为它依赖默认关闭的 roleplay
 	"unspoken":     true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
+	"agenda":       true, // 两个理由都占：依赖默认关闭的 roleplay 与 people，且到点自动跑轮次是无人值守消耗额度的功能
 	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
 
 	"heartbeat":    true,
@@ -308,6 +310,9 @@ var needsSetupPlugins = map[string]bool{
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
 func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Option) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
+	// agenda 排「和谁」时只认人物库里的名字：people 的只读查询经构造函数交给它，
+	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
+	pp := people.New()
 	builtins := []plugin.Plugin{
 		readfile.New(), execcmd.New(), webfetch.New(),
 		// roleplay 必须在 dualpersona 之前：表人格设定要排在里人格设定前面，
@@ -317,12 +322,12 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// belongings 排在舞台之后：持有物是舞台上的资产，先立角色与舞台才有归属对象；
 		// body_sense 再排在其后：身体感知要有角色与场景在先，才有作用对象；
 		// health 紧跟 body_sense、先于 mood：身体状况先于心情，心情的判据会提到身体；
-		// people 排在心情之后：人物是角色与舞台立起来之后的关系网，之后的日程是这群人之间的一天；
+		// people 排在心情之后：人物是角色与舞台立起来之后的关系网，agenda 紧随其后：日程是这群人之间的一天；
 		// relationship 紧跟 people：对方是关系最近的那个人，先立人物再立关系；unspoken 紧跟其后：
 		// 心里话是在这段关系里憋着的，关系先定，潜台词才有落点；
 		// presence 收尾：现场快照是角色、舞台、身体、心情、关系都立起来之后「此刻」的定格，
 		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近
-		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), people.New(), relationship.New(), unspoken.New(), presence.New(),
+		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), pp, agenda.New(pp), relationship.New(), unspoken.New(), presence.New(),
 		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
 		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。
 		// 早先它们排在最前面，落在 [角色设定 · 最高优先级] 声明之前，那句「以下设定优先于
