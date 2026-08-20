@@ -58,6 +58,7 @@ wen                        启动服务（等价于 wen serve）
 wen serve [-c 配置] [-p 端口]  启动服务
 wen config [栏目] [-c 配置]    引导式修改配置（栏目：plugins / models / server）
 wen status [-c 配置]           打印当前配置与运行状态
+wen eval <脚本.json> [-o 文件]  回放一段脚本对话，生成文风与角色一致性报告
 wen version                打印版本号
 wen help [命令]            显示帮助
 ```
@@ -91,7 +92,7 @@ wen help [命令]            显示帮助
 | `agent.workdir` | 插件与环境块共用的工作目录，空 = 进程当前目录 |
 | `session.dir` | 会话存储目录，默认 `<配置目录>/sessions` |
 
-插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用，以下二十个除外：`roleplay`、`dual_persona`（不填角色设定与触发词就不成其为功能）、`scene`、`belongings`、`body_sense`、`health`、`mood`、`people`、`agenda`、`relationship`、`unspoken`、`presence`（自带默认参数就能工作，只因硬依赖默认关闭的 `roleplay` 而一同默认关闭）、`weather`（既依赖 `roleplay`，又要填城市才查得了天气）、`skills`（技能目录是空的，开着只多两个用不上的工具）、`heartbeat`（无人值守持续消耗额度的功能应由用户显式打开）、`qq_bot`、`wechat_bot`、`feishu_bot`、`lark_bot`、`telegram_bot`（不填凭证或不扫码绑定就没法工作）。插件自身的数据落在 `<配置目录>/plugins/<插件名>/`。
+插件的开关与配置**不在 config.yaml 里**：它们由设置页维护、只存 `<配置目录>/plugins.state.json`。首次运行时按各插件声明的默认参数启用，以下二十一个除外：`roleplay`、`dual_persona`（不填角色设定与触发词就不成其为功能）、`scene`、`belongings`、`body_sense`、`health`、`mood`、`people`、`agenda`、`relationship`、`unspoken`、`presence`、`style_watch`（自带默认参数就能工作，只因硬依赖默认关闭的 `roleplay` 而一同默认关闭）、`weather`（既依赖 `roleplay`，又要填城市才查得了天气）、`skills`（技能目录是空的，开着只多两个用不上的工具）、`heartbeat`（无人值守持续消耗额度的功能应由用户显式打开）、`qq_bot`、`wechat_bot`、`feishu_bot`、`lark_bot`、`telegram_bot`（不填凭证或不扫码绑定就没法工作）。插件自身的数据落在 `<配置目录>/plugins/<插件名>/`。
 
 （早期版本支持在 config.yaml 写 `plugins:` 段。两处都能配的时候，哪一份在生效需要记住一条优先级规则，而设置页的改动又不回写配置文件，于是文件里的内容会慢慢变成误导。现在该段已不再生效，启动时会提示一句，可以直接删掉。）
 
@@ -455,6 +456,21 @@ Anthropic 模式下多一个**提示词缓存**开关（默认开启）：开启
 - **只记可观察的现场事实**，不写情绪与心理活动——那是 `mood` 的事。按可见域各存一份。
 - **一键清空**：设置页齿轮里有「清空现场状态」，含各人格分开保存的那几份。不可撤销。
 
+## 文风观察（style_watch 插件）
+
+角色有没有漂，此前只能凭感觉——没有任何手段知道「作为 AI」「希望这对你有帮助」这类回归标记出现过几次，也没有回复长度与【】占比的长期曲线，每次调提示词都是盲调。本插件把这件事变成数字：每轮对话结束后用一组纯正则规则（`internal/stylecheck`，零模型调用）检查助手的最终文本，按天累计命中、字数与演绎占比。**只测量、只记录，不改写回复、不重试、不把结果告诉模型**——先有数字，再谈要不要干预。默认不启用，硬依赖 `roleplay`（检测的是角色扮演里的助手腔，写代码时用列表与加粗是对的）。
+
+- **规则对应 `roleplay` 的 [自然表达]**：自称 AI / 语言模型 / 助手、客套开场（「好的，」「当然！」）与谄媚开场、客套收尾（「希望这对你有帮助」「还有什么想聊的」）、过渡套话、「首先…其次…」编号、「不是…而是…」、过度对冲、泛指权威、伪分析、宣传腔、填充语、三段式总结、markdown 标题 / 列表 / 加粗、emoji。每条有稳定的 id（如 `closing_cliche`）与中文标签；【】里的演绎只豁免「少用修饰」类规则。命中是启发式的，看趋势，不当判决。
+- **按天统计，真人与后台分开计**：心跳、定时任务的轮次另记一列，不冲淡真人对话的数字。保留最近 30 天，落在 `plugins/style_watch/stats.json`，重启不归零。
+- **状态行**：`/status` 里一行「✍️ 文风：今日 42 轮，助手腔 3 次（客套收尾 2、加粗 1），均长 58 字，演绎占 23%」，没数据时报「今日尚无数据」。
+- **会话注记**：命中时在当前会话留一行「✍️ 文风提醒：客套收尾「希望这对你有帮助」」，一轮多处合并成一条。只给人看，不进模型上下文；可关。
+- **工具**：`style_report`（最近 7 天每天一行）。设置页齿轮里有「查看 30 天报告」与「清空统计」（换角色或改完提示词后用）。
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `notify` | 开 | 命中时写会话注记 |
+| `ignore_rules` | 空 | 一行一个规则 id，被忽略的规则不计不报；拼错的 id 保存时会被拒绝并列出可用的 |
+
 ## 心跳（heartbeat 插件）
 
 让角色会主动开口。按间隔唤醒模型，在**最近活跃的会话**上跑一轮完整对话（带系统提示词与全部启用插件的提示词），输出直接落进那个会话。默认不启用——无人值守持续消耗额度的功能应当由用户显式打开，而不是装上就开始花钱。
@@ -529,6 +545,23 @@ Anthropic 模式下多一个**提示词缓存**开关（默认开启）：开启
 | `push_notices` | 关 | 是否把后台工作的说明（如记忆提炼的记录）推送到远端 |
 | `merge_window_sec` | 3 | 合并连发消息的窗口（秒），0 关闭 |
 | `human_pace` | 关 | 像人一样发消息：回复分条、带打字间隔，并提示模型用聊天口吻 |
+
+## 回放评测（wen eval）
+
+调一次提示词之后，角色是变好了还是变坏了？`wen eval` 把这件事从「再聊几句感觉一下」变成可以重复跑的脚本：
+
+```bash
+wen eval docs/eval/example.json            # 报告打到标准输出
+wen eval docs/eval/example.json -o 报告.md  # 写入文件
+```
+
+脚本是一个 JSON：`name` 给报告起名，`turns` 按顺序列出步骤——`{"say": "你说的话"}` 是一轮对话，`{"compact": true}` 在此处强制压缩一次（看压缩前后角色有没有变），`{"gap_hours": 8}` 只是记一笔「这里隔了多久」写进报告（不改系统时间，模型看不到它）；可选的 `judge_points` 给评判加几条额外关注点。示例见 `docs/eval/example.json`。
+
+它用与 `wen serve` **相同的配置与插件**（读同一份 config.yaml、models.json 与 plugins.state.json，角色设定、样例、自然表达规则全部照常生效），但：会话与插件数据全部落在一个临时目录、跑完即删，记忆库与心情等状态从空白开始，不碰真实数据；消息通道与后台任务类插件（心跳、定时、QQ / 微信 / 飞书 / Telegram）不启动——它们会连到真实平台、或在评测会话上插话。服务正在运行时也可以跑，两者互不影响。
+
+报告是 Markdown：脚本名、轮数、压缩次数（脚本里要求的与自动触发的分开计）、每轮的字数 / 句数 / 演绎占比 / 助手腔命中（规则同 `style_watch`），再用当前模型做一次评判，按「像不像同一个人 / 语气是否一致（尤其压缩前后）/ 关系与称呼是否连续」三项各打 1-5 分并各写一句理由，末尾附全部回复原文。
+
+几条局限要记着：评分也是模型打的，同一脚本跑两次分数会抖，**用来看趋势，不当绝对值**——改提示词前后各跑一遍比较才有意义；助手腔检测是正则启发式，命中不等于出戏；记忆库是空的，依赖长期记忆的行为测不出来；`gap_hours` 不会让模型真的感到时间流逝。对话中某一轮失败时报告照样生成、失败的那轮标出来，但退出码为 1。
 
 ## 远程访问与访问控制
 
@@ -775,13 +808,14 @@ internal/agent/          Agent 循环（工具调用 / 思考 / 压缩 / 上下�
 internal/plugin/         插件协议（Plugin / Tool / Configurable / 观察者 / 可见域 / 依赖）+ Manager（开关与聚合）
 internal/plugin/builtin/ 内置系统插件（注册顺序即提示词拼接顺序）：
                          readfile / execcmd / webfetch /
-                         roleplay / dualpersona / scene / weather / belongings / bodysense / health / mood / people / agenda / relationship / unspoken / presence /
+                         roleplay / dualpersona / scene / weather / belongings / bodysense / health / mood / people / agenda / relationship / unspoken / presence / stylewatch /
                          memory / sessionsearch / skills /
                          heartbeat / scheduler /
                          qqbot / wechatbot / larkbot（飞书 + Lark）/ telegrambot
 internal/imbot/          消息通道的公共骨架（分发 / 命令 / 会话绑定 / 确认代理 / 通道路由）
 internal/cue/            「开口理由」公告板：产生方按事件投递，心跳开口前取走
 internal/availability/   「忙碌状态」公告板：日程在活动进行中写，心跳与消息通道读
+internal/stylecheck/     「助手腔」检测规则与字数 / 句数 / 演绎占比度量，纯函数，style_watch 与 wen eval 共用
 internal/mdtext/         markdown 分段与转纯文本，各通道的格式降级共用
 internal/textclip/       插件注入文本的预算截断，各插件共用
 internal/statustext/     状态输出的措辞，各通道的 /status 共用

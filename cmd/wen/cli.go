@@ -44,6 +44,17 @@ func commands() []command {
 			run: runConfig,
 		},
 		{
+			name:    "eval",
+			usage:   "wen eval <脚本.json> [-c 配置文件] [-o 报告文件]",
+			summary: "回放一段脚本对话，生成文风与角色一致性报告",
+			detail: "按脚本逐轮对话（可在中途强制压缩），用与 serve 相同的配置与插件，\n" +
+				"但会话与插件数据全部落在临时目录，不碰真实数据；消息通道与后台任务类\n" +
+				"插件不启动。跑完后统计每轮的助手腔命中与字数，并请模型按「像不像同一个人 /\n" +
+				"语气是否一致 / 关系与称呼是否连续」三项各打 1-5 分。报告是 Markdown，\n" +
+				"默认打到标准输出，-o 写入文件。示例脚本见 docs/eval/example.json。",
+			run: runEval,
+		},
+		{
 			name:    "status",
 			usage:   "wen status [-c 配置文件]",
 			summary: "打印当前配置与运行状态",

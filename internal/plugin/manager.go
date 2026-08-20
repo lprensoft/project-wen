@@ -86,6 +86,10 @@ type Manager struct {
 
 	// noInit 表示只登记插件、不初始化它们，见 WithoutInit。
 	noInit bool
+	// stateDir 非空时改写插件持久化目录的根，见 WithStateDir。
+	stateDir string
+	// suppressed 非 nil 时，命中的插件只登记、不启用，见 WithSuppressed。
+	suppressed func(Plugin) bool
 }
 
 // Option 调整 Manager 的行为。
@@ -100,6 +104,24 @@ type Option func(*Manager)
 // 这种 Manager 不可用于服务运行：它的插件从未初始化，工具与提示词都不会正常工作。
 func WithoutInit() Option {
 	return func(m *Manager) { m.noInit = true }
+}
+
+// WithStateDir 把插件的持久化目录根改到 dir（默认是状态文件所在目录下的 plugins/）。
+//
+// 给临时运行用：回放评测要按真实的开关与配置把插件建起来，但插件的一切读写都该
+// 落到临时目录——记忆库、心情、统计文件都不能被一次评测污染。开关状态仍从
+// statePath 读，只是 StateDir 换了地方。
+func WithStateDir(dir string) Option {
+	return func(m *Manager) { m.stateDir = dir }
+}
+
+// WithSuppressed 让命中谓词的插件只登记、不启用，即便状态文件里是开着的。
+//
+// 同样给临时运行用：一次回放评测不该把消息通道连到真实平台上去、也不该让心跳在
+// 评测会话上插话。记作 forcedOff 而不是直接改 enabled：万一状态文件被重写，
+// 写回去的仍是用户「想开」的意图。
+func WithSuppressed(pred func(Plugin) bool) Option {
+	return func(m *Manager) { m.suppressed = pred }
 }
 
 // PluginConfig 来自配置文件 plugins.<name> 段。
@@ -125,7 +147,10 @@ var validName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // 插件无法伪装成前台。
 func (m *Manager) initCtxFor(name string) InitContext {
 	ictx := m.ictx
-	if m.statePath != "" {
+	switch {
+	case m.stateDir != "":
+		ictx.StateDir = filepath.Join(m.stateDir, name)
+	case m.statePath != "":
 		ictx.StateDir = filepath.Join(filepath.Dir(m.statePath), "plugins", name)
 	}
 	if base := m.ictx.RunTurn; base != nil {
@@ -192,6 +217,9 @@ func (m *Manager) register(p Plugin, cfg PluginConfig, source string) error {
 			e.userCfg = values
 		}
 		e.applyCfg()
+	}
+	if e.enabled && m.suppressed != nil && m.suppressed(p) {
+		e.enabled, e.forcedOff = false, true
 	}
 	if e.enabled && !m.noInit {
 		if err := p.Init(m.initCtxFor(name), e.cfg); err != nil {

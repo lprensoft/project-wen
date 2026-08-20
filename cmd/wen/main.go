@@ -18,10 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"wen/internal/agent"
 	"wen/internal/config"
-	"wen/internal/llm"
-	"wen/internal/modelcfg"
 	"wen/internal/plugin"
 	"wen/internal/plugin/builtin/agenda"
 	"wen/internal/plugin/builtin/belongings"
@@ -43,6 +40,7 @@ import (
 	"wen/internal/plugin/builtin/scheduler"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/skills"
+	"wen/internal/plugin/builtin/stylewatch"
 	"wen/internal/plugin/builtin/telegrambot"
 	"wen/internal/plugin/builtin/unspoken"
 	"wen/internal/plugin/builtin/weather"
@@ -50,7 +48,6 @@ import (
 	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/runlock"
 	"wen/internal/server"
-	"wen/internal/session"
 	"wen/internal/version"
 )
 
@@ -70,119 +67,11 @@ func runServe(args []string) {
 		cfg.Server.Port = *port
 	}
 
-	workdir := cfg.Agent.Workdir
-	if workdir == "" {
-		workdir, _ = os.Getwd()
-	}
-
-	// Agent 与插件互相需要：插件在 Agent 之前构造，故各能力都用闭包延迟到实际使用时取值。
-	// store 是例外，它只依赖配置，因此提前建好直接交给插件——插件的 Init 就要用它
-	// （心跳启动时要读上次真人交互的时间）。整个进程共用这一个实例：两个 Store 的
-	// 会话锁互不相识。
-	var (
-		ag      *agent.Agent
-		models  *modelcfg.Store
-		plugins *plugin.Manager
-	)
-	store, err := session.NewStore(cfg.SessionDir())
-	if err != nil {
-		log.Fatalf("初始化 session 存储失败: %v", err)
-	}
-
-	ictx := plugin.InitContext{
-		Workdir:    workdir,
-		Sessions:   store,
-		SessionDir: cfg.SessionDir(),
-		Complete: func(ctx context.Context, prompt string) (string, error) {
-			if ag == nil {
-				return "", fmt.Errorf("模型尚未就绪")
-			}
-			return ag.Complete(ctx, prompt)
-		},
-		RunTurn: func(ctx context.Context, sessionID, input string) (string, error) {
-			if ag == nil {
-				return "", fmt.Errorf("模型尚未就绪")
-			}
-			return ag.RunTurn(ctx, sessionID, input)
-		},
-		Notice: func(ctx context.Context, sessionID, text string) error {
-			if ag == nil {
-				return fmt.Errorf("会话尚未就绪")
-			}
-			return ag.AppendNotice(ctx, sessionID, text)
-		},
-		NewSession: func() (string, error) {
-			m, err := store.Create()
-			return m.ID, err
-		},
-		Compact: func(ctx context.Context, sessionID string) error {
-			if ag == nil {
-				return fmt.Errorf("模型尚未就绪")
-			}
-			return ag.CompactTurn(ctx, sessionID)
-		},
-		// 与 server 的 GET /api/status 同源，保证远端界面与 Web UI 的状态输出一致
-		Status: func(sessionID string) (plugin.StatusInfo, error) {
-			if models == nil {
-				return plugin.StatusInfo{}, fmt.Errorf("状态尚未就绪")
-			}
-			provider, model, thinking, contextLength := models.Status()
-			info := plugin.StatusInfo{
-				Version:  version.Version,
-				Provider: provider, Model: model, Thinking: thinking,
-				ContextLength: contextLength, MeasuredTokens: -1,
-			}
-			if plugins != nil {
-				info.PluginLines = plugins.StatusLines()
-			}
-			if sessionID == "" {
-				return info, nil
-			}
-			meta, msgs, err := store.Get(sessionID)
-			if err != nil {
-				return info, nil // 会话不存在只影响会话部分
-			}
-			info.HasSession = true
-			info.MessageCount = len(msgs)
-			info.EstTokens = agent.EstimateStoredTokens(msgs)
-			if meta.LastUsage != nil {
-				info.MeasuredTokens = meta.LastUsage.PromptTokens + meta.LastUsage.CompletionTokens
-				info.CachedTokens = meta.LastUsage.CachedTokens
-				info.CacheWriteTokens = meta.LastUsage.CacheWriteTokens
-				info.PromptTokens = meta.LastUsage.PromptTokens
-			}
-			return info, nil
-		},
-	}
-	plugins = buildPlugins(cfg, ictx)
-
-	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
-	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
-	if err != nil {
-		log.Fatalf("加载模型配置失败: %v", err)
-	}
-	cur, err := models.Resolve()
-	if err != nil {
-		log.Fatalf("模型配置无效: %v", err)
-	}
-	provider, err := llm.New(llm.Config{
-		Type: cur.Type, BaseURL: cur.BaseURL, APIKey: cur.APIKey, Dialect: cur.Dialect,
-		PromptCache: cur.PromptCache,
-	})
+	rt, err := buildRuntime(cfg, runtimeOverrides{})
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-
-	ag = agent.New(provider, plugins, store, agent.Options{
-		Model:         cur.ModelID,
-		Temperature:   cur.Temperature,
-		MaxTokens:     cur.MaxTokens,
-		SystemPrompt:  cfg.Agent.SystemPrompt,
-		MaxTurns:      cfg.Agent.MaxTurns,
-		Workdir:       workdir,
-		Thinking:      cur.Thinking,
-		ContextLength: cur.ContextLength,
-	})
+	ag, store, plugins, models, cur := rt.agent, rt.store, rt.plugins, rt.models, rt.current
 
 	auth, err := server.NewAuthStore(cfg.BaseDir)
 	if err != nil {
@@ -293,6 +182,7 @@ var needsSetupPlugins = map[string]bool{
 	"unspoken":     true, // 同上：默认参数就能工作，进这张表只因为它依赖默认关闭的 roleplay
 	"agenda":       true, // 两个理由都占：依赖默认关闭的 roleplay 与 people，且到点自动跑轮次是无人值守消耗额度的功能
 	"weather":      true, // 两个理由都占：依赖默认关闭的 roleplay，且不填城市就查不了天气
+	"style_watch":  true, // 同上：无需配置就能工作，进这张表只因为它依赖默认关闭的 roleplay
 
 	"heartbeat":    true,
 	"skills":       true, // 技能目录是空的，开着只会多两个用不上的工具
@@ -326,8 +216,11 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// relationship 紧跟 people：对方是关系最近的那个人，先立人物再立关系；unspoken 紧跟其后：
 		// 心里话是在这段关系里憋着的，关系先定，潜台词才有落点；
 		// presence 收尾：现场快照是角色、舞台、身体、心情、关系都立起来之后「此刻」的定格，
-		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近
+		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近；
+		// style_watch 跟在 presence 之后：它不注入任何提示词，只观察轮次结束，放在
+		// 角色演绎这组的末尾是为了设置页上与 mood、presence 同节展示
 		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), health.New(), mood.New(), pp, agenda.New(pp), relationship.New(), unspoken.New(), presence.New(),
+		stylewatch.New(),
 		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
 		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。
 		// 早先它们排在最前面，落在 [角色设定 · 最高优先级] 声明之前，那句「以下设定优先于
