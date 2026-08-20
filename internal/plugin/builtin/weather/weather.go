@@ -478,20 +478,17 @@ func renderDays(r Report, now time.Time) string {
 	return strings.Join(parts, "；") + "。"
 }
 
-// seenNote 给明天的预报标上「早就知道了」。预报每轮都在眼前，不标的话模型会把昨天
-// 就看过的「明天有雨」当成刚得知的消息，一遍遍提醒带伞——与 presence 给旧字段标
-// 「N 前记下」是同一个手法：代码算时间，新不新鲜让模型自己判断。
+// seenNote 给明天的预报标上「早就知道了」。预报每轮都在眼前，不标的话模型会把几个
+// 小时前就看过的「明天有雨」当成刚得知的消息，一遍遍提醒带伞——与 presence 给旧字段
+// 标「N 前记下」是同一个手法：代码算时间，新不新鲜让模型自己判断。
 // 三小时内不标：刚看到的预报本来就是新消息。
+//
+// 只有一档措辞：某一天的预报只在它前一天里算「明天」，第一次被看到也必然在那一天，
+// 所以 Seen 与渲染永远落在同一个日历日，不存在「昨天就知道了」；过了午夜「明天」
+// 换成新的一天，carrySeen 会从头计时。
 func seenNote(seen, now time.Time) string {
 	if seen.IsZero() || now.Sub(seen) < 3*time.Hour {
 		return ""
-	}
-	day := func(t time.Time) time.Time {
-		y, m, d := t.Date()
-		return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
-	}
-	if day(seen.In(now.Location())).Before(day(now)) {
-		return "（昨天就知道了）"
 	}
 	return "（早些时候就知道了）"
 }

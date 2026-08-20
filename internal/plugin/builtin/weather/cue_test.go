@@ -175,7 +175,6 @@ func TestSeenNoteMarksStaleForecast(t *testing.T) {
 		{time.Time{}, ""},
 		{now.Add(-2 * time.Hour), ""}, // 三小时内是新消息
 		{now.Add(-5 * time.Hour), "（早些时候就知道了）"},
-		{now.Add(-16 * time.Hour), "（昨天就知道了）"}, // 昨晚 23:00
 	}
 	for _, c := range cases {
 		if got := seenNote(c.seen, now); got != c.want {
@@ -183,8 +182,8 @@ func TestSeenNoteMarksStaleForecast(t *testing.T) {
 		}
 	}
 	const layout = "2006-01-02"
-	r := Report{Tomorrow: DayInfo{Date: now.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18, Seen: now.Add(-20 * time.Hour)}}
-	if got := renderDays(r, now); !strings.Contains(got, "明天预计中雨，12~18℃（昨天就知道了）") {
+	r := Report{Tomorrow: DayInfo{Date: now.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18, Seen: now.Add(-8 * time.Hour)}}
+	if got := renderDays(r, now); !strings.Contains(got, "明天预计中雨，12~18℃（早些时候就知道了）") {
 		t.Errorf("renderDays 应标出预报早就知道了: %q", got)
 	}
 }
@@ -207,5 +206,18 @@ func TestCarrySeenFollowsSameForecast(t *testing.T) {
 	}
 	if got := carrySeen(prev, DayInfo{Date: "2026-08-22", Condition: "小雨"}, false, now); !got.Equal(now) {
 		t.Errorf("没有上一次观测应从现在算起，得到 %v", got)
+	}
+}
+
+func TestSeenResetsWhenTomorrowRollsOver(t *testing.T) {
+	// 过了午夜再刷新，「明天」换成新的一天：上一次的 Seen 不能带到新预报上
+	now := time.Now()
+	prev := DayInfo{Date: "2026-08-22", Condition: "中雨", Seen: now.Add(-20 * time.Hour)}
+	cur := DayInfo{Date: "2026-08-23", Condition: "中雨"}
+	if got := carrySeen(prev, cur, true, now); !got.Equal(now) {
+		t.Errorf("换了一天的预报应从现在算起，得到 %v", got)
+	}
+	if note := seenNote(carrySeen(prev, cur, true, now), now); note != "" {
+		t.Errorf("新一天的预报不该标早就知道了: %q", note)
 	}
 }
