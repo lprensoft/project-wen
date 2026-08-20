@@ -766,4 +766,3 @@ go vet ./...     # 静态检查
 
 - 更多 Provider 类型（Ollama 等）与模型 fallback
 - MCP 工具（接入后即为「外源」插件，插件卡片上的来源标签为此预留）
-- 给 `Meta` 加 `UpdatedAt`：`session_search` 目前只能靠文件修改时间做单向剪枝，有了它可双向剪枝，会话列表也能按最近活跃排序

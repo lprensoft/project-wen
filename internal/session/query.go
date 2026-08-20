@@ -23,10 +23,7 @@ func (s *Store) LastActive() (string, time.Time, error) {
 	bestID := ""
 	var bestAt, bestActive time.Time
 	for _, m := range metas {
-		at := m.CreatedAt
-		if m.LastActiveAt != nil {
-			at = *m.LastActiveAt
-		}
+		at := m.activeAt()
 		if bestID != "" && !at.After(bestAt) {
 			continue
 		}

@@ -71,7 +71,9 @@ func (s *Store) Create() (Meta, error) {
 	return meta, nil
 }
 
-// List 返回全部 session 的 Meta，按创建时间倒序（新的在前）。
+// List 返回全部 session 的 Meta，按最近活跃倒序（新的在前）：最近一次真人交互
+// 的时间，旧会话没有该字段时回落创建时间；同一时刻再按 id 倒序，使顺序稳定。
+// 只认真人交互而不看最后一次写入——心跳在某个会话里自言自语，不该把它顶到最前。
 func (s *Store) List() ([]Meta, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -88,7 +90,13 @@ func (s *Store) List() ([]Meta, error) {
 		}
 		metas = append(metas, m)
 	}
-	sort.Slice(metas, func(i, j int) bool { return metas[i].ID > metas[j].ID })
+	sort.Slice(metas, func(i, j int) bool {
+		ai, aj := metas[i].activeAt(), metas[j].activeAt()
+		if !ai.Equal(aj) {
+			return ai.After(aj)
+		}
+		return metas[i].ID > metas[j].ID
+	})
 	return metas, nil
 }
 
