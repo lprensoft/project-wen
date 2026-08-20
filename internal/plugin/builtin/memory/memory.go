@@ -83,6 +83,11 @@ type Plugin struct {
 	forgetDays      int
 	timeline        bool
 	timelineDays    int
+	// 自动召回的参数，见 recall.go。
+	recallMax        int
+	recallEntryRunes int
+	recallMaxBytes   int
+	recallMinScore   int
 
 	// 后台提炼与清扫的运行环境。ctx 由 Init 建、Stop 取消——广播进来的 ctx
 	// 在轮次结束时就被取消了，拿它去跑后台调用必然半路夭折。
@@ -121,21 +126,25 @@ type Plugin struct {
 
 func New() *Plugin {
 	return &Plugin{
-		library:         defaultLibrary,
-		maxIndexEntries: defaultMaxIndexEntries,
-		maxIndexBytes:   defaultMaxIndexBytes,
-		maxEntryBytes:   defaultMaxEntryBytes,
-		autoExtract:     defaultAutoExtract,
-		maxExtract:      defaultMaxExtract,
-		turnExtract:     defaultTurnExtract,
-		turnEvery:       defaultTurnEvery,
-		decay:           defaultDecay,
-		blurDays:        defaultBlurDays,
-		forgetDays:      defaultForgetDays,
-		timeline:        defaultTimeline,
-		timelineDays:    defaultTimelineDays,
-		windows:         map[windowKey]*window{},
-		extracting:      map[windowKey]bool{},
+		library:          defaultLibrary,
+		maxIndexEntries:  defaultMaxIndexEntries,
+		maxIndexBytes:    defaultMaxIndexBytes,
+		maxEntryBytes:    defaultMaxEntryBytes,
+		autoExtract:      defaultAutoExtract,
+		maxExtract:       defaultMaxExtract,
+		turnExtract:      defaultTurnExtract,
+		turnEvery:        defaultTurnEvery,
+		decay:            defaultDecay,
+		blurDays:         defaultBlurDays,
+		forgetDays:       defaultForgetDays,
+		timeline:         defaultTimeline,
+		timelineDays:     defaultTimelineDays,
+		recallMax:        defaultRecallMax,
+		recallEntryRunes: defaultRecallEntryRunes,
+		recallMaxBytes:   defaultRecallMaxBytes,
+		recallMinScore:   defaultRecallMinScore,
+		windows:          map[windowKey]*window{},
+		extracting:       map[windowKey]bool{},
 	}
 }
 
@@ -188,6 +197,45 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Default:     defaultMaxEntryBytes,
 			Min:         plugin.IntPtr(1024),
 			Max:         plugin.IntPtr(1024 * 1024),
+		},
+		{
+			Key:   "recall_max",
+			Label: "自动想起的条数",
+			Type:  plugin.FieldInt,
+			Description: "每轮按你这句话里的词，从记忆里挑出最相关的几条，把正文直接带给角色——" +
+				"像聊到某件事自然想起来，不用它自己去翻。纯词面匹配，不多花模型调用。0 表示关闭。",
+			Default: defaultRecallMax,
+			Min:     plugin.IntPtr(0),
+			Max:     plugin.IntPtr(5),
+		},
+		{
+			Key:         "recall_entry_runes",
+			Label:       "每条想起的正文字数",
+			Type:        plugin.FieldInt,
+			Description: "自动想起的记忆正文超过这个字数时截断，后文仍可按标题读全文。",
+			Default:     defaultRecallEntryRunes,
+			Min:         plugin.IntPtr(100),
+			Max:         plugin.IntPtr(2000),
+		},
+		{
+			Key:   "recall_max_bytes",
+			Label: "想起来的事总字节数",
+			Type:  plugin.FieldInt,
+			Description: "一轮里自动想起的内容合计不超过这个字节数，装不下的条目先让。" +
+				"这段内容每轮重发且不走缓存，别开太大。",
+			Default: defaultRecallMaxBytes,
+			Min:     plugin.IntPtr(512),
+			Max:     plugin.IntPtr(8 * 1024),
+		},
+		{
+			Key:   "recall_min_score",
+			Label: "想起来的最低相关度",
+			Type:  plugin.FieldInt,
+			Description: "一条记忆至少要和这句话有多相关才会被想起：标题或摘要里对上一个词算 3 分，" +
+				"正文里对上一个词算 1 分；标题与摘要一个词都没对上时，正文要对上 4 个词才算。调低更容易想起、也更容易想歪。",
+			Default: defaultRecallMinScore,
+			Min:     plugin.IntPtr(1),
+			Max:     plugin.IntPtr(20),
 		},
 		{
 			Key:   "auto_extract",
@@ -314,6 +362,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.forgetDays = forgetDays
 	p.timeline = plugin.CfgBool(cfg, "timeline", defaultTimeline)
 	p.timelineDays = plugin.CfgInt(cfg, "timeline_days", defaultTimelineDays)
+	p.recallMax = plugin.CfgInt(cfg, "recall_max", defaultRecallMax)
+	p.recallEntryRunes = plugin.CfgInt(cfg, "recall_entry_runes", defaultRecallEntryRunes)
+	p.recallMaxBytes = plugin.CfgInt(cfg, "recall_max_bytes", defaultRecallMaxBytes)
+	p.recallMinScore = plugin.CfgInt(cfg, "recall_min_score", defaultRecallMinScore)
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 
 	p.turnMu.Lock()
@@ -372,22 +424,26 @@ func (p *Plugin) Tools() []plugin.Tool {
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
-	store           *Store
-	libBase         string
-	maxIndexEntries int
-	maxIndexBytes   int
-	maxEntryBytes   int
-	autoExtract     bool
-	maxExtract      int
-	maxExtractBytes int
-	turnExtract     bool
-	turnEvery       int
-	decay           bool
-	blurDays        int
-	forgetDays      int
-	timeline        bool
-	timelineDays    int
-	ctx             context.Context
+	store            *Store
+	libBase          string
+	maxIndexEntries  int
+	maxIndexBytes    int
+	maxEntryBytes    int
+	autoExtract      bool
+	maxExtract       int
+	maxExtractBytes  int
+	turnExtract      bool
+	turnEvery        int
+	decay            bool
+	blurDays         int
+	forgetDays       int
+	timeline         bool
+	timelineDays     int
+	recallMax        int
+	recallEntryRunes int
+	recallMaxBytes   int
+	recallMinScore   int
+	ctx              context.Context
 }
 
 // snapshot 取一份配置快照：SetConfig 会在运行时重新 Init，而工具可能正在执行。
@@ -395,22 +451,26 @@ func (p *Plugin) snapshot() settings {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return settings{
-		store:           p.store,
-		libBase:         p.libBase,
-		maxIndexEntries: p.maxIndexEntries,
-		maxIndexBytes:   p.maxIndexBytes,
-		maxEntryBytes:   p.maxEntryBytes,
-		autoExtract:     p.autoExtract,
-		maxExtract:      p.maxExtract,
-		maxExtractBytes: maxExtractBytes,
-		turnExtract:     p.turnExtract,
-		turnEvery:       p.turnEvery,
-		decay:           p.decay,
-		blurDays:        p.blurDays,
-		forgetDays:      p.forgetDays,
-		timeline:        p.timeline,
-		timelineDays:    p.timelineDays,
-		ctx:             p.ctx,
+		store:            p.store,
+		libBase:          p.libBase,
+		maxIndexEntries:  p.maxIndexEntries,
+		maxIndexBytes:    p.maxIndexBytes,
+		maxEntryBytes:    p.maxEntryBytes,
+		autoExtract:      p.autoExtract,
+		maxExtract:       p.maxExtract,
+		maxExtractBytes:  maxExtractBytes,
+		turnExtract:      p.turnExtract,
+		turnEvery:        p.turnEvery,
+		decay:            p.decay,
+		blurDays:         p.blurDays,
+		forgetDays:       p.forgetDays,
+		timeline:         p.timeline,
+		timelineDays:     p.timelineDays,
+		recallMax:        p.recallMax,
+		recallEntryRunes: p.recallEntryRunes,
+		recallMaxBytes:   p.recallMaxBytes,
+		recallMinScore:   p.recallMinScore,
+		ctx:              p.ctx,
 	}
 }
 
@@ -464,7 +524,8 @@ const promptGuide = `[长期记忆]
 不保存一次性的任务细节、临时中间结果与可以随时重新读取的内容。
 已有记忆的结论被推翻时，用同一个标题修订它（save_memory 的 mode 设为 replace），
 并在正文里交代被推翻的旧结论；不要换个说法另存一条，那会让两条互相打架的记忆同时留着。
-对话历史被压缩后，摘要中若含上述内容，需要检查是否已经保存。`
+对话历史被压缩后，摘要中若含上述内容，需要检查是否已经保存。
+[想起来的事] 是随对话自然浮现的记忆正文，直接用，不必再 recall_memory；没列出的仍可查。`
 
 // decayPrompt 只在开启淡忘时追加。
 const decayPrompt = `
@@ -485,9 +546,9 @@ func (p *Plugin) SystemPrompt() string {
 	return promptGuide
 }
 
-// TurnPrompt 注入本轮可读的记忆索引与时间线。
+// TurnPrompt 注入本轮自动想起的记忆正文、可读的记忆索引与时间线。
 // 都为空时不注入：判据已在 SystemPrompt 里，那是引导保存第一条记忆的东西。
-func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, error) {
+func (p *Plugin) TurnPrompt(ctx context.Context, ev plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if s.store == nil {
 		return "", nil
@@ -497,6 +558,11 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		return "", err
 	}
 	var parts []string
+	// 召回块排在索引之前：索引是目录，召回是内容，先看到内容再看到目录更顺。
+	// 被召回的条目在索引里照样列着，两处各司其职，不互相解释。
+	if block := p.recallBlock(ctx, s, ev.UserInput, entries); block != "" {
+		parts = append(parts, block)
+	}
 	if len(entries) > 0 {
 		parts = append(parts, promptHeader+"\n"+renderIndex(entries, s.maxIndexEntries, s.maxIndexBytes))
 	}
@@ -504,6 +570,33 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 		parts = append(parts, block)
 	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// recallBlock 用本轮输入从可读的记忆里挑出最相关的几条，渲染成 [想起来的事]。
+// entries 已经按可见域过滤过——不可读域的记忆连标题都不该露，正文更不能。
+//
+// 机器注入的一次性输入（心跳、定时任务的提示词）不召回：那段文字每次都差不多，
+// 按它召回只会每拍都想起同样几条，白占上下文。
+func (p *Plugin) recallBlock(ctx context.Context, s settings, input string, entries []Entry) string {
+	if s.recallMax <= 0 || len(entries) == 0 || plugin.IsEphemeralInput(ctx) {
+		return ""
+	}
+	hits := pickRecalls(input, entries, s.recallMax, s.recallMinScore)
+	block, n := renderRecalls(hits, s.recallEntryRunes, s.recallMaxBytes)
+	if n == 0 {
+		return ""
+	}
+	// 想起来就算用到：不刷新的话，一条天天自然浮现的记忆照样会走到淡忘。
+	// 与 recall_memory 同一口径，只在开了淡忘时写——没人读这个时间就不值得为它写盘。
+	if s.decay {
+		now := time.Now()
+		for _, h := range hits[:n] {
+			if store := p.storeFor(h.entry.Domain); store != nil {
+				_, _ = store.Touch(h.entry.Name, now)
+			}
+		}
+	}
+	return block
 }
 
 // renderIndex 按预算渲染索引，分三级降级：
