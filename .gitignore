@@ -1,6 +1,7 @@
 # 密钥与本地配置
 .env
 config.yaml
+.claude/
 
 # 本地会话数据与运行时状态（models.json 含明文 API Key）
 sessions/
