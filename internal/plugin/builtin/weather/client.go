@@ -45,9 +45,10 @@ type Report struct {
 	// Fetched 是取到这份数据的本地时刻。过期判定用它而不是接口给的观测时间：
 	// 我们要防的是「取不到新数据还在拿旧的当现在用」，那是取数这一侧的事。
 	Fetched time.Time
-	// Yesterday / Tomorrow 是昨天与明天的概要，与现况同一次请求带回（零额外调用）。
-	// 旧缓存没有这两项，零值表示未知、不注入，下次刷新自动补上。
+	// Yesterday / Today / Tomorrow 是昨天、今天与明天的概要，与现况同一次请求带回
+	// （零额外调用）。旧缓存没有这几项，零值表示未知、不注入，下次刷新自动补上。
 	Yesterday DayInfo `json:"Yesterday,omitzero"`
+	Today     DayInfo `json:"Today,omitzero"`
 	Tomorrow  DayInfo `json:"Tomorrow,omitzero"`
 }
 
@@ -58,20 +59,23 @@ type DayInfo struct {
 	Condition string
 	MinC      float64
 	MaxC      float64
-	// Seen 是这一天的预报（按「有没有降水」这个粒度）第一次被看到的本地时刻，
-	// 刷新时从上一次观测延续。注入时据此标出「早就知道了」——预报每轮都在眼前，
-	// 没有这个标记，模型会把昨天就看过的「明天有雨」当成新消息，一遍遍提醒带伞。
-	// 旧缓存没有该字段，零值按「刚看到」处理。
+	// Seen 是这一天的预报第一次**出现在角色眼前**（被注入）的本地时刻，不是系统取到
+	// 的时刻——两者在现实里是分开的：凌晨取到的明天预报，角色要到傍晚才会去看。
+	// 注入时据此标出「早就知道了」：预报每轮都在眼前，没有这个标记，模型会把几小时
+	// 前就看过的「明天有雨」当成新消息，一遍遍提醒带伞。零值表示还没给角色看过。
 	Seen time.Time `json:"Seen,omitzero"`
+	// Cued 表示这一天的降水预报已经投过一次开口理由。按「同一天、同样有没有降水」
+	// 延续：刷新不重投，预报变了（雨来了 / 雨没了）才算新消息。
+	Cued bool `json:"Cued,omitempty"`
 }
 
-// carrySeen 决定新观测里明天预报的 Seen：与上一次观测是同一天、降水与否也没变，
-// 就是同一条消息，沿用旧时刻；否则从现在算起。
-func carrySeen(prev, cur DayInfo, prevOK bool, now time.Time) time.Time {
-	if prevOK && prev.known() && cur.known() && prev.Date == cur.Date && isWet(prev.Condition) == isWet(cur.Condition) && !prev.Seen.IsZero() {
-		return prev.Seen
+// carryForecast 把上一次观测里明天预报的「给角色看过了 / 理由投过了」延续到新观测：
+// 同一天、降水与否也没变，就是同一条消息，Seen 与 Cued 沿用；否则都从头开始。
+func carryForecast(prev, cur DayInfo, prevOK bool) DayInfo {
+	if prevOK && prev.known() && cur.known() && prev.Date == cur.Date && isWet(prev.Condition) == isWet(cur.Condition) {
+		cur.Seen, cur.Cued = prev.Seen, prev.Cued
 	}
-	return now
+	return cur
 }
 
 // known 报告这一天是否有数据。
@@ -159,6 +163,7 @@ func fetchCurrent(ctx context.Context, client *http.Client, p Place) (Report, er
 	d := body.Daily
 	if len(d.Time) == 3 && len(d.Code) == 3 && len(d.Max) == 3 && len(d.Min) == 3 {
 		rep.Yesterday = DayInfo{Date: d.Time[0], Condition: conditionOf(d.Code[0]), MinC: d.Min[0], MaxC: d.Max[0]}
+		rep.Today = DayInfo{Date: d.Time[1], Condition: conditionOf(d.Code[1]), MinC: d.Min[1], MaxC: d.Max[1]}
 		rep.Tomorrow = DayInfo{Date: d.Time[2], Condition: conditionOf(d.Code[2]), MinC: d.Min[2], MaxC: d.Max[2]}
 	}
 	return rep, nil

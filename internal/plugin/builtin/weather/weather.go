@@ -30,6 +30,9 @@ import (
 
 const (
 	defaultRefreshMinutes = 30
+	// defaultTomorrowFrom 是明天的预报从几点起出现在角色眼前。白天的人想的是今天，
+	// 临睡前、计划明天的事时才去看明天；0 表示全天都看。
+	defaultTomorrowFrom = 18
 	defaultStaleMinutes   = 60
 	defaultSameCity       = true
 	// minRefreshMinutes 是刷新间隔的下限。数据源是免费的公共接口，取得再勤也没有
@@ -59,6 +62,10 @@ type Plugin struct {
 	stale      time.Duration
 	client     *http.Client
 	stateDir   string // 观测缓存的落盘位置
+	// tomorrowFrom 是明天的预报从几点起注入（0 = 全天）。
+	tomorrowFrom int
+	// now 可在测试里替换：注入里「几点了」决定明天的预报出不出现。
+	now func() time.Time
 
 	// 后台刷新循环。Init 可重入，每次先停旧的再起新的。
 	cancel context.CancelFunc
@@ -77,9 +84,11 @@ type Plugin struct {
 
 func New() *Plugin {
 	return &Plugin{
-		sameCity: defaultSameCity,
-		refresh:  defaultRefreshMinutes * time.Minute,
-		stale:    defaultStaleMinutes * time.Minute,
+		sameCity:     defaultSameCity,
+		refresh:      defaultRefreshMinutes * time.Minute,
+		stale:        defaultStaleMinutes * time.Minute,
+		tomorrowFrom: defaultTomorrowFrom,
+		now:          time.Now,
 	}
 }
 
@@ -124,6 +133,15 @@ func (p *Plugin) ConfigFields() []plugin.ConfigField {
 			Max:         plugin.IntPtr(1440),
 		},
 		{
+			Key: "tomorrow_from_hour", Label: "几点起看明天的天气", Type: plugin.FieldInt,
+			Description: "从这个钟点起，明天的预报才出现在角色眼前——白天的人想的是今天，" +
+				"临睡前、计划明天的事时才去看明天。在此之前只有你提到「明天」时它才会看一眼。" +
+				"填 0 表示全天都看得到。",
+			Default: defaultTomorrowFrom,
+			Min:     plugin.IntPtr(0),
+			Max:     plugin.IntPtr(23),
+		},
+		{
 			Key: "stale_minutes", Label: "过期不注入的时限（分钟）", Type: plugin.FieldInt,
 			Description: "距上次成功取得超过这个时间就不再注入天气——取不到新的时，" +
 				"宁可让角色不知道天气，也不要让它把几个小时前的天气当作此刻。" +
@@ -143,6 +161,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 
 	refreshMin := plugin.CfgInt(cfg, "refresh_minutes", defaultRefreshMinutes)
 	staleMin := plugin.CfgInt(cfg, "stale_minutes", defaultStaleMinutes)
+	tomorrowFrom := plugin.CfgInt(cfg, "tomorrow_from_hour", defaultTomorrowFrom)
 	if ictx.StateDir == "" {
 		return fmt.Errorf("没有可用的持久化目录，无法保存天气观测")
 	}
@@ -177,6 +196,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.personaLoc, p.userLoc, p.sameCity = personaLoc, userLoc, sameCity
 	p.refresh = time.Duration(refreshMin) * time.Minute
 	p.stale = time.Duration(staleMin) * time.Minute
+	p.tomorrowFrom = tomorrowFrom
 	p.client = &http.Client{Timeout: requestTimeout}
 	if len(wanted) == 0 {
 		return nil // 一个城市都没填就不起循环，也不注入任何东西
@@ -233,12 +253,35 @@ func (p *Plugin) Tools() []plugin.Tool { return nil }
 
 // settings 是一次调用期间使用的配置快照。
 type settings struct {
-	personaLoc string
-	userLoc    string
-	sameCity   bool
-	refresh    time.Duration
-	stale      time.Duration
-	client     *http.Client
+	personaLoc   string
+	userLoc      string
+	sameCity     bool
+	refresh      time.Duration
+	stale        time.Duration
+	client       *http.Client
+	stateDir     string
+	tomorrowFrom int
+}
+
+// tomorrowVisible 判断此刻明天的预报该不该出现在角色眼前：到了傍晚的窗口，或对方
+// 这一轮提到了明天（主动问，就看一眼）。
+func (s settings) tomorrowVisible(now time.Time, input string) bool {
+	return s.inTomorrowWindow(now) || mentionsTomorrow(input)
+}
+
+// inTomorrowWindow 判断此刻是否在「看明天」的时段里。cue 的投递也按它。
+func (s settings) inTomorrowWindow(now time.Time) bool {
+	return s.tomorrowFrom <= 0 || now.Hour() >= s.tomorrowFrom
+}
+
+// mentionsTomorrow 词面判断一段话里有没有说到明天。
+func mentionsTomorrow(s string) bool {
+	for _, w := range []string{"明天", "明早", "明晚", "明日", "明儿"} {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // configured 表示至少有一处地点可查。
@@ -251,6 +294,7 @@ func (p *Plugin) snapshot() settings {
 	return settings{
 		personaLoc: p.personaLoc, userLoc: p.userLoc, sameCity: p.sameCity,
 		refresh: p.refresh, stale: p.stale, client: p.client,
+		stateDir: p.stateDir, tomorrowFrom: p.tomorrowFrom,
 	}
 }
 
@@ -267,24 +311,25 @@ func (p *Plugin) SystemPrompt() string {
 // 「没有给出的一方就当作不知道」，让它不知道，好过让它把旧天气当成现在的。
 //
 // 一边取到、一边取不到时注入取到的那一边——半边可用不该让整块消失。
-func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, error) {
+func (p *Plugin) TurnPrompt(_ context.Context, ev plugin.TurnEvent) (string, error) {
 	s := p.snapshot()
 	if !s.configured() {
 		return "", nil
 	}
-	now := time.Now()
+	now := p.now()
+	showTomorrow := s.tomorrowVisible(now, ev.UserInput)
 
 	var lines []string
 	if s.sameCity {
-		if r, ok := p.fresh(s.personaLoc, s.stale, now); ok {
-			lines = append(lines, fmt.Sprintf("%s（你与对方同在）：%s", r.Place, renderConditions(r)+renderDays(r, now)))
+		if r, ok := p.forTurn(s, s.personaLoc, now, showTomorrow); ok {
+			lines = append(lines, fmt.Sprintf("%s（你与对方同在）：%s", r.Place, renderConditions(r)+renderDays(r, now, showTomorrow)))
 		}
 	} else {
-		if r, ok := p.fresh(s.personaLoc, s.stale, now); ok {
-			lines = append(lines, "你所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now))
+		if r, ok := p.forTurn(s, s.personaLoc, now, showTomorrow); ok {
+			lines = append(lines, "你所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now, showTomorrow))
 		}
-		if r, ok := p.fresh(s.userLoc, s.stale, now); ok {
-			lines = append(lines, "对方所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now))
+		if r, ok := p.forTurn(s, s.userLoc, now, showTomorrow); ok {
+			lines = append(lines, "对方所在的"+r.Place+"："+renderConditions(r)+renderDays(r, now, showTomorrow))
 		}
 	}
 	if len(lines) == 0 {
@@ -350,12 +395,19 @@ func (p *Plugin) refreshOne(ctx context.Context, client *http.Client, loc string
 	p.dataMu.Lock()
 	o := p.entryLocked(loc)
 	prev, prevOK := o.cur, o.curOK
-	rep.Tomorrow.Seen = carrySeen(prev.Tomorrow, rep.Tomorrow, prevOK, time.Now())
+	rep.Tomorrow = carryForecast(prev.Tomorrow, rep.Tomorrow, prevOK)
 	o.cur, o.curOK, o.lastErr = rep, true, ""
 	p.dataMu.Unlock()
 
-	// 前后两次观测对比出值得开口的转变（下起来/停了）时，投递一条开口理由
-	p.maybePostCue(loc, prev, prevOK, rep)
+	// 前后两次观测对比出值得开口的转变（下起来/停了）时，投递一条开口理由；
+	// 明天的预报理由投出去后记在缓存上，刷新不重投
+	if p.maybePostCue(loc, prev, prevOK, rep) {
+		p.dataMu.Lock()
+		if o.curOK && o.cur.Tomorrow.Date == rep.Tomorrow.Date {
+			o.cur.Tomorrow.Cued = true
+		}
+		p.dataMu.Unlock()
+	}
 }
 
 // observe 取一次观测，地名解析的结果按城市缓存——它几乎不变，不必每次重解析。
@@ -428,6 +480,32 @@ func (p *Plugin) fresh(loc string, stale time.Duration, now time.Time) (Report, 
 	return o.cur, true
 }
 
+// forTurn 取一处地点供本轮注入的观测；明天的预报这一轮要出现时，记下它第一次被角色
+// 看到的时刻（只在首次写，随观测一起落盘），「早就知道了」的标记从这里起算。
+func (p *Plugin) forTurn(s settings, loc string, now time.Time, showTomorrow bool) (Report, bool) {
+	r, ok := p.fresh(loc, s.stale, now)
+	if !ok {
+		return r, false
+	}
+	if showTomorrow && r.Tomorrow.known() && r.Tomorrow.Seen.IsZero() && p.markTomorrowSeen(loc, r.Tomorrow.Date, now) {
+		r.Tomorrow.Seen = now
+		p.save(s.stateDir)
+	}
+	return r, true
+}
+
+// markTomorrowSeen 把缓存里明天预报的 Seen 置为 now（仅当仍是同一天的预报且尚未标记）。
+func (p *Plugin) markTomorrowSeen(loc, date string, now time.Time) bool {
+	p.dataMu.Lock()
+	defer p.dataMu.Unlock()
+	o := p.obs[loc]
+	if o == nil || !o.curOK || o.cur.Tomorrow.Date != date || !o.cur.Tomorrow.Seen.IsZero() {
+		return false
+	}
+	o.cur.Tomorrow.Seen = now
+	return true
+}
+
 // lastReport 返回某处地点最近一次成功的观测（不判过期）与最近一次失败的原因。
 func (p *Plugin) lastReport(loc string) (Report, bool, string) {
 	p.dataMu.RLock()
@@ -459,17 +537,21 @@ func renderConditions(r Report) string {
 	return b.String()
 }
 
-// renderDays 渲染昨天与明天的概要，接在现况之后。
+// renderDays 渲染昨天、今天与明天的概要，接在现况之后。今天的概要全天都在——
+// 白天真正影响行为的是「今天下午会不会下雨」；明天的只在 showTomorrow 时出现。
 //
 // 按日期核对而不是信字段名：观测是缓存的，跨过午夜后缓存里的「明天」其实是今天，
-// 照字面注入就是错话。对不上的那一天直接不注入；旧缓存没有这两项时同样整段为空。
-func renderDays(r Report, now time.Time) string {
+// 照字面注入就是错话。对不上的那一天直接不注入；旧缓存没有这几项时同样整段为空。
+func renderDays(r Report, now time.Time, showTomorrow bool) string {
 	const layout = "2006-01-02"
 	var parts []string
 	if r.Yesterday.known() && r.Yesterday.Date == now.AddDate(0, 0, -1).Format(layout) {
 		parts = append(parts, fmt.Sprintf("昨天%s，%.0f~%.0f℃", r.Yesterday.Condition, r.Yesterday.MinC, r.Yesterday.MaxC))
 	}
-	if r.Tomorrow.known() && r.Tomorrow.Date == now.AddDate(0, 0, 1).Format(layout) {
+	if r.Today.known() && r.Today.Date == now.Format(layout) {
+		parts = append(parts, fmt.Sprintf("今天预计%s，%.0f~%.0f℃", r.Today.Condition, r.Today.MinC, r.Today.MaxC))
+	}
+	if showTomorrow && r.Tomorrow.known() && r.Tomorrow.Date == now.AddDate(0, 0, 1).Format(layout) {
 		parts = append(parts, fmt.Sprintf("明天预计%s，%.0f~%.0f℃%s", r.Tomorrow.Condition, r.Tomorrow.MinC, r.Tomorrow.MaxC, seenNote(r.Tomorrow.Seen, now)))
 	}
 	if len(parts) == 0 {
@@ -485,7 +567,7 @@ func renderDays(r Report, now time.Time) string {
 //
 // 只有一档措辞：某一天的预报只在它前一天里算「明天」，第一次被看到也必然在那一天，
 // 所以 Seen 与渲染永远落在同一个日历日，不存在「昨天就知道了」；过了午夜「明天」
-// 换成新的一天，carrySeen 会从头计时。
+// 换成新的一天，carryForecast 不再沿用旧标记。
 func seenNote(seen, now time.Time) string {
 	if seen.IsZero() || now.Sub(seen) < 3*time.Hour {
 		return ""
