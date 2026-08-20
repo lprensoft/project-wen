@@ -33,7 +33,7 @@ func (p *Plugin) Name() string { return "relationship" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
-	return "关系状态：角色与对方处在什么阶段、彼此怎么称呼、最近的变动、默契与禁区记成一份快照，每轮注入，态度不再忽远忽近"
+	return "人际感知：角色与对方处在什么阶段、彼此怎么称呼、最近的变动、默契与禁区记成一份快照，每轮注入，态度不再忽远忽近"
 }
 
 // Requires 硬依赖 roleplay：关系是角色与对方之间的，没有角色就没有归属对象。

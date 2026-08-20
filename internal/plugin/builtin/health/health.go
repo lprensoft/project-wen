@@ -62,7 +62,7 @@ func (p *Plugin) Name() string { return "health" }
 func (p *Plugin) Category() string { return plugin.CategoryPersona }
 
 func (p *Plugin) Description() string {
-	return "健康：角色偶尔会有日常小恙，会不会生病由模型按剧情判断，病程随时间自动起落，每轮注入并影响表达方式"
+	return "健康感知：角色偶尔会有日常小恙，会不会生病由模型按剧情判断，病程随时间自动起落，每轮注入并影响表达方式"
 }
 
 // Requires 硬依赖 roleplay：没有角色，就没有「谁的身体」。
