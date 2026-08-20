@@ -165,3 +165,47 @@ func TestMaybePostCue(t *testing.T) {
 	}
 	drainCues()
 }
+
+func TestSeenNoteMarksStaleForecast(t *testing.T) {
+	now := time.Date(2026, 8, 21, 15, 0, 0, 0, time.Local)
+	cases := []struct {
+		seen time.Time
+		want string
+	}{
+		{time.Time{}, ""},
+		{now.Add(-2 * time.Hour), ""}, // 三小时内是新消息
+		{now.Add(-5 * time.Hour), "（早些时候就知道了）"},
+		{now.Add(-16 * time.Hour), "（昨天就知道了）"}, // 昨晚 23:00
+	}
+	for _, c := range cases {
+		if got := seenNote(c.seen, now); got != c.want {
+			t.Errorf("seenNote(%v) = %q, want %q", c.seen, got, c.want)
+		}
+	}
+	const layout = "2006-01-02"
+	r := Report{Tomorrow: DayInfo{Date: now.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18, Seen: now.Add(-20 * time.Hour)}}
+	if got := renderDays(r, now); !strings.Contains(got, "明天预计中雨，12~18℃（昨天就知道了）") {
+		t.Errorf("renderDays 应标出预报早就知道了: %q", got)
+	}
+}
+
+func TestCarrySeenFollowsSameForecast(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-10 * time.Hour)
+	prev := DayInfo{Date: "2026-08-22", Condition: "小雨", Seen: old}
+	// 同一天、仍是降水：沿用
+	if got := carrySeen(prev, DayInfo{Date: "2026-08-22", Condition: "中雨"}, true, now); !got.Equal(old) {
+		t.Errorf("同一天同为降水应沿用旧时刻，得到 %v", got)
+	}
+	// 雨变晴：是新消息
+	if got := carrySeen(prev, DayInfo{Date: "2026-08-22", Condition: "晴"}, true, now); !got.Equal(now) {
+		t.Errorf("降水与否变了应从现在算起，得到 %v", got)
+	}
+	// 换了一天 / 没有上一次观测：从现在算起
+	if got := carrySeen(prev, DayInfo{Date: "2026-08-23", Condition: "小雨"}, true, now); !got.Equal(now) {
+		t.Errorf("换了一天应从现在算起，得到 %v", got)
+	}
+	if got := carrySeen(prev, DayInfo{Date: "2026-08-22", Condition: "小雨"}, false, now); !got.Equal(now) {
+		t.Errorf("没有上一次观测应从现在算起，得到 %v", got)
+	}
+}
