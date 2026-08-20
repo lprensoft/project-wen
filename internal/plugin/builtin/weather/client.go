@@ -58,6 +58,20 @@ type DayInfo struct {
 	Condition string
 	MinC      float64
 	MaxC      float64
+	// Seen 是这一天的预报（按「有没有降水」这个粒度）第一次被看到的本地时刻，
+	// 刷新时从上一次观测延续。注入时据此标出「早就知道了」——预报每轮都在眼前，
+	// 没有这个标记，模型会把昨天就看过的「明天有雨」当成新消息，一遍遍提醒带伞。
+	// 旧缓存没有该字段，零值按「刚看到」处理。
+	Seen time.Time `json:"Seen,omitzero"`
+}
+
+// carrySeen 决定新观测里明天预报的 Seen：与上一次观测是同一天、降水与否也没变，
+// 就是同一条消息，沿用旧时刻；否则从现在算起。
+func carrySeen(prev, cur DayInfo, prevOK bool, now time.Time) time.Time {
+	if prevOK && prev.known() && cur.known() && prev.Date == cur.Date && isWet(prev.Condition) == isWet(cur.Condition) && !prev.Seen.IsZero() {
+		return prev.Seen
+	}
+	return now
 }
 
 // known 报告这一天是否有数据。
