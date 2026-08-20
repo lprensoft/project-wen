@@ -468,3 +468,77 @@ func TestDeduper(t *testing.T) {
 		t.Fatal("空 ID 不该算重复")
 	}
 }
+
+// PushNotice 的过滤矩阵：开关、共享域、非 IM 来源、已绑定用户，全满足才推；
+// 推送走 Push 通道，不做「自动接入唯一用户」。
+func TestPushNotice(t *testing.T) {
+	pushed := make(chan string, 8)
+	c, _ := newCore(t, noopTurn, func(cfg *Config) {
+		cfg.PushNotices = true
+		cfg.Push = func(_ context.Context, userID, text string) bool {
+			pushed <- userID + "|" + text
+			return true
+		}
+	})
+	if err := c.Bind("u1", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	expectPushed := func(want string) {
+		t.Helper()
+		select {
+		case got := <-pushed:
+			if got != want {
+				t.Fatalf("推送内容不对：%q，期望 %q", got, want)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("等待注记推送超时")
+		}
+	}
+	expectQuiet := func() {
+		t.Helper()
+		select {
+		case got := <-pushed:
+			t.Fatalf("不该有推送，却收到 %q", got)
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+
+	// 共享域、非 IM 来源、有绑定：推
+	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-1", Origin: "memory", Text: "🧠 记忆提炼：新增「事实/A」"})
+	expectPushed("u1|🧠 记忆提炼：新增「事实/A」")
+
+	// 带可见域标签：不推（归属拿不准，宁可少推）
+	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-1", Origin: "memory", Tag: "inner", Text: "里侧注记"})
+	expectQuiet()
+
+	// IM 通道自己发的注记（转投失败等）：不推。生产里各通道在 New() 里 Declare，
+	// 测试的 Core 没走那条路，这里补一次声明（幂等）
+	Declare("test_bot", "测试通道")
+	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-1", Origin: "test_bot", Text: "转投失败"})
+	expectQuiet()
+
+	// 没有用户绑定的会话：不推，也不自动接入
+	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-2", Origin: "memory", Text: "无人绑定"})
+	expectQuiet()
+}
+
+// 开关关着（默认）时一律不推。
+func TestPushNoticeDisabledByDefault(t *testing.T) {
+	pushed := make(chan string, 1)
+	c, _ := newCore(t, noopTurn, func(cfg *Config) {
+		cfg.Push = func(_ context.Context, userID, text string) bool {
+			pushed <- userID
+			return true
+		}
+	})
+	if err := c.Bind("u1", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	c.PushNotice(plugin.NoticeEvent{SessionID: "sess-1", Origin: "memory", Text: "有内容"})
+	select {
+	case <-pushed:
+		t.Fatal("开关默认关，不该推送")
+	case <-time.After(150 * time.Millisecond):
+	}
+}

@@ -115,6 +115,18 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	}
 }
 
+// OnNotice 旁听会话注记：开着「推送后台通知」时，把后台工作留下的说明（提炼的
+// 记录等）推给绑定用户。过滤规则（开关、共享域、非 IM 来源、归属通道）都在骨架的
+// PushNotice 里，通道只负责转交。
+func (p *Plugin) OnNotice(_ context.Context, ev plugin.NoticeEvent) {
+	p.mu.Lock()
+	core := p.core
+	p.mu.Unlock()
+	if core != nil {
+		core.PushNotice(ev)
+	}
+}
+
 // push 主动推送：iLink 发消息必须回带 context_token，主动推送没有「本轮入站消息」
 // 可回带，只能用该用户最近一次入站消息的 token。对方从没说过话时推不出去，如实
 // 报 false——调用方（分通道转投）据此知道这段话没有送达。

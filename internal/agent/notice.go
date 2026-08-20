@@ -68,5 +68,14 @@ func (a *Agent) AppendNotice(ctx context.Context, sessionID, text string) error 
 	if sink != nil {
 		sink(sessionID, m)
 	}
+
+	// 落盘与界面送达之后再广播给插件（NoticeObserver）：IM 通道据此把后台工作的
+	// 说明推给远端用户。广播的是已截断的落盘文本，推出去的与界面看到的一字不差。
+	a.plugins.NotifyNotice(ctx, plugin.NoticeEvent{
+		SessionID: sessionID,
+		Origin:    m.Origin,
+		Tag:       m.Tag,
+		Text:      m.Message.Content,
+	})
 	return nil
 }

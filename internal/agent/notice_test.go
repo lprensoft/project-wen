@@ -161,3 +161,43 @@ func TestNoticeExcludedFromCompactionSummary(t *testing.T) {
 		t.Errorf("其余消息应照常进摘要：\n%s", got)
 	}
 }
+
+// noticeSpy 是最小的 NoticeObserver 插件，记下收到的注记事件。
+type noticeSpy struct{ events []plugin.NoticeEvent }
+
+func (s *noticeSpy) Name() string                                  { return "notice_spy" }
+func (s *noticeSpy) Description() string                           { return "" }
+func (s *noticeSpy) Init(plugin.InitContext, map[string]any) error { return nil }
+func (s *noticeSpy) SystemPrompt() string                          { return "" }
+func (s *noticeSpy) Tools() []plugin.Tool                          { return nil }
+func (s *noticeSpy) OnNotice(_ context.Context, ev plugin.NoticeEvent) {
+	s.events = append(s.events, ev)
+}
+
+// 注记落盘后要广播给 NoticeObserver（IM 通道据此把后台说明推给远端用户），
+// 事件带发起方与可见域标签，正文与落盘内容一字不差。
+func TestAppendNoticeBroadcastsToObservers(t *testing.T) {
+	store := newTestStore(t)
+	m := plugin.NewManager(plugin.InitContext{}, "")
+	spy := &noticeSpy{}
+	if err := m.Register(spy, plugin.PluginConfig{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	a := New(nil, m, store, Options{})
+	meta, _ := store.Create()
+
+	ctx := plugin.WithScope(context.Background(), plugin.Scope{Write: "inner"})
+	ctx = plugin.WithTurnOrigin(ctx, "memory")
+	if err := a.AppendNotice(ctx, meta.ID, "🧠 记忆提炼：新增「事实/A」"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(spy.events) != 1 {
+		t.Fatalf("应广播一次，实际 %d 次", len(spy.events))
+	}
+	ev := spy.events[0]
+	if ev.SessionID != meta.ID || ev.Origin != "memory" || ev.Tag != "inner" ||
+		ev.Text != "🧠 记忆提炼：新增「事实/A」" {
+		t.Fatalf("事件内容不对：%+v", ev)
+	}
+}
