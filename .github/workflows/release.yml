@@ -44,7 +44,7 @@ jobs:
       - name: 核对 tag 与版本号
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          code_version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          code_version=$(sed -n -E 's/^(const|var) Version = "(.*)"$/\2/p' internal/version/version.go)
           tag_version="${GITHUB_REF_NAME%%-*}"
           echo "代码里的版本: $code_version"
           echo "tag: $GITHUB_REF_NAME（比对用 $tag_version）"
