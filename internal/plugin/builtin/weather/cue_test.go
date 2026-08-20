@@ -56,6 +56,81 @@ func TestRolePrefixMatchesTurnPromptWording(t *testing.T) {
 	}
 }
 
+func TestRenderDaysChecksDates(t *testing.T) {
+	const layout = "2006-01-02"
+	now := time.Now()
+	r := Report{
+		Yesterday: DayInfo{Date: now.AddDate(0, 0, -1).Format(layout), Condition: "阴", MinC: 16, MaxC: 24},
+		Tomorrow:  DayInfo{Date: now.AddDate(0, 0, 1).Format(layout), Condition: "中雨", MinC: 12, MaxC: 18},
+	}
+	got := renderDays(r, now)
+	if !strings.Contains(got, "昨天阴，16~24℃") || !strings.Contains(got, "明天预计中雨，12~18℃") {
+		t.Errorf("renderDays = %q", got)
+	}
+
+	// 跨过午夜后缓存里的「明天」其实是今天，照字面注入就是错话——按日期核对后不注入
+	stale := renderDays(r, now.AddDate(0, 0, 1))
+	if strings.Contains(stale, "明天") {
+		t.Errorf("日期对不上的「明天」不该注入: %q", stale)
+	}
+	// 旧缓存没有这两项：整段为空
+	if got := renderDays(Report{}, now); got != "" {
+		t.Errorf("无数据应为空: %q", got)
+	}
+}
+
+func TestForecastCuePostsOnFirstSight(t *testing.T) {
+	drainCues()
+	defer drainCues()
+	p := New()
+	p.personaLoc, p.refresh = "杭州", 30*time.Minute
+
+	now := time.Now()
+	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
+	dry := Report{Place: "杭州", Condition: "多云", Fetched: now.Add(-30 * time.Minute)}
+	wet := Report{Place: "杭州", Condition: "多云", Fetched: now,
+		Tomorrow: DayInfo{Date: tomorrow, Condition: "中雨", MinC: 12, MaxC: 18}}
+
+	// 第一次看到明天有雨：投递，有效期到今天为止
+	p.maybePostCue("杭州", dry, true, wet)
+	got := cue.Take(now)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "明天预报有中雨") {
+		t.Fatalf("应投递预报理由: %+v", got)
+	}
+	if got[0].Expire.After(now.AddDate(0, 0, 2)) {
+		t.Errorf("有效期不该越过明天: %v", got[0].Expire)
+	}
+
+	// 同一天的预报上次已是降水：不重投——理由可能已被心跳说出口
+	p.maybePostCue("杭州", wet, true, wet)
+	if cue.Pending(now) {
+		t.Error("同一天已投递过的预报不该重投")
+	}
+}
+
+func TestForecastCueRetractsWhenRainGone(t *testing.T) {
+	drainCues()
+	defer drainCues()
+	p := New()
+	p.personaLoc, p.refresh = "杭州", 30*time.Minute
+
+	now := time.Now()
+	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
+	wet := Report{Place: "杭州", Condition: "多云", Fetched: now.Add(-30 * time.Minute),
+		Tomorrow: DayInfo{Date: tomorrow, Condition: "中雨", MinC: 12, MaxC: 18}}
+	cleared := Report{Place: "杭州", Condition: "多云", Fetched: now,
+		Tomorrow: DayInfo{Date: tomorrow, Condition: "多云", MinC: 12, MaxC: 18}}
+
+	p.maybePostCue("杭州", Report{}, false, wet) // 首见有雨 → 投递
+	if !cue.Pending(now) {
+		t.Fatal("应先投递")
+	}
+	p.maybePostCue("杭州", wet, true, cleared) // 雨从预报里消失 → 撤回
+	if cue.Pending(now) {
+		t.Error("雨取消后还没说出口的理由应撤回")
+	}
+}
+
 func TestMaybePostCue(t *testing.T) {
 	drainCues()
 	p := New()

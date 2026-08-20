@@ -87,6 +87,20 @@ func Pending(now time.Time) bool {
 	return len(cues) > 0
 }
 
+// Drop 撤回一条尚未消费的理由（按 Source+Key）。产生方发现理由不再成立时用——
+// 已经送达的收不回，还没送达的不该再送出去（预报里的雨取消了，「明天有雨」就不能
+// 再说）。撤回不存在的键什么都不发生。
+func Drop(source, key string) {
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range cues {
+		if cues[i].Source == source && cues[i].Key == key {
+			cues = append(cues[:i], cues[i+1:]...)
+			return
+		}
+	}
+}
+
 // SetNotify 安装（或用 nil 卸下）投递时的叫醒回调。单槽位：只有一个主动开口的
 // 消费方，与 imbot.SetRouter 同款约定。
 func SetNotify(fn func()) {

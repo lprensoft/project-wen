@@ -68,6 +68,21 @@ func TestCapDropsOldest(t *testing.T) {
 	}
 }
 
+func TestDropRetractsUndelivered(t *testing.T) {
+	drain()
+	exp := time.Now().Add(time.Hour)
+	Post(Cue{Source: "weather", Key: "a", Text: "明天有雨", Expire: exp})
+	Post(Cue{Source: "weather", Key: "b", Text: "另一条", Expire: exp})
+
+	Drop("weather", "a")
+	Drop("weather", "没有的键") // 幂等：不存在什么都不发生
+
+	got := Take(time.Now())
+	if len(got) != 1 || got[0].Key != "b" {
+		t.Errorf("撤回后应只剩另一条: %+v", got)
+	}
+}
+
 func TestNotifyOnPost(t *testing.T) {
 	drain()
 	called := 0

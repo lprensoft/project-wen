@@ -45,7 +45,23 @@ type Report struct {
 	// Fetched 是取到这份数据的本地时刻。过期判定用它而不是接口给的观测时间：
 	// 我们要防的是「取不到新数据还在拿旧的当现在用」，那是取数这一侧的事。
 	Fetched time.Time
+	// Yesterday / Tomorrow 是昨天与明天的概要，与现况同一次请求带回（零额外调用）。
+	// 旧缓存没有这两项，零值表示未知、不注入，下次刷新自动补上。
+	Yesterday DayInfo `json:"Yesterday,omitzero"`
+	Tomorrow  DayInfo `json:"Tomorrow,omitzero"`
 }
+
+// DayInfo 是一天的天气概要。Date 是当地日期（如 2026-08-21）：「明天」会在午夜
+// 之后变成「今天」，渲染与预报理由的时效都要靠它判断，不能只信字段名。
+type DayInfo struct {
+	Date      string
+	Condition string
+	MinC      float64
+	MaxC      float64
+}
+
+// known 报告这一天是否有数据。
+func (d DayInfo) known() bool { return d.Condition != "" && d.Date != "" }
 
 // geocode 把地名解析成经纬度。
 func geocode(ctx context.Context, client *http.Client, name string) (Place, error) {
@@ -90,6 +106,11 @@ func fetchCurrent(ctx context.Context, client *http.Client, p Place) (Report, er
 	q.Set("latitude", strconv.FormatFloat(p.Lat, 'f', 4, 64))
 	q.Set("longitude", strconv.FormatFloat(p.Lon, 'f', 4, 64))
 	q.Set("current", "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m")
+	// 昨天与明天的概要搭同一次请求：past_days=1 + forecast_days=2 使 daily 数组
+	// 恰为「昨天、今天、明天」三天，不多打一次接口
+	q.Set("daily", "weather_code,temperature_2m_max,temperature_2m_min")
+	q.Set("past_days", "1")
+	q.Set("forecast_days", "2")
 	q.Set("timezone", "auto")
 
 	var body struct {
@@ -100,12 +121,18 @@ func fetchCurrent(ctx context.Context, client *http.Client, p Place) (Report, er
 			Code        int     `json:"weather_code"`
 			Wind        float64 `json:"wind_speed_10m"`
 		} `json:"current"`
+		Daily struct {
+			Time []string  `json:"time"`
+			Code []int     `json:"weather_code"`
+			Max  []float64 `json:"temperature_2m_max"`
+			Min  []float64 `json:"temperature_2m_min"`
+		} `json:"daily"`
 	}
 	if err := getJSON(ctx, client, forecastURL+"?"+q.Encode(), &body); err != nil {
 		return Report{}, fmt.Errorf("获取天气失败: %w", err)
 	}
 	c := body.Current
-	return Report{
+	rep := Report{
 		Place:     p.Name,
 		Condition: conditionOf(c.Code),
 		TempC:     c.Temperature,
@@ -113,7 +140,14 @@ func fetchCurrent(ctx context.Context, client *http.Client, p Place) (Report, er
 		Humidity:  int(c.Humidity + 0.5),
 		WindKmh:   c.Wind,
 		Fetched:   time.Now(),
-	}, nil
+	}
+	// 形状不符（字段缺失、长度不齐）就整体放弃这两项：宁缺勿错
+	d := body.Daily
+	if len(d.Time) == 3 && len(d.Code) == 3 && len(d.Max) == 3 && len(d.Min) == 3 {
+		rep.Yesterday = DayInfo{Date: d.Time[0], Condition: conditionOf(d.Code[0]), MinC: d.Min[0], MaxC: d.Max[0]}
+		rep.Tomorrow = DayInfo{Date: d.Time[2], Condition: conditionOf(d.Code[2]), MinC: d.Min[2], MaxC: d.Max[2]}
+	}
+	return rep, nil
 }
 
 // getJSON 发一次 GET 并解析 JSON 响应。
