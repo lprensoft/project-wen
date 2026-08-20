@@ -23,6 +23,7 @@ import (
 	"wen/internal/llm"
 	"wen/internal/modelcfg"
 	"wen/internal/plugin"
+	"wen/internal/plugin/builtin/belongings"
 	"wen/internal/plugin/builtin/bodysense"
 	"wen/internal/plugin/builtin/dualpersona"
 	"wen/internal/plugin/builtin/execcmd"
@@ -304,10 +305,11 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// 后者才能形成追加与覆盖的语义；scene 的舞台设定排在人格设定之后——先立角色，再立舞台，
 		// weather 紧跟 scene：它讲的是舞台之外那个现实地方的天气，与舞台冲突时以舞台为准，
 		// 这条规则得排在舞台设定之后才读得通；
+		// belongings 排在舞台之后：持有物是舞台上的资产，先立角色与舞台才有归属对象；
 		// body_sense 再排在其后：身体感知要有角色与场景在先，才有作用对象；
 		// presence 收尾：现场快照是角色、舞台、身体、心情都立起来之后「此刻」的定格，
 		// 它的 [当下状态] 排在本轮状态块的最后，离生成位置最近
-		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), bodysense.New(), mood.New(), presence.New(),
+		roleplay.New(), dualpersona.New(), scene.New(), weather.New(), belongings.New(), bodysense.New(), mood.New(), presence.New(),
 		// memory 与 session_search 排在角色演绎那组之后。它们注入的是「什么该记下来」
 		// 这类能力判据，与 scene / mood / weather 的判据同一类，挨在一起模型才会同等对待。
 		// 早先它们排在最前面，落在 [角色设定 · 最高优先级] 声明之前，那句「以下设定优先于
