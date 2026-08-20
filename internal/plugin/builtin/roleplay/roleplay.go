@@ -241,17 +241,41 @@ func (p *Plugin) SystemPrompt() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// OnCompact 在历史被物理删除前抽出最后一处【】原文，作为注记留在摘要末尾。
+// hasCharacter 判断是否配置了一个可辨认的角色：设定或台词样例任一非空。
+// 只开了表达规则而没有角色时，摘要要求与语气样本都没有对象。
+func (s settings) hasCharacter() bool {
+	return s.persona != "" || s.voiceSamples != ""
+}
+
+// CompactPrompt 给压缩摘要追加角色扮演的要求。核心的基础要求把「寒暄客套」列为
+// 丢弃项，而关系的变化恰恰藏在那些看似寒暄的来回里——按任务型的摘要压一次，
+// 角色对对方的态度、两人之间悬着的事、彼此的叫法就都没了，之后的角色只剩设定。
+func (p *Plugin) CompactPrompt(context.Context) string {
+	if !p.snapshot().hasCharacter() {
+		return ""
+	}
+	return compactRequirements
+}
+
+// OnCompact 在历史被物理删除前抽出两样摘要保不住的东西，作为注记留在摘要末尾：
+// 最后一处【】原文（场景与姿态）和角色最近的几句原话（声音）。
 //
-// 压缩会把整段历史换成一份摘要，而摘要是对内容的概述，场景与姿态这类细节正是它会
-// 丢掉的部分——压缩一次场景就断了。这里只做文本提取，不发起模型调用。
+// 压缩会把整段历史换成一份摘要，而摘要是对内容的概述，场景与语气这类细节正是它会
+// 丢掉的部分——压缩一次场景就断了、腔调就散了。台词样例是静态示范，近期原话才是
+// 「这几天她是这么说话的」；压缩刚过时历史最薄，正是最需要这份范本的时刻。
+// 这里只做文本提取，不发起模型调用。
 func (p *Plugin) OnCompact(_ context.Context, ev plugin.CompactEvent) (string, error) {
-	if !p.snapshot().interaction {
-		return "", nil
+	s := p.snapshot()
+	var notes []string
+	if s.interaction {
+		if scene := lastScene(ev.History); scene != "" {
+			notes = append(notes, fmt.Sprintf("（压缩前的最后一处场景演绎，后续对话应从此处继续：%s）", scene))
+		}
 	}
-	scene := lastScene(ev.History)
-	if scene == "" {
-		return "", nil
+	if s.hasCharacter() {
+		if lines := recentVoice(ev.History); len(lines) > 0 {
+			notes = append(notes, "（压缩前角色最近的几句原话，之后保持同一个声音："+joinQuoted(lines)+"）")
+		}
 	}
-	return fmt.Sprintf("（压缩前的最后一处场景演绎，后续对话应从此处继续：%s）", scene), nil
+	return strings.Join(notes, "\n"), nil
 }

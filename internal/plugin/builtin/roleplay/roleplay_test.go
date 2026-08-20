@@ -384,3 +384,82 @@ func TestConfigFieldsDeclareTextType(t *testing.T) {
 		t.Errorf("默认配置无法通过校验: %v", err)
 	}
 }
+
+func TestCompactPromptOnlyWithCharacter(t *testing.T) {
+	// 只开了表达规则、没有角色：摘要要求没有对象
+	if got := newTestPlugin(t, nil).CompactPrompt(context.Background()); got != "" {
+		t.Errorf("没有角色时不该追加要求: %q", got)
+	}
+	for _, cfg := range []map[string]any{
+		{"persona": "角色"},
+		{"voice_samples": "你：在吗\n她：嗯。"},
+	} {
+		got := newTestPlugin(t, cfg).CompactPrompt(context.Background())
+		if !strings.Contains(got, "关系") || !strings.Contains(got, "称呼") {
+			t.Errorf("cfg=%v: 应要求摘要保住关系状态与称呼: %q", cfg, got)
+		}
+	}
+}
+
+func TestOnCompactKeepsRecentVoice(t *testing.T) {
+	// 关掉【】演绎，单独看语气样本
+	p := newTestPlugin(t, map[string]any{"persona": "角色", "interaction": false})
+	note, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: []llm.Message{
+		{Role: llm.RoleAssistant, Content: "第一句，早该被挤出去的。"},
+		{Role: llm.RoleAssistant, Content: "【靠在窗边】早些年不是这样的。"},
+		{Role: llm.RoleUser, Content: "【皱眉】那后来呢"},
+		{Role: llm.RoleAssistant, Content: "", ToolCalls: []llm.ToolCall{{Name: "x"}}},
+		{Role: llm.RoleAssistant, Content: "【转过身】"},
+		{Role: llm.RoleAssistant, Content: "【把茶放到桌上】后来就散了。【顿了顿】不提了。"},
+		{Role: llm.RoleAssistant, Content: "你别问了。"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "「早些年不是这样的。」「后来就散了。不提了。」「你别问了。」"
+	if !strings.Contains(note, want) {
+		t.Errorf("应按时间顺序取最近三句原话、去掉【】、跳过空句:\n%q", note)
+	}
+	if strings.Contains(note, "第一句") || strings.Contains(note, "皱眉") || strings.Contains(note, "场景演绎") {
+		t.Errorf("多余内容混进了注记: %q", note)
+	}
+}
+
+func TestOnCompactCombinesSceneAndVoice(t *testing.T) {
+	p := newTestPlugin(t, map[string]any{"persona": "角色"})
+	note, _ := p.OnCompact(context.Background(), plugin.CompactEvent{History: []llm.Message{
+		{Role: llm.RoleAssistant, Content: "【转过身，把茶放到桌上】后来就散了。"},
+	}})
+	if !strings.Contains(note, "场景演绎，后续对话应从此处继续：转过身") || !strings.Contains(note, "同一个声音：「后来就散了。」") {
+		t.Errorf("场景与原话应各占一行同时保留:\n%q", note)
+	}
+	// 没有角色时只剩场景
+	q := newTestPlugin(t, nil)
+	note, _ = q.OnCompact(context.Background(), plugin.CompactEvent{History: []llm.Message{
+		{Role: llm.RoleAssistant, Content: "【抬头】嗯。"},
+	}})
+	if !strings.Contains(note, "抬头") || strings.Contains(note, "同一个声音") {
+		t.Errorf("没有角色时不该附语气样本: %q", note)
+	}
+}
+
+func TestRecentVoiceTruncated(t *testing.T) {
+	long := strings.Repeat("话", maxVoiceRunes+50)
+	lines := recentVoice([]llm.Message{{Role: llm.RoleAssistant, Content: long}})
+	if len(lines) != 1 || len([]rune(lines[0])) != maxVoiceRunes+1 || !strings.HasSuffix(lines[0], "…") {
+		t.Errorf("超长原话应截断并加省略号: len=%d", len([]rune(lines[0])))
+	}
+}
+
+func TestStripBracketed(t *testing.T) {
+	for in, want := range map[string]string{
+		"【a】说话【b】": "说话",
+		"没有括号":     "没有括号",
+		"【没配对的 说话": "【没配对的 说话",
+		"说话】多一个":   "说话】多一个",
+	} {
+		if got := stripBracketed(in); got != want {
+			t.Errorf("stripBracketed(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

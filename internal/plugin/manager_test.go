@@ -468,3 +468,40 @@ func (p *countingPlugin) Stop() { p.stopCalls++ }
 func (p *countingPlugin) ConfigFields() []ConfigField {
 	return []ConfigField{{Key: "size", Label: "大小", Type: "int", Default: 3, Min: IntPtr(1), Max: IntPtr(10)}}
 }
+
+// compactPrompterPlugin 给压缩提示词追加要求，可按需 panic。
+type compactPrompterPlugin struct {
+	fakePlugin
+	frag string
+	boom bool
+}
+
+func (p *compactPrompterPlugin) CompactPrompt(context.Context) string {
+	if p.boom {
+		panic("boom")
+	}
+	return p.frag
+}
+
+func TestCompactPrompts(t *testing.T) {
+	m := NewManager(InitContext{}, "")
+	on := &compactPrompterPlugin{fakePlugin: fakePlugin{name: "a"}, frag: "要求A"}
+	off := &compactPrompterPlugin{fakePlugin: fakePlugin{name: "b"}, frag: "要求B"}
+	boom := &compactPrompterPlugin{fakePlugin: fakePlugin{name: "c"}, boom: true}
+	blank := &compactPrompterPlugin{fakePlugin: fakePlugin{name: "d"}, frag: " \n"}
+	plain := &fakePlugin{name: "e"} // 未实现 CompactPrompter
+	later := &compactPrompterPlugin{fakePlugin: fakePlugin{name: "f"}, frag: "要求F"}
+
+	m.Register(on, PluginConfig{Enabled: true})
+	m.Register(off, PluginConfig{Enabled: false})
+	m.Register(boom, PluginConfig{Enabled: true})
+	m.Register(blank, PluginConfig{Enabled: true})
+	m.Register(plain, PluginConfig{Enabled: true})
+	m.Register(later, PluginConfig{Enabled: true})
+
+	got := m.CompactPrompts(context.Background())
+	// 只收启用插件的非空要求，panic 的跳过且不连累后面的，顺序按注册序
+	if len(got) != 2 || got[0] != "要求A" || got[1] != "要求F" {
+		t.Errorf("CompactPrompts = %v，want [要求A 要求F]", got)
+	}
+}

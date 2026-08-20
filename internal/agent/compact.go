@@ -43,9 +43,30 @@ const compactPrompt = `你是一个对话压缩器。请将下面的对话历史
 - 保留：用户的核心诉求与目标、已确认的事实与结论、重要的工具调用及其关键结果、未完成的任务与待办事项
 - 丢弃：寒暄客套、重复内容、已被后续纠正的失败中间过程
 - 用中文输出，条理清晰、尽量精炼，直接输出摘要本身，不要额外说明
-
-对话历史：
 `
+
+// compactExtrasHeader 引入插件追加的摘要要求。基础要求是按任务型对话写的（「寒暄客套」
+// 被列为丢弃项），而角色扮演这类对话里关系性的内容恰恰长那个样子；追加项声明为优先，
+// 与提示词注入「靠后的覆盖靠前的」是同一条约定。
+const compactExtrasHeader = "\n补充要求（与上面的要求冲突时以这里为准）：\n"
+
+const compactHistoryHeader = "\n对话历史：\n"
+
+// buildCompactPrompt 拼出完整的压缩提示词：基础要求 + 插件追加的要求 + 历史正文。
+func buildCompactPrompt(extras []string, history string) string {
+	var b strings.Builder
+	b.WriteString(compactPrompt)
+	if len(extras) > 0 {
+		b.WriteString(compactExtrasHeader)
+		for _, e := range extras {
+			b.WriteString(e)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString(compactHistoryHeader)
+	b.WriteString(history)
+	return b.String()
+}
 
 const summaryPrefix = "以下是之前对话内容的压缩摘要：\n\n"
 
@@ -167,14 +188,15 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 		if emitted {
 			emit(Event{Type: EventDelta, Content: groupSeparator})
 		}
-		summary, err := a.summarize(ctx, provider, opts, g.msgs, emit)
+		// 本组的可见域进 ctx：插件据此决定归档落哪个目录、记忆写哪个库、摘要该守哪些要求
+		gctx := plugin.WithScope(ctx, scopeForTag(g.tag))
+		summary, err := a.summarize(ctx, provider, opts, g.msgs, a.plugins.CompactPrompts(gctx), emit)
 		if err != nil {
 			return err
 		}
 		emitted = true
 
 		// 历史即将被物理删除，先广播给插件（可借此归档），其注记随摘要一并留在会话里
-		gctx := plugin.WithScope(ctx, scopeForTag(g.tag))
 		notes := a.plugins.NotifyCompact(gctx, plugin.CompactEvent{
 			SessionID: sessionID,
 			Scope:     g.tag,
@@ -206,10 +228,11 @@ func (a *Agent) compact(ctx context.Context, provider llm.Provider, opts Options
 }
 
 // summarize 让模型把一组消息压成一段摘要，过程以 delta 事件流式发布。
-func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Options, msgs []session.StoredMessage, emit func(Event)) (string, error) {
+// extras 是插件追加的摘要要求（见 plugin.CompactPrompter），可为空。
+func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Options, msgs []session.StoredMessage, extras []string, emit func(Event)) (string, error) {
 	events, err := provider.ChatStream(ctx, llm.ChatRequest{
 		Model:       opts.Model,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: compactPrompt + serializeHistory(msgs)}},
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: buildCompactPrompt(extras, serializeHistory(msgs))}},
 		Temperature: opts.Temperature,
 		MaxTokens:   opts.MaxTokens,
 		Thinking:    "off", // 压缩追求速度，不启用思考

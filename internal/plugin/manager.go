@@ -624,6 +624,20 @@ func (m *Manager) TurnPrompts(ctx context.Context, ev TurnEvent) []string {
 	return out
 }
 
+// CompactPrompts 收集启用插件为压缩摘要提示词追加的要求（按注册顺序，已滤掉空串）。
+// 与 SystemPrompts 同一族的收集：在锁外逐个调用，单个插件的 panic 不影响其余。
+func (m *Manager) CompactPrompts(ctx context.Context) []string {
+	var out []string
+	for _, e := range enabledAs[CompactPrompter](m) {
+		var frag string
+		safely(e.name, "生成压缩提示词", func() { frag = e.impl.CompactPrompt(ctx) })
+		if frag = strings.TrimSpace(frag); frag != "" {
+			out = append(out, frag)
+		}
+	}
+	return out
+}
+
 // NotifyCompact 在会话历史被替换前广播压缩事件，返回各插件的注记（按注册顺序，已滤掉空串）。
 // 插件返回的错误只记录日志，不阻断压缩——压缩是上下文溢出时的保底手段，不能被插件卡住。
 //
