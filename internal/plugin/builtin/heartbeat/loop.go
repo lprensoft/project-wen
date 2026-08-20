@@ -69,7 +69,16 @@ func (p *Plugin) resetClockLocked(at time.Time) {
 // 会话忙时跳过本次——心跳排队毫无意义，下个周期自然会再来。
 func (p *Plugin) beat(ctx context.Context) {
 	p.mu.Lock()
-	p.lastBeat = time.Now()
+	now := time.Now()
+	// 暂停到点后的第一拍是「睡醒」：节奏恢复到基础值——睡前的快慢都属于睡前那段
+	// 对话，人睡一觉起来回到平常状态。与 OnTurnEnd 的「见人恢复常态」是同一条规则，
+	// 只是醒来这一次连快节奏也不保留：隔了一觉，热聊的势头已经不在了。
+	if p.dynamic && !p.pausedUntil.IsZero() && !now.Before(p.pausedUntil) {
+		p.cur = p.normalize(p.base)
+		p.adjusted = false
+		p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
+	}
+	p.lastBeat = now
 	runTurn, prompt, cur := p.runTurn, p.beatPromptLocked(), p.cur
 	dir, st := p.snapshotStateLocked()
 	p.mu.Unlock()
@@ -150,8 +159,8 @@ func gapNote(prompt string, lastActive, now time.Time, cur time.Duration) string
 
 // maybeDecay 空闲衰减：距最近真人交互超过一个当前间隔时，把间隔放缓一档（×1.5），
 // 直到最慢间隔。动态心跳关闭时不衰减——那是「固定节奏」的含义。
-// 暂停期间也不衰减：这段安静是模型自己定下的（pause_heartbeat 承诺「到点按原节奏
-// 恢复」），不是「没人想聊」的证据，衰减再计一次就是把同一份沉默记了两笔账。
+// 暂停期间也不衰减：这段安静是模型自己定下的，不是「没人想聊」的证据，
+// 衰减再计一次就是把同一份沉默记了两笔账（暂停到点由 beat 恢复成基础节奏）。
 // 豁免只覆盖暂停本身——到点之后若仍无人来聊，又是自然安静，衰减照常恢复计数。
 func (p *Plugin) maybeDecay() {
 	p.mu.Lock()
@@ -179,8 +188,10 @@ func (p *Plugin) maybeDecay() {
 // 后台轮次（含心跳自己）一律忽略——否则心跳会不断自我续命。
 // 本方法在轮次收尾的同步路径上被调用，必须快速返回。
 //
-// 节奏本身不在这里改。间隔由模型自己用 set_heartbeat_interval 定：它在对话里
-// 知道接下来该不该等、等多久，而这里只看得到「刚聊完一轮」。
+// 节奏规则：**见人恢复常态**。衰减攒出来的慢节奏（或模型设的「她今天忙」式慢速）
+// 在真人开口的那一刻就过时了，机械恢复到基础间隔；仍然忙的话模型看得到对话，会
+// 再设一次——那正是它实测中最可靠触发的场景。比基础值快的设定保留：热聊中调快
+// 的节奏不该被一条新消息打回去。往快超过常态是带社交判断的决定，仍归模型。
 func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	if ev.Origin != "" || !ev.Interactive {
 		return
@@ -190,15 +201,23 @@ func (p *Plugin) OnTurnEnd(_ context.Context, ev plugin.TurnEndEvent) {
 	// 真人刚聊完，心跳倒计时从此刻重新开始：心跳是「没人说话时才主动开口」的机制，
 	// 聊天途中插进来的心跳既打断对话，也让间隔配置失去意义。
 	p.resetClockLocked(ev.EndedAt)
-	// 人来说话就是醒了：暂停即刻作废。清除要落盘（否则重启后暂停复活），但只在
-	// 确实有暂停要清时才写——本方法在轮次收尾的同步路径上，不为每轮都付一次写盘。
+	// 状态变化要落盘，但只在确实变了时才写——本方法在轮次收尾的同步路径上，
+	// 不为每轮都付一次写盘。
 	persist := false
-	var dir string
-	var st state
+	if p.dynamic && p.cur > p.base {
+		p.cur = p.normalize(p.base)
+		p.adjusted = false
+		persist = true
+	}
+	// 人来说话就是醒了：暂停即刻作废（不落盘的话重启后暂停会复活）。
 	if !p.pausedUntil.IsZero() {
 		p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
-		dir, st = p.snapshotStateLocked()
 		persist = true
+	}
+	var dir string
+	var st state
+	if persist {
+		dir, st = p.snapshotStateLocked()
 	}
 	p.mu.Unlock()
 	if persist {

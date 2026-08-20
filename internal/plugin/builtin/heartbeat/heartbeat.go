@@ -86,6 +86,24 @@ func (p *Plugin) Description() string {
 
 func (p *Plugin) SystemPrompt() string { return "" }
 
+// TurnPrompt 把当前的主动开口节奏亮给模型。工具描述里写了「话题正热就调短」，
+// 但普通对话轮次里模型此前根本看不到当前间隔——看不见现状，判据就永远不会触发，
+// 实测它只在「去睡了」「等一小时」这类对话里有明确文本信号的时刻才调节奏。
+// 固定节奏时不注入：调整会被工具拒绝，亮出来只会诱导模型去调。
+func (p *Plugin) TurnPrompt(_ context.Context, _ plugin.TurnEvent) (string, error) {
+	p.mu.Lock()
+	cur, dynamic, pausedUntil := p.cur, p.dynamic, p.pausedUntil
+	p.mu.Unlock()
+	if !dynamic || cur <= 0 {
+		return "", nil
+	}
+	if until := time.Until(pausedUntil); until > 0 {
+		return fmt.Sprintf("[心跳]\n主动开口已暂停，约 %s后恢复常规节奏。", humanDur(until)), nil
+	}
+	return fmt.Sprintf("[心跳]\n无人说话时你约每 %s主动开口一次；与当下聊天的热度不相称时，用 set_heartbeat_interval 调整。",
+		humanDur(cur)), nil
+}
+
 // Tools 一律返回工具，不按「动态心跳」开关增减：Tools 在插件注册时就会被调用
 // （那时还没 Init），按运行期状态增减会让工具名的冲突检查看到一张空表。
 // 关掉动态心跳时由工具自己拒绝并说明理由。
@@ -176,6 +194,10 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.pausedUntil, p.pausedAt = time.Time{}, time.Time{}
 	if p.dynamic && st.PausedUntil.After(time.Now()) && !p.lastActive.After(st.PausedAt) {
 		p.pausedUntil, p.pausedAt = st.PausedUntil, st.PausedAt
+	} else if p.dynamic && !st.PausedUntil.IsZero() && !p.lastActive.After(st.PausedAt) {
+		// 暂停在停机期间到点了：等同「睡醒」（见 beat），节奏回基础值。
+		// 不走这条的话，睡前的节奏会越过一整个暂停期存活下来。
+		p.cur, p.adjusted = p.base, false
 	}
 
 	// 起点当场落盘，别等第一次心跳才写：否则「启用后还没跳过一次就重启」这一段
