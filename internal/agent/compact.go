@@ -41,6 +41,8 @@ func messagesOf(stored []session.StoredMessage) []llm.Message {
 
 const compactPrompt = `你是一个对话压缩器。请将下面的对话历史压缩成一份结构化摘要，要求：
 - 保留：用户的核心诉求与目标、已确认的事实与结论、重要的工具调用及其关键结果、未完成的任务与待办事项
+- 时间一律写成具体日期：原文里的「今天」「明天」「昨天」「下周」这类说法，按它所在的日界线（「（以下是 …… 的对话）」那一行）换算成日期再写，摘要里不要留下这些相对说法
+- 未完成的待办要写清是哪一天说的、期限在哪一天；已经兑现或已经过期的，不要再写成待办
 - 丢弃：寒暄客套、重复内容、已被后续纠正的失败中间过程
 - 用中文输出，条理清晰、尽量精炼，直接输出摘要本身，不要额外说明
 `
@@ -260,12 +262,24 @@ func (a *Agent) summarize(ctx context.Context, provider llm.Provider, opts Optio
 }
 
 // serializeHistory 把消息序列化为可读文本，工具结果做截断避免超长。
+//
+// 日期翻篇处插一行日界线。消息的时间戳本来就落了盘，此前一条都没交给压缩器——
+// 它看到的是一堵没有任何时间信息的对话墙，于是原文里的「明天」只能原样抄进摘要。
+// 而摘要是 pinned 的、永不裁剪，一条不带日期的待办就此永久留在上下文最前面，
+// 每天以同样的措辞重新出现。要求摘要写绝对日期，前提是先把日期给它。
 // 一次性输入（心跳提示词等）不进摘要：它们是机器注入的模板文案，不是对话内容。
 func serializeHistory(msgs []session.StoredMessage) string {
 	var b strings.Builder
+	var day string
 	for _, m := range msgs {
 		if m.Kind == session.KindEphemeral || m.Kind == session.KindNotice {
 			continue
+		}
+		if !m.TS.IsZero() {
+			if d := m.TS.Format("2006-01-02"); d != day {
+				day = d
+				fmt.Fprintln(&b, dayMark(m.TS))
+			}
 		}
 		switch m.Role {
 		case llm.RoleUser:

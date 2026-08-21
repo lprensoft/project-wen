@@ -227,12 +227,13 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	}
 
 	// 组装上下文，分稳定段与易变段两层：
-	//   system（环境块 + 启用插件的提示词片段 + 可选配置提示词）+ 历史 + 本轮状态 + 本条
+	//   system（环境块 + 工具约定 + 历史约定 + 启用插件的提示词片段 + 可选配置提示词）
+	//   + 历史 + 本轮状态 + 本条
 	// 易变的内容（当前时间、插件的每轮片段）**不进 system**，而是拼在本轮输入之前。
 	// 一处改动解决两件事：模型判断「现在」时不必跨几千 token 主动比对，
 	// 且 system 与历史成为整轮之间字节一致的前缀，提示词缓存才可能命中。
 	msgs := make([]llm.Message, 0, len(history)+2)
-	parts := []string{envContext(opts.Workdir), toolRules}
+	parts := []string{envContext(opts.Workdir), toolRules, historyRules}
 	parts = append(parts, a.plugins.SystemPrompts()...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)
@@ -240,16 +241,46 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: strings.Join(parts, "\n\n")})
 	// pinned 与 msgs 一一对应，标记预算裁剪时不能丢的消息（system 与压缩摘要）
 	pinned := []bool{true}
-	// 历史里补上时间流逝的信号：隔得久的地方标一行间隔（原文不变，只改发出去的副本）
+	// 历史里补上时间的信号，两种：日期翻篇处标一行绝对日期（dayMark），隔得久的地方
+	// 标一行间隔（gapNote）。原文不变，只改发出去的副本。
+	//
+	// 落点分两种。用户消息直接前置，这是既有做法。角色自己开口的那一轮没有用户消息可
+	// 依附——心跳注入的提示是一次性输入，后续上下文里已被剔掉——于是单独插一条程序
+	// 标注。那类主动开口的话此前一点时间信号都没有，而「昨天说的明天」多半正是那么说
+	// 出口的：第二天读到它时，没有任何东西表明那句话不是刚说的。
 	var lastTS time.Time
+	var markedDay string
+	// pending 是还没找到落点的标注。工具结果那几条中间插不得：Anthropic 侧连续的
+	// user 消息会合并成一条，tool_result block 必须排在最前，中间夹一段文字就把它们
+	// 拆散了。跨零点的那种轮次因此把标注顺延到下一个能插的位置——历史正好以工具结果
+	// 结尾时（轮次被中断）就丢掉，那种残缺的尾巴不值得为它多开一条路径。
+	var pending string
+	breakable := true // 上一条消息有没有还挂着的工具调用
 	for _, h := range visibleHistory(history, scope) {
 		m := h.Message
-		if note := gapNote(lastTS, h.TS); note != "" && m.Role == llm.RoleUser {
-			m.Content = note + m.Content
+		note := pending
+		pending = ""
+		if !h.TS.IsZero() {
+			if d := h.TS.Format("2006-01-02"); d != markedDay {
+				markedDay = d
+				note += dayMark(h.TS) + "\n"
+			}
 		}
+		note += gapNote(lastTS, h.TS)
 		if !h.TS.IsZero() {
 			lastTS = h.TS
 		}
+		switch {
+		case note == "":
+		case m.Role == llm.RoleUser:
+			m.Content = note + m.Content
+		case m.Role == llm.RoleTool || !breakable:
+			pending = note
+		default:
+			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: strings.TrimRight(note, "\n")})
+			pinned = append(pinned, false)
+		}
+		breakable = len(m.ToolCalls) == 0
 		msgs = append(msgs, m)
 		pinned = append(pinned, h.Kind == session.KindSummary)
 	}
