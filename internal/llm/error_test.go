@@ -74,7 +74,7 @@ func TestOpenAICompatNon200IsTypedError(t *testing.T) {
 }
 
 // 流中途的错误帧必须成为错误事件，而不是被当成无法识别的帧静默跳过
-//（那会表现成「空回复且正常结束」，用户侧完全无感）。
+// （那会表现成「空回复且正常结束」，用户侧完全无感）。
 func TestOpenAICompatStreamErrorFrame(t *testing.T) {
 	var got map[string]any
 	srv := sseServer(t, []string{

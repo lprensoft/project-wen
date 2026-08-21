@@ -52,7 +52,7 @@ type wireRequest struct {
 	StreamOptions   *wireStreamOptions `json:"stream_options,omitempty"`
 	Thinking        *wireThinking      `json:"thinking,omitempty"`
 	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
-	ReasoningSplit  bool               `json:"reasoning_split,omitempty"`  // MiniMax：思考走独立字段而非 <think> 内联
+	ReasoningSplit  bool               `json:"reasoning_split,omitempty"` // MiniMax：思考走独立字段而非 <think> 内联
 	EnableThinking  *bool              `json:"enable_thinking,omitempty"` // Qwen：思考开关
 }
 

@@ -25,10 +25,10 @@ type File struct {
 }
 
 type Provider struct {
-	Name    string  `json:"name"` // 唯一标识，也是界面显示名
-	Type    string  `json:"type"` // openai_compat / anthropic
-	BaseURL string  `json:"base_url"`
-	APIKey  string  `json:"api_key"`
+	Name    string `json:"name"` // 唯一标识，也是界面显示名
+	Type    string `json:"type"` // openai_compat / anthropic
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
 	// Dialect 是思考参数方言（openai_compat 专用），空串等同 deepseek。
 	Dialect string `json:"thinking_dialect,omitempty"`
 	// PromptCache 是否使用提示词缓存（anthropic 专用；nil = 未设置，按开启算）。

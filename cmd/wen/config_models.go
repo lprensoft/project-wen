@@ -37,7 +37,7 @@ func modelsSection(b backend) error {
 		if err := run(huh.NewSelect[string]().
 			Title("模型").
 			Description(fitLines(fmt.Sprintf("当前：%s / %s\n%s",
-				doc.Current.Provider, doc.Current.Model, b.mode()))).
+								doc.Current.Provider, doc.Current.Model, b.mode()))).
 			Height(listHeight(len(opts), 3)). // chrome：标题 1 行 + 说明 2 行
 			Options(opts...).
 			Value(&choice)); err != nil {

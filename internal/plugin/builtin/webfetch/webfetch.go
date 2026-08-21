@@ -28,9 +28,9 @@ func New() *Plugin {
 	return &Plugin{timeout: 20 * time.Second, maxBytes: defaultMaxBytes}
 }
 
-func (p *Plugin) Name() string        { return "web_fetch" }
+func (p *Plugin) Name() string { return "web_fetch" }
 
-func (p *Plugin) Category() string { return plugin.CategoryTools }
+func (p *Plugin) Category() string    { return plugin.CategoryTools }
 func (p *Plugin) Description() string { return "抓取网页并返回其文本内容" }
 
 func (p *Plugin) SystemPrompt() string {
