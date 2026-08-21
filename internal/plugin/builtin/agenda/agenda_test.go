@@ -3,6 +3,7 @@ package agenda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1029,5 +1030,46 @@ func TestBrokenFileReported(t *testing.T) {
 	_ = st.writeJSON(st.planPath(), "not a plan")
 	if _, err := st.LoadPlan(); err == nil || !strings.Contains(err.Error(), "损坏") {
 		t.Fatalf("损坏的文件应报错: %v", err)
+	}
+}
+
+// 结束轮次挂了，但经历已经落盘：「刚回来」这条理由照投。
+//
+// 实际见过的场景是模型标完 done 之后那次模型调用超时——经历在表里，人却不知道她
+// 回来了，因为这条理由当初只挂在「轮次成功」那一支上。
+func TestBackCueAfterFailedEndTurn(t *testing.T) {
+	h := newHarness(t, false, nil)
+	h.setPlan(t, Item{Title: "和林舟在图书馆查资料", Start: "14:00", End: "16:30",
+		Status: statusOngoing, StartFired: at(14, 0)})
+	h.runTurn = func(ctx context.Context, sid, input string) (string, error) {
+		// 先把经历写进表里，再让这一轮以网络错误告终
+		if _, err := h.tool("update_day_plan").Execute(ctx,
+			json.RawMessage(`{"id":"a1","status":"done","outcome":"聊了一下午"}`)); err != nil {
+			return "", err
+		}
+		return "", errors.New("http2: timeout awaiting response headers")
+	}
+	h.clk.set(at(16, 35))
+	h.tick()
+	recvInput(t, h)
+
+	cues := cue.Take(time.Now())
+	if len(cues) != 1 || cues[0].Key != "back|a1" ||
+		cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" {
+		t.Fatalf("轮次失败也该投「刚回来」: %+v", cues)
+	}
+}
+
+// 会话持续繁忙而放弃的那条路不投：轮次根本没跑起来，模型也就没机会记下经历，
+// 而且那时候人正在对面说话，不需要一条「找个话头开口」的理由。
+func TestNoBackCueWhenSessionBusy(t *testing.T) {
+	h := newHarness(t, false, nil)
+	h.setPlan(t, Item{Title: "晨跑", Start: "08:00", End: "08:40", Status: statusOngoing, StartFired: at(8, 0)})
+	h.runTurn = func(context.Context, string, string) (string, error) { return "", plugin.ErrSessionBusy }
+	h.clk.set(at(8, 45))
+	h.tick()
+	<-h.notices // 放弃时留的那条注记
+	if cue.Pending(time.Now()) {
+		t.Fatal("会话繁忙放弃时不该投「刚回来」")
 	}
 }

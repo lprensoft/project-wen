@@ -232,6 +232,13 @@ func (p *Plugin) runActivity(ctx context.Context, d due, now time.Time) {
 		default:
 			if ctx.Err() == nil {
 				log.Printf("agenda: 「%s」的%s轮次失败: %v", d.item.Title, d.kind, err)
+				// 轮次挂了不等于什么都没发生：经历是工具当场落盘的，模型可能已经写好了，
+				// 只是收尾那次模型调用没回来（实际见过：done 已经记上，随后的调用等了
+				// 六十秒没等到响应头）。这条理由本来就只看落盘的结果（见 postBackCue），
+				// 所以成败都投——那一项确实已经过去了，人也确实该知道她回来了。
+				if d.kind != kindStart {
+					p.postBackCue(d)
+				}
 			}
 			return
 		}
