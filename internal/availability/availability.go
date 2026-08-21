@@ -60,17 +60,24 @@ var (
 	notify func()
 )
 
-// Set 写入（或覆盖）一个写入方的状态。Until 不在未来、或 Level 为空闲的直接丢弃——
-// 「空闲」用 Clear 表达，不占一条记录。随后叫醒读取方（若装了回调）。
+// Set 写入（或覆盖）一个写入方的状态。Level 为空闲的直接丢弃——「空闲」用 Clear
+// 表达，不占一条记录。随后叫醒读取方（若装了回调）。
+//
+// **写入一侧刻意不看时钟。** 这个包的读取一律由调用方给出「现在」（Current 与它
+// 内部的 pruneLocked），写入却曾拿 time.Now() 判断「Until 是不是还在未来」，于是同一
+// 份记录被两个时钟裁决。日程插件整套跑在一个可注入的时钟上，「今天 16:30 结束」这条
+// 状态在真实时间过了 16:30 之后就再也写不进去——生产上两个时钟重合，看不出来；测试
+// 里表现为一过下午就开始失败。已经过期的记录不必在写入时拦，任何一次读取都会按读取方
+// 的「现在」把它清掉。
 func Set(s State) {
-	if s.Source == "" || s.Level <= Free || !s.Until.After(time.Now()) {
+	if s.Source == "" || s.Level <= Free {
 		return
 	}
 	if s.Since.IsZero() {
+		// 只是补一个展示用的起点，不参与任何有效性判断
 		s.Since = time.Now()
 	}
 	mu.Lock()
-	pruneLocked(time.Now())
 	replaced := false
 	for i := range states {
 		if states[i].Source == s.Source {
