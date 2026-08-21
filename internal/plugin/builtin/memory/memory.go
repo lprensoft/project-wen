@@ -70,6 +70,7 @@ type Plugin struct {
 	store           *Store // 基准库，等价于 storeFor("")
 	library         string
 	complete        plugin.CompleteFunc
+	dayFacts        plugin.DayFactsFunc
 	notice          plugin.NoticeFunc
 	maxIndexEntries int
 	maxIndexBytes   int
@@ -349,6 +350,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.libBase = dir
 	p.store = NewStore(dir)
 	p.complete = ictx.Complete
+	p.dayFacts = ictx.DayFacts
 	p.notice = ictx.Notice
 	p.maxIndexEntries = plugin.CfgInt(cfg, "max_index_entries", defaultMaxIndexEntries)
 	p.maxIndexBytes = plugin.CfgInt(cfg, "max_index_bytes", defaultMaxIndexBytes)
@@ -486,6 +488,13 @@ func (p *Plugin) completeFunc() plugin.CompleteFunc {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.complete
+}
+
+// dayFactsFunc 返回「问某一天有什么可说的」的入口（可能为 nil）。
+func (p *Plugin) dayFactsFunc() plugin.DayFactsFunc {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.dayFacts
 }
 
 // sortByUpdatedDesc 按更新时间倒序，仅用于超预算时挑选保留哪些条目。

@@ -50,6 +50,8 @@ type observation struct {
 	cur     Report
 	curOK   bool
 	lastErr string
+	// days 是按日留档的天气概要（日期 → 概要），供别处回头问某一天（见 dayfacts.go）。
+	days map[string]DayInfo
 }
 
 // Plugin 是 weather 系统插件。
@@ -398,6 +400,9 @@ func (p *Plugin) refreshOne(ctx context.Context, client *http.Client, loc string
 	rep.Tomorrow = carryForecast(prev.Tomorrow, rep.Tomorrow, prevOK)
 	o.cur, o.curOK, o.lastErr = rep, true, ""
 	p.dataMu.Unlock()
+
+	// 按日留档：这次请求已经把昨天与今天的概要带回来了，存下来供日记回头问
+	p.recordDays(loc, rep)
 
 	// 前后两次观测对比出值得开口的转变（下起来/停了）时，投递一条开口理由；
 	// 明天的预报理由投出去后记在缓存上，刷新不重投

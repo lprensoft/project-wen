@@ -70,6 +70,12 @@ type dayBufFile struct {
 type timelineEntry struct {
 	Date    string `json:"date"`
 	Summary string `json:"summary"`
+	// Facts 是收束当时各插件给出的当日客观事实（天气这类，见 plugin.DayReporter），
+	// 渲染在正文之前，让这一行读起来像日记的抬头。
+	//
+	// 收束时取一次就存进来，不在注入时现问：日记是历史，那天的天气不该因为以后
+	// 关掉天气插件、或它的日历滚过去了就消失。老条目没有这个字段，照旧渲染。
+	Facts []string `json:"facts,omitempty"`
 }
 
 type timelineFile struct {
@@ -197,8 +203,9 @@ func (p *Plugin) runTimeline(s settings) {
 			}
 			summary := clipSummary(raw)
 			if summary != "" && !strings.EqualFold(summary, "SKIP") {
-				p.appendTimeline(dir, timelineEntry{Date: day.Date, Summary: summary})
-				log.Printf("时间线：%s | %s", day.Date, summary)
+				e := timelineEntry{Date: day.Date, Summary: summary, Facts: p.factsFor(day.Date)}
+				p.appendTimeline(dir, e)
+				log.Printf("时间线：%s | %s", day.Date, renderEntry(e))
 			}
 			p.dropDay(dir, day.Date)
 		}
@@ -289,9 +296,43 @@ func (p *Plugin) timelineBlock(ctx context.Context, s settings) string {
 	b.WriteString(timelineHeader)
 	for _, e := range all {
 		b.WriteString("\n- ")
-		b.WriteString(e.Date)
-		b.WriteString("：")
-		b.WriteString(e.Summary)
+		b.WriteString(renderEntry(e))
 	}
 	return b.String()
+}
+
+// renderEntry 把一行渲染成日记的样子：日期、星期几、当日事实、正文，逗号分隔。
+//
+//	2026-08-21 周五，天气：小雨 24~31℃，陪你聊了加班的事，答应炖排骨汤等你回来
+//
+// 星期几由日期算出来，不占存储：日记里「周五」比「2026-08-21」更能唤起那天是什么样。
+// 认不出的日期（不该出现，除非文件被外部改过）就只写日期本身。
+func renderEntry(e timelineEntry) string {
+	var b strings.Builder
+	b.WriteString(e.Date)
+	if t, err := time.ParseInLocation("2006-01-02", e.Date, time.Local); err == nil {
+		b.WriteString(" ")
+		b.WriteString(weekdayCN(t))
+	}
+	for _, f := range e.Facts {
+		b.WriteString("，")
+		b.WriteString(f)
+	}
+	b.WriteString("，")
+	b.WriteString(e.Summary)
+	return b.String()
+}
+
+var weekdayNames = [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+
+func weekdayCN(t time.Time) string { return weekdayNames[int(t.Weekday())] }
+
+// factsFor 问一遍各插件那一天有什么可说的。入口不可用（评测装配、插件单测）时
+// 返回 nil，日记照写，只是没有抬头那几句。
+func (p *Plugin) factsFor(date string) []string {
+	fn := p.dayFactsFunc()
+	if fn == nil {
+		return nil
+	}
+	return fn(date)
 }
