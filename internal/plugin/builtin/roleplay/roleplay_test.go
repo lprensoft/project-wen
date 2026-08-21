@@ -463,3 +463,28 @@ func TestStripBracketed(t *testing.T) {
 		}
 	}
 }
+
+// 边界记忆的两条配套：当场就存，想起来时对得上。它们随记忆约束一起开关，
+// 关掉时不该留下半截。
+func TestMemoryRulesCoverBoundaryMemories(t *testing.T) {
+	p := newTestPlugin(t, map[string]any{"memory_rules": true})
+	got := p.SystemPrompt()
+	for _, want := range []string{
+		"当场就存成「边界」类记忆",
+		"想起一条「边界」类记忆时",
+		"用同一个标题修订那条记忆",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("记忆约束缺少边界配套 %q", want)
+		}
+	}
+	// 依赖方向是 relationship 依赖 roleplay，反向引用它的块名会在它关掉时悬空
+	if strings.Contains(got, "[关系]") {
+		t.Error("roleplay 不应引用 relationship 的块名")
+	}
+
+	q := newTestPlugin(t, map[string]any{"memory_rules": false})
+	if strings.Contains(q.SystemPrompt(), "「边界」类记忆") {
+		t.Error("关掉记忆约束后不该留下边界配套")
+	}
+}
