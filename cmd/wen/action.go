@@ -26,7 +26,7 @@ func runAction(b backend, pluginName string, act plugin.ActionDef) error {
 	if err := b.startPluginAction(pluginName, act.Key); err != nil {
 		return err
 	}
-	note("▶ %s 已开始（Ctrl+C 只是退出查看，不会中断服务端流程）", act.Label)
+	note(trf("cli.action.started", "▶ %s 已开始（Ctrl+C 只是退出查看，不会中断服务端流程）", act.Label))
 
 	lastMsg, lastLink := "", ""
 	deadline := time.Now().Add(actionWaitMax)
@@ -45,7 +45,7 @@ func runAction(b backend, pluginName string, act plugin.ActionDef) error {
 			if st.Message != "" {
 				return errors.New(st.Message)
 			}
-			return errors.New("操作失败")
+			return errors.New(tr("cli.action.failed", "操作失败"))
 		}
 		if st.Message != "" && st.Message != lastMsg {
 			note("%s", st.Message)
@@ -55,13 +55,13 @@ func runAction(b backend, pluginName string, act plugin.ActionDef) error {
 			if qr, err := terminalQR(st.Link); err == nil {
 				fmt.Print(qr)
 			}
-			note("扫不出时可复制链接自行生成二维码：")
+			note(tr("cli.action.qrFallback", "扫不出时可复制链接自行生成二维码："))
 			note("%s", st.Link)
 			lastLink = st.Link
 		}
 		time.Sleep(actionPollInterval)
 	}
-	return errors.New("等待超时，流程可能仍在服务端进行，可稍后重新进入查看")
+	return errors.New(tr("cli.action.timeout", "等待超时，流程可能仍在服务端进行，可稍后重新进入查看"))
 }
 
 // terminalQR 把链接渲染成终端字符二维码（半块字符，两行并一行）。

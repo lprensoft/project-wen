@@ -132,6 +132,14 @@ const (
 type ConfigOption struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+	// Unavailable 标记这个候选当前用不了（如所指的通道尚未启用）。它仍然是个
+	// 合法取值——单选框的取值一旦不在候选里，整份配置就保存不了，那样临时关掉
+	// 一条通道会连带让这里的配置失效。
+	//
+	// 标记而不是让插件自己往 Label 后面缀一句「（未启用）」：那句话得跟着界面
+	// 语言变，而插件是进程级单实例、不知道是谁在看。缀字的动作因此挪到翻译
+	// 那一层（见 Localize），插件只说事实。
+	Unavailable bool `json:"unavailable,omitempty"`
 }
 
 // ConfigField 描述插件的一个可配置项，Web UI 据此生成表单。

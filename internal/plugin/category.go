@@ -30,3 +30,35 @@ func CategoryOf(p Plugin) string {
 	}
 	return CategoryOther
 }
+
+// 分组的稳定标识。分组名本身是中文，翻译之后就不能再拿它当分组的身份——
+// 界面按标识分组、按译名展示，否则英文界面下同一组会因为译名不同而裂成两组，
+// 前端那句 `p.category || "其他"` 的兜底也会凭空造出一个「Other」组。
+const (
+	CategoryKeyTools      = "tools"
+	CategoryKeyMemory     = "memory"
+	CategoryKeyPersona    = "persona"
+	CategoryKeyBackground = "background"
+	CategoryKeyChannel    = "channel"
+	CategoryKeyProgram    = "program"
+	CategoryKeyOther      = "other"
+)
+
+var categoryKeys = map[string]string{
+	CategoryTools:      CategoryKeyTools,
+	CategoryMemory:     CategoryKeyMemory,
+	CategoryPersona:    CategoryKeyPersona,
+	CategoryBackground: CategoryKeyBackground,
+	CategoryChannel:    CategoryKeyChannel,
+	CategoryProgram:    CategoryKeyProgram,
+	CategoryOther:      CategoryKeyOther,
+}
+
+// CategoryKeyOf 返回分组的稳定标识；外部插件自定的分组名没有标识，归「其他」
+// ——它的展示名仍是插件自己给的那个字，只是不参与翻译。
+func CategoryKeyOf(cat string) string {
+	if k, ok := categoryKeys[cat]; ok {
+		return k
+	}
+	return CategoryKeyOther
+}

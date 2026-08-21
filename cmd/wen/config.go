@@ -59,6 +59,14 @@ func runConfig(args []string) error {
 			if next == "quit" {
 				return nil
 			}
+			// 选完语言回到顶层菜单：下一次渲染取的就是新语言的字符串，
+			// 插件那一屏也会带着新语言重新向服务端要一次。
+			if next == "language" {
+				if err := languageMenu(); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+					return err
+				}
+				continue
+			}
 			section = next
 		}
 		var err error
@@ -91,13 +99,15 @@ func topMenu(b backend) (string, error) {
 	// 用「退出」当初值等于每次进来光标都压在退出上，第一项才是想选的那个。
 	choice := "plugins"
 	err := run(huh.NewSelect[string]().
-		Title("要配置什么？").
+		Title(tr("cli.top.title", "要配置什么？")).
 		Description(fitLines(b.mode())).
 		Options(
-			huh.NewOption("插件 —— 开关与参数", "plugins"),
-			huh.NewOption("模型 —— 提供商、密钥与当前模型", "models"),
-			huh.NewOption("访问控制 —— 远程访问口令", "server"),
-			huh.NewOption("退出", "quit"),
+			// 语言排第一项：它是「我看不懂这个界面」时的逃生口，逃生口不放在最后。
+			huh.NewOption(languageEntry(), "language"),
+			huh.NewOption(tr("cli.top.plugins", "插件 —— 开关与参数"), "plugins"),
+			huh.NewOption(tr("cli.top.models", "模型 —— 提供商、密钥与当前模型"), "models"),
+			huh.NewOption(tr("cli.top.server", "访问控制 —— 远程访问口令"), "server"),
+			huh.NewOption(tr("cli.top.quit", "退出"), "quit"),
 		).
 		Value(&choice))
 	if errors.Is(err, huh.ErrUserAborted) {

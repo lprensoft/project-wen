@@ -74,14 +74,14 @@ func wrapNames(names []string) string {
 func describeAuth(a authState) string {
 	switch {
 	case a.EnvManaged:
-		return "已设置口令（来自环境变量 WEN_AUTH_PASSWORD）"
+		return tr("cli.auth.env", "已设置口令（来自环境变量 WEN_AUTH_PASSWORD）")
 	case !a.HasPassword:
-		return "未设置口令，仅本机可访问"
+		return tr("cli.auth.none", "未设置口令，仅本机可访问")
 	case !a.TrustLoop:
-		return "已设置口令，所有来源（含本机）都需登录"
+		return tr("cli.auth.allLogin", "已设置口令，所有来源（含本机）都需登录")
 	case a.Exposed:
-		return "已设置口令，本机免登录、其它来源需登录"
+		return tr("cli.auth.loopFree", "已设置口令，本机免登录、其它来源需登录")
 	default:
-		return "已设置口令，但当前只监听本机，不会被外部访问"
+		return tr("cli.auth.localOnly", "已设置口令，但当前只监听本机，不会被外部访问")
 	}
 }

@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 
 	"wen/internal/agent"
+	"wen/internal/i18n"
 	"wen/internal/plugin"
 	"wen/internal/session"
 	"wen/internal/version"
@@ -171,9 +175,62 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// reqLang 判定这一次请求要用哪种语言展示插件元数据。
+//
+// 按请求判定而不是存在服务端：同一个服务可能同时连着一个中文浏览器和一个英文
+// 的 wen config，服务端记住「当前语言」就等于让后到的人改掉先到的人的界面。
+// 显式的 ?lang= 优先于 Accept-Language——前者是用户在界面上选的，后者只是
+// 浏览器的默认偏好，用户选了中文界面却装着英文浏览器是完全正常的组合。
+func reqLang(r *http.Request) string {
+	if v := r.URL.Query().Get("lang"); v != "" {
+		if i18n.Supported(v) {
+			return v
+		}
+	}
+	if h := r.Header.Get("Accept-Language"); h != "" {
+		if lang := i18n.Match(acceptLanguages(h)...); lang != "" {
+			return lang
+		}
+	}
+	return i18n.Default
+}
+
+// acceptLanguages 把 Accept-Language 拆成按 q 值排好的语言标识。
+// 只做到「按 q 降序」为止，不实现完整的 RFC 4647 匹配——这里要挑的是两三种
+// 语言里的一种，把标准实现全了也不会挑得更准。
+func acceptLanguages(h string) []string {
+	type item struct {
+		tag string
+		q   float64
+	}
+	var items []item
+	for _, part := range strings.Split(h, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		tag, q := part, 1.0
+		if i := strings.Index(part, ";"); i >= 0 {
+			tag = strings.TrimSpace(part[:i])
+			if v := strings.TrimSpace(part[i+1:]); strings.HasPrefix(v, "q=") {
+				if f, err := strconv.ParseFloat(v[2:], 64); err == nil {
+					q = f
+				}
+			}
+		}
+		items = append(items, item{tag, q})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].q > items[j].q })
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.tag)
+	}
+	return out
+}
+
 // listPlugins 返回全部插件状态。
-func (s *Server) listPlugins(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.plugins.List())
+func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, plugin.Localize(reqLang(r), s.plugins.List()))
 }
 
 // setPlugin 运行时启用/禁用插件。
@@ -189,7 +246,7 @@ func (s *Server) setPlugin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.plugins.List())
+	writeJSON(w, http.StatusOK, plugin.Localize(reqLang(r), s.plugins.List()))
 }
 
 // setPluginConfig 保存插件配置，保存成功后立即生效。
@@ -205,7 +262,7 @@ func (s *Server) setPluginConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.plugins.List())
+	writeJSON(w, http.StatusOK, plugin.Localize(reqLang(r), s.plugins.List()))
 }
 
 // startPluginAction 触发插件的一个操作入口（长流程在插件后台进行，本请求立即返回）。

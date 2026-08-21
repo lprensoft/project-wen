@@ -26,7 +26,7 @@ func pluginsSection(b backend) error {
 		}
 		opts := pluginOptions(list)
 		if err := run(huh.NewSelect[string]().
-			Title("插件").
+			Title(tr("cli.plugins.title", "插件")).
 			Description(fit(b.mode())).
 			Height(listHeight(len(opts), 2)). // chrome：标题 1 行 + 说明 1 行
 			Options(opts...).
@@ -58,7 +58,7 @@ func pluginOptions(list []plugin.Status) []huh.Option[string] {
 	for _, p := range list {
 		cat := p.Category
 		if cat == "" {
-			cat = "其他"
+			cat = tr(plugin.CategoryTextKey(plugin.CategoryKeyOther), plugin.CategoryOther)
 		}
 		if _, seen := byCat[cat]; !seen {
 			order = append(order, cat)
@@ -73,7 +73,7 @@ func pluginOptions(list []plugin.Status) []huh.Option[string] {
 		nameW = max(nameW, runewidth.StringWidth(p.Name))
 	}
 	for _, cat := range order {
-		catW = max(catW, runewidth.StringWidth("【"+cat+"】"))
+		catW = max(catW, runewidth.StringWidth(groupLabel(cat)))
 	}
 
 	opts := make([]huh.Option[string], 0, len(list)+1)
@@ -85,17 +85,17 @@ func pluginOptions(list []plugin.Status) []huh.Option[string] {
 			}
 			group := ""
 			if i == 0 {
-				group = "【" + cat + "】"
+				group = groupLabel(cat)
 			}
 			desc := p.Description
 			if len(p.Unmet) > 0 {
-				desc = "（需先启用 " + strings.Join(p.Unmet, "、") + "）" + desc
+				desc = trf("cli.plugins.unmet", "（需先启用 %s）", joinList(p.Unmet)) + desc
 			}
 			label := fmt.Sprintf("%s %s %s  %s", pad(group, catW), mark, pad(p.Name, nameW), desc)
 			opts = append(opts, huh.NewOption(fit(label), p.Name))
 		}
 	}
-	return append(opts, huh.NewOption("← 返回", back))
+	return append(opts, huh.NewOption(tr("cli.back", "← 返回"), back))
 }
 
 // editPlugin 展示单个插件的开关、参数表单与操作入口。
@@ -108,7 +108,7 @@ func editPlugin(b backend, st plugin.Status) error {
 		// 用不会与操作 key 撞车的取值（key 按约定是小写字母开头）
 		const cfgChoice = "*config"
 		choice := cfgChoice
-		opts := []huh.Option[string]{huh.NewOption("修改开关与配置", cfgChoice)}
+		opts := []huh.Option[string]{huh.NewOption(tr("cli.plugins.edit", "修改开关与配置"), cfgChoice)}
 		for _, a := range st.Actions {
 			label := "▶ " + a.Label
 			if a.Description != "" {
@@ -116,7 +116,7 @@ func editPlugin(b backend, st plugin.Status) error {
 			}
 			opts = append(opts, huh.NewOption(fit(label), a.Key))
 		}
-		opts = append(opts, huh.NewOption("← 返回", back))
+		opts = append(opts, huh.NewOption(tr("cli.back", "← 返回"), back))
 		if err := run(huh.NewSelect[string]().
 			Title(st.Name).
 			Description(fit(st.Description)).
@@ -142,9 +142,9 @@ func editPlugin(b backend, st plugin.Status) error {
 	enabled := st.Enabled
 	fields := []huh.Field{
 		huh.NewConfirm().
-			Title("启用 " + st.Name).
+			Title(trf("cli.plugins.enableTitle", "启用 %s", st.Name)).
 			Description(pluginHint(st)).
-			Affirmative("启用").Negative("停用").
+			Affirmative(tr("cli.plugins.enable", "启用")).Negative(tr("cli.plugins.disable", "停用")).
 			Value(&enabled),
 	}
 
@@ -166,15 +166,19 @@ func editPlugin(b backend, st plugin.Status) error {
 			cfg[bd.f.Key] = bd.value()
 		}
 		if err := b.setPluginConfig(st.Name, cfg); err != nil {
-			return fmt.Errorf("保存 %s 的配置失败: %w", st.Name, err)
+			return fmt.Errorf(trf("cli.plugins.saveFailed", "保存 %s 的配置失败", st.Name)+": %w", err)
 		}
-		note("✓ %s 的配置已保存", st.Name)
+		note(trf("cli.plugins.saved", "✓ %s 的配置已保存", st.Name))
 	}
 	if enabled != st.Enabled {
 		if err := b.setPluginEnabled(st.Name, enabled); err != nil {
 			return err
 		}
-		note("✓ %s 已%s", st.Name, map[bool]string{true: "启用", false: "停用"}[enabled])
+		if enabled {
+			note(trf("cli.plugins.enabled", "✓ %s 已启用", st.Name))
+		} else {
+			note(trf("cli.plugins.disabled", "✓ %s 已停用", st.Name))
+		}
 	}
 	return nil
 }
@@ -184,10 +188,10 @@ func pluginHint(st plugin.Status) string {
 	var parts []string
 	parts = append(parts, st.Description)
 	if len(st.Requires) > 0 {
-		parts = append(parts, "依赖："+strings.Join(st.Requires, "、"))
+		parts = append(parts, trf("cli.plugins.requires", "依赖：%s", joinList(st.Requires)))
 	}
 	if len(st.Conflicting) > 0 {
-		parts = append(parts, "与已启用的 "+strings.Join(st.Conflicting, "、")+" 冲突（仅提示，不阻止）")
+		parts = append(parts, trf("cli.plugins.conflicts", "与已启用的 %s 冲突（仅提示，不阻止）", joinList(st.Conflicting)))
 	}
 	return strings.Join(parts, "\n")
 }
@@ -238,13 +242,13 @@ func (bd *binding) field() huh.Field {
 	}
 	desc := f.Description
 	if f.Min != nil || f.Max != nil {
-		desc = strings.TrimSpace(desc + fmt.Sprintf("\n范围 %s ~ %s", limit(f.Min), limit(f.Max)))
+		desc = strings.TrimSpace(desc + "\n" + trf("cli.field.range", "范围 %s ~ %s", limit(f.Min), limit(f.Max)))
 	}
 
 	switch f.Type {
 	case plugin.FieldBool:
 		return huh.NewConfirm().Title(title).Description(desc).
-			Affirmative("开").Negative("关").Value(&bd.b)
+			Affirmative(tr("cli.on", "开")).Negative(tr("cli.off", "关")).Value(&bd.b)
 	case plugin.FieldSelect:
 		opts := make([]huh.Option[string], 0, len(f.Options))
 		for _, o := range f.Options {
@@ -262,7 +266,7 @@ func (bd *binding) field() huh.Field {
 					return nil
 				}
 				if _, err := strconv.Atoi(strings.TrimSpace(s)); err != nil {
-					return errors.New("请输入整数")
+					return errors.New(tr("cli.field.needInt", "请输入整数"))
 				}
 				return nil
 			})
@@ -283,7 +287,7 @@ func (bd *binding) value() any {
 
 func limit(p *int) string {
 	if p == nil {
-		return "不限"
+		return tr("cli.field.unlimited", "不限")
 	}
 	return strconv.Itoa(*p)
 }

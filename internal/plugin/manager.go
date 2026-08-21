@@ -35,7 +35,8 @@ type Status struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Source      string   `json:"source"`
-	Category    string   `json:"category"` // 功能分组（设置页分节展示用）
+	Category    string   `json:"category"`     // 功能分组的展示名（会随界面语言变）
+	CategoryKey string   `json:"category_key"` // 功能分组的稳定标识（界面按它分组）
 	Enabled     bool     `json:"enabled"`
 	ToolNames   []string `json:"tool_names"`
 	HasPrompt   bool     `json:"has_prompt"`
@@ -485,6 +486,7 @@ func (m *Manager) List() []Status {
 		safely(sn.name, "汇报插件状态", func() {
 			st.Description = sn.plugin.Description()
 			st.Category = CategoryOf(sn.plugin)
+			st.CategoryKey = CategoryKeyOf(st.Category)
 			for _, t := range sn.plugin.Tools() {
 				st.ToolNames = append(st.ToolNames, t.Name())
 			}
