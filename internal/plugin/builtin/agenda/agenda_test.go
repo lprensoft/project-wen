@@ -243,7 +243,11 @@ const planArgs = `{"items":[
 func TestSetPlan(t *testing.T) {
 	h := newHarness(t, false, nil)
 	out := h.call(t, "set_day_plan", planArgs)
-	want := "今天（周五）的安排已定，共 3 项：\na1 07:00-07:40 晨跑（可挪）\na2 14:00-16:30 和林舟在图书馆查资料（尽量守）\na3 18:30-20:00 和对方吃晚饭（不能动）"
+	// 回执末尾那句终结语不是装饰：只给一份状态清单时，模型会把它读成进展汇报，
+	// 接着微调重排（真实事故里连提了十三次）。
+	want := "今天（周五）的安排已定，共 3 项：\na1 07:00-07:40 晨跑（可挪）\n" +
+		"a2 14:00-16:30 和林舟在图书馆查资料（尽量守）\na3 18:30-20:00 和对方吃晚饭（不能动）\n" +
+		"表已排定，这一轮到此为止：不要再次提交，也不必再调用别的工具。"
 	if out != want {
 		t.Fatalf("回执不符：\n%s", out)
 	}
@@ -269,6 +273,47 @@ func TestSetPlanRejects(t *testing.T) {
 	err = h2.fail(t, "set_day_plan", `{"items":[{"title":"x","start":"10:00","end":"11:00","with":["小周"],"flex":"可挪"}]}`)
 	if !strings.Contains(err.Error(), "没有叫「小周」的人物") || !strings.Contains(err.Error(), "林舟、母亲、老陈") {
 		t.Fatalf("人物校验应列候选: %v", err)
+	}
+}
+
+// 规划轮次里第二次提交要被挡回去：那句「排好后用 set_day_plan 提交」每次迭代都会被
+// 重新读到，模型会一版一版微调着重提交（真实事故里连提十三次）。
+func TestSetPlanRejectsResubmitWithinPlanningTurn(t *testing.T) {
+	h := newHarness(t, false, nil)
+	h.p.mu.Lock()
+	h.p.planning[""] = true // 模拟规划轮次进行中
+	h.p.mu.Unlock()
+
+	h.call(t, "set_day_plan", planArgs) // 第一次正常受理
+	err := h.fail(t, "set_day_plan", planArgs)
+	if !strings.Contains(err.Error(), "本轮不要再提交") {
+		t.Fatalf("重复提交应被挡回: %v", err)
+	}
+
+	// 规划轮次之外（对话里说「重排一下今天」）仍然允许重排
+	h.p.mu.Lock()
+	delete(h.p.planning, "")
+	h.p.mu.Unlock()
+	h.call(t, "set_day_plan", planArgs)
+}
+
+// 字段缺了和填错了要分开说：都报「只能是……」的话，模型会去改一个本来就没写的字段。
+func TestSetPlanDistinguishesMissingFromInvalid(t *testing.T) {
+	h := newHarness(t, false, nil)
+	err := h.fail(t, "set_day_plan", `{"items":[{"title":"x","start":"10:00","end":"11:00"}]}`)
+	if !strings.Contains(err.Error(), "缺少 flex") {
+		t.Fatalf("缺字段应说「缺少」: %v", err)
+	}
+	err = h.fail(t, "set_day_plan", `{"items":[{"title":"x","start":"10:00","end":"11:00","flex":"随便"}]}`)
+	if !strings.Contains(err.Error(), "的 flex 只能是") {
+		t.Fatalf("填错值应说「只能是」: %v", err)
+	}
+	// 把一件事拆成两个对象是模型偶发的错法，报错要点出这一点
+	err = h.fail(t, "set_day_plan", `{"items":[
+	 {"title":"x","start":"10:00","end":"11:00"},
+	 {"place":"家里","flex":"可挪","busy":"轻忙"}]}`)
+	if !strings.Contains(err.Error(), "不要拆成两段") {
+		t.Fatalf("拆项应点出成因: %v", err)
 	}
 }
 
