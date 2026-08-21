@@ -50,8 +50,8 @@ func TestSystemPrefixIsIdenticalAcrossTurns(t *testing.T) {
 			t.Errorf("易变内容不该在 system 里: %q", unwanted)
 		}
 	}
-	// 固定的插件片段与用户配置提示词仍在 system 里
-	for _, want := range []string{"[系统环境]", "[角色设定]", "用户配置"} {
+	// 固定的插件片段与用户配置提示词仍在 system 里；工具约定同样是整轮不变的一段
+	for _, want := range []string{"[系统环境]", "[工具与回复]", "[角色设定]", "用户配置"} {
 		if !strings.Contains(first.Content, want) {
 			t.Errorf("system 缺少 %q:\n%s", want, first.Content)
 		}

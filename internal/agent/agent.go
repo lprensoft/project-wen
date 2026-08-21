@@ -232,7 +232,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	// 一处改动解决两件事：模型判断「现在」时不必跨几千 token 主动比对，
 	// 且 system 与历史成为整轮之间字节一致的前缀，提示词缓存才可能命中。
 	msgs := make([]llm.Message, 0, len(history)+2)
-	parts := []string{envContext(opts.Workdir)}
+	parts := []string{envContext(opts.Workdir), toolRules}
 	parts = append(parts, a.plugins.SystemPrompts()...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)
@@ -264,6 +264,7 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	msgs = append(msgs, wireUser)
 	pinned = append(pinned, false)
 
+	var guard toolGuard
 	for turn := 0; turn < opts.MaxTurns; turn++ {
 		r, err := a.stream(ctx, provider, opts, msgs, pinned, emit)
 		if err != nil {
@@ -341,7 +342,13 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 
 		for _, call := range r.toolCalls {
 			emit(Event{Type: EventToolStart, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
-			result := a.execute(ctx, call)
+			// 护栏先看一眼：重复的调用不执行，把「已经做完了」当场告诉模型
+			result := guard.check(call)
+			if result == "" {
+				result = a.execute(ctx, call)
+			} else {
+				log.Printf("agent: 拦下重复的工具调用 %s（本轮第 %d 次拦截）", call.Name, guard.hits)
+			}
 			emit(Event{Type: EventToolResult, ToolCallID: call.ID, ToolName: call.Name, ToolResult: result})
 
 			toolMsg := llm.Message{Role: llm.RoleTool, Content: result, ToolCallID: call.ID}
@@ -350,6 +357,14 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 			}
 			msgs = append(msgs, toolMsg)
 			pinned = append(pinned, false)
+		}
+
+		// 护栏拦了几次仍不收尾：这一轮不会再有进展，结束它。走的是失败路径而不是
+		// 「就地收尾」——前台由 FailureTranslator 演成一句走神，后台的发起方（心跳、
+		// 日程）据此记一次失败并按自己的节奏重来，两边都比返回一句空话强。
+		if guard.exhausted() {
+			log.Printf("agent: 会话 %s 的轮次因工具反复调用被中止", sessionID)
+			return "", errToolLoop
 		}
 	}
 	return "", fmt.Errorf("reached max_turns (%d) without a final answer", opts.MaxTurns)

@@ -59,6 +59,13 @@ type Plugin struct {
 	wake      chan struct{}
 	startedAt time.Time
 	planning  map[string]bool // 域 → 规划轮次进行中
+	// planSubmitted 域 → 本次规划轮次里已经提交过表。
+	//
+	// 它挡的是一种真实的绕圈：规划提示词是一次性输入，却在工具循环的每一次迭代里
+	// 都被重新读到，于是「去排一张表」这条祈使句永远不会变成「已经做完」；模型每收到
+	// 一次成功回执就微调一版再提交，实测连提十三次。有了这个标记，第二次提交当场被
+	// 挡回去并告诉它已经排好了。只在规划轮次内有效——对话里说「重排一下今天」是正当的。
+	planSubmitted map[string]bool
 
 	// 可注入的时钟与节奏，测试用；生产取默认值。
 	now          func() time.Time
@@ -87,6 +94,7 @@ func New(lookup people.Lookup) *Plugin {
 		busyRetry:       defaultBusyRetry,
 		startupGrace:    defaultStartupGrace,
 		planning:        map[string]bool{},
+		planSubmitted:   map[string]bool{},
 	}
 }
 
@@ -177,6 +185,7 @@ func (p *Plugin) Init(ictx plugin.InitContext, cfg map[string]any) error {
 	p.notice = ictx.Notice
 	p.sessions = ictx.Sessions
 	p.planning = map[string]bool{}
+	p.planSubmitted = map[string]bool{}
 	p.startedAt = p.now()
 
 	// 忙碌状态不落盘，权威在表里：重启后从「进行中且还没到点」的项重建

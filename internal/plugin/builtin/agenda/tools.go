@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wen/internal/cue"
+	"wen/internal/plugin"
 )
 
 // errNotReady 在插件未取得持久化目录时返回，正常流程下不会出现。
@@ -100,7 +101,10 @@ func (p *Plugin) buildItem(ctx context.Context, a planItemArg) (Item, error) {
 	it := Item{Title: squash(a.Title), Place: squash(a.Place), WithUser: a.WithUser,
 		Flex: strings.TrimSpace(a.Flex), Busy: strings.TrimSpace(a.Busy), FromCommitment: strings.TrimSpace(a.FromCommitment)}
 	if it.Title == "" {
-		return it, fmt.Errorf("title 不能为空")
+		// 提一句最常见的成因：模型偶尔会把一件事拆成两个对象（前一半带 title 与时间，
+		// 后一半只剩 place / flex / busy），报「title 不能为空」的话它多半去改别的地方
+		return it, fmt.Errorf("有一项没有 title：每件事是一个完整的对象，" +
+			"title、start、end、flex 要写在同一个对象里，不要拆成两段")
 	}
 	if err := checkRunes(it.Title, "title", maxTitleRunes); err != nil {
 		return it, err
@@ -121,16 +125,26 @@ func (p *Plugin) buildItem(ctx context.Context, a planItemArg) (Item, error) {
 	if it.WithUser {
 		it.Flex = flexFixed // 与对方的约定一律不能动
 	}
+	// 「缺了」与「填错了」分开说：都报「只能是……」的话，缺字段的那次会被读成
+	// 「填的值不对」，模型于是去改一个本来就没写的字段，白绕两圈
 	if !validFlex(it.Flex) {
-		return it, fmt.Errorf("「%s」的 flex 只能是：%s", it.Title, strings.Join(flexLevels, " / "))
+		return it, fmt.Errorf("「%s」%s：%s", it.Title, missingOrBad(it.Flex, "flex"), strings.Join(flexLevels, " / "))
 	}
 	if it.Busy == "" {
 		it.Busy = defaultBusy
 	}
 	if !validBusy(it.Busy) {
-		return it, fmt.Errorf("「%s」的 busy 只能是：%s", it.Title, strings.Join(busyLevels, " / "))
+		return it, fmt.Errorf("「%s」%s：%s", it.Title, missingOrBad(it.Busy, "busy"), strings.Join(busyLevels, " / "))
 	}
 	return it, nil
+}
+
+// missingOrBad 按字段是空还是填错，给出前半句。
+func missingOrBad(value, field string) string {
+	if strings.TrimSpace(value) == "" {
+		return "缺少 " + field + "，只能是"
+	}
+	return "的 " + field + " 只能是"
 }
 
 // overlapNotes 找出时间重叠的项。有重叠不拒绝，只告知——到时候模型自己取舍。
@@ -163,6 +177,17 @@ func (t *setPlanTool) Execute(ctx context.Context, args json.RawMessage) (string
 	if st == nil {
 		return "", errNotReady
 	}
+	// 规划轮次里已经提交过就不再受理：那句「排好后用 set_day_plan 提交」是一次性输入，
+	// 却在工具循环的每次迭代里被重新读到，于是模型一版一版地微调着重提交
+	//（实测连提十三次，见 planSubmitted 的说明）。
+	tag := plugin.ScopeFrom(ctx).Write
+	p.mu.RLock()
+	resubmit := p.planning[tag] && p.planSubmitted[tag]
+	p.mu.RUnlock()
+	if resubmit {
+		return "", fmt.Errorf("今天的表刚刚已经排好了（见上一条结果），本轮不要再提交。" +
+			"要改其中某一项用 update_day_plan；没有要改的就直接结束这一轮")
+	}
 	if len(a.Items) > s.maxItems {
 		return "", fmt.Errorf("一天最多排 %d 项（现在 %d 项），精简后重试；提示词要求的是 2-4 件事，留大段空白", s.maxItems, len(a.Items))
 	}
@@ -178,6 +203,15 @@ func (t *setPlanTool) Execute(ctx context.Context, args json.RawMessage) (string
 	for _, c := range cs {
 		if c.Date == today {
 			todayCs[c.ID] = c
+		}
+	}
+
+	// 先整体扫一眼有没有缺 title 的对象。逐项校验会先在前一项上报出「缺少 flex」，
+	// 而那正是拆项的后遗症——真正的毛病在下一个对象上，先说这一条模型才改得对。
+	for _, arg := range a.Items {
+		if strings.TrimSpace(arg.Title) == "" {
+			return "", fmt.Errorf("有一项没有 title：每件事是一个完整的对象，" +
+				"title、start、end、flex 要写在同一个对象里，不要拆成两段")
 		}
 	}
 
@@ -260,10 +294,13 @@ func (t *setPlanTool) Execute(ctx context.Context, args json.RawMessage) (string
 		})
 	}
 	p.wakeup()
+	p.mu.Lock()
+	p.planSubmitted[tag] = true
+	p.mu.Unlock()
 	log.Printf("agenda: 今天（%s）的表已排定，%d 项", today, len(pl.Items))
 
 	if len(pl.Items) == 0 {
-		return "今天没有安排，整天空着。", nil
+		return "今天没有安排，整天空着。表已排定，这一轮到此为止，不要再次提交。", nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "今天（%s）的安排已定，共 %d 项：\n", pl.Weekday, len(pl.Items))
@@ -273,6 +310,9 @@ func (t *setPlanTool) Execute(ctx context.Context, args json.RawMessage) (string
 	for _, n := range overlapNotes(pl.Items, day, s.dayStartHour) {
 		b.WriteString(n + "\n")
 	}
+	// 终结语。只回一份状态清单的话，模型会把它读成进展汇报，接着微调重排——
+	// 成功的回执要自己说清「做完了」。
+	b.WriteString("表已排定，这一轮到此为止：不要再次提交，也不必再调用别的工具。\n")
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 

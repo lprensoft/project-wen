@@ -61,8 +61,12 @@ func (p *Plugin) runPlan(ctx context.Context, tag, sid, today string) {
 	defer func() {
 		p.mu.Lock()
 		delete(p.planning, tag)
+		delete(p.planSubmitted, tag)
 		p.mu.Unlock()
 	}()
+	p.mu.Lock()
+	delete(p.planSubmitted, tag) // 本次规划从「还没提交过」开始
+	p.mu.Unlock()
 	select {
 	case <-time.After(p.planSettle):
 	case <-ctx.Done():

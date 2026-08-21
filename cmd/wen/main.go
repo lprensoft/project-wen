@@ -168,10 +168,14 @@ func runServe(args []string) {
 	case restartReason = <-restartCh:
 		log.Printf("%s：正在关闭当前实例…", restartReason)
 	}
+	// 先停插件、再关 HTTP：反过来的话，插件的后台轮次要等 HTTP 那边最多 5 秒的
+	// 等待走完才被取消，于是「收到退出信号」之后还会有工具调用继续落盘——实际见过。
+	// 这个顺序下正在处理的 HTTP 请求仍有 5 秒收尾时间，只是它们依赖的插件已经停了，
+	// 而那正是退出时想要的：不再开始新的后台工作。
+	plugins.StopAll()
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutCtx)
-	plugins.StopAll()
 
 	if restartReason != "" {
 		// 交棒之前必须先松开这两样：端口（Windows 上新进程要重新 bind 它）与
