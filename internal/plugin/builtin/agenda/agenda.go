@@ -231,6 +231,9 @@ func (p *Plugin) Tools() []plugin.Tool {
 		&addCommitmentTool{p: p},
 		&cancelCommitmentTool{p: p},
 		&listCommitmentsTool{p: p},
+		&addPromiseTool{p: p},
+		&settlePromiseTool{p: p},
+		&listPromisesTool{p: p},
 	}
 }
 

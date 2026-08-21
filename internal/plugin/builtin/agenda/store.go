@@ -2,7 +2,8 @@
 // 两到四件事的表，到点去做、做完回来带着一句经历，遇到变故会改、会挪、会跟对方商量；
 // 表里的「和谁」来自人物库里有名有姓的人。
 //
-// 它与相邻插件的分工：scheduler 管对对方的提醒与承诺，这里管角色自己要去做的事；
+// 它与相邻插件的分工：scheduler 管「到点自动跑一轮」的提醒机制，这里管状态记录——
+// 一天的表、定在某天某时的约定，以及答应下来但没有时刻的事（那份台账见 Promise）；
 // presence 记此刻在哪、在做什么的定格，这里给出的是一天的粗粒度安排，活动开始与结束
 // 的轮次里由模型顺手更新现场；memory 按时间线记过去，这里只记今天与将来——结束轮次
 // 写下的经历以助手消息落进会话，时间线自然收进去，本插件不另写记忆。
@@ -33,6 +34,26 @@ const (
 	maxWith         = 4
 	hardMaxItems    = 6 // 项数的硬上限，配置项 max_items 不能超过它
 	maxCommitments  = 50
+	maxPromises     = 50
+	maxPromiseShown = 6 // 每轮注入的「答应过的事」条数上限，超出压成条数
+	// promiseGraceDays 是到期日过后仍然注入的天数。到期当天不算数：对方可能晚上才
+	// 兑现。给一天宽限，之后自动转为没做成并停止注入——一条永远挂着的待办，
+	// 就是换了个载体的同一种病。
+	promiseGraceDays = 1
+)
+
+// 答应过的事的状态。dropped 是「不作数了」：说好的事被双方取消，与没做成不同。
+const (
+	promisePending = "pending"
+	promiseDone    = "done"
+	promiseMissed  = "missed"
+	promiseDropped = "dropped"
+)
+
+// 谁答应的。两个方向都要记，且必须分得开——混在一起模型会去催对方做它自己答应的事。
+const (
+	promiseBySelf = "self"
+	promiseByUser = "user"
 )
 
 // 项的状态。
@@ -116,6 +137,36 @@ func (pl *Plan) item(id string) *Item {
 	return nil
 }
 
+// Promise 是一条答应过的事：没有时刻，只有一个到期日与兑现状态。
+//
+// 它与 Commitment 的区别不是粗细，是形状：约定「明天下午三点见面」占时间、要排进表、
+// 会提前提醒、做的时候人不在；而「明天给你带两个菜」不占时间、不排表、不该提醒，
+// 它只需要被记住，然后在某一天被了结。硬塞进 Commitment 得给那三条路径各加一个分支。
+//
+// 存在的理由是这类话此前无处可去：不是记忆（单次安排按约定归日程）、不是约定（没时刻）、
+// 也不是当天表上的项，于是只以对话文本的形式活着——而对话文本既没有时间锚，也没有
+// 完成状态，于是每晚被重说一遍，措辞永远是「明天」。
+type Promise struct {
+	ID      string    `json:"id"`
+	Date    string    `json:"date"` // 到期日 YYYY-MM-DD：答应「明天」时就是那天
+	Title   string    `json:"title"`
+	By      string    `json:"by"` // self（角色答应的）/ user（对方答应的）
+	Note    string    `json:"note,omitempty"`
+	Status  string    `json:"status"`
+	Outcome string    `json:"outcome,omitempty"` // 了结时的一句话
+	Created time.Time `json:"created"`
+	Settled time.Time `json:"settled,omitempty"`
+}
+
+// settled 报告这条是否已经了结。
+func (pr *Promise) settled() bool { return pr.Status != promisePending }
+
+// promisesFile 是台账文件的形状，取号规则与约定相同（见 commitmentsFile）。
+type promisesFile struct {
+	NextID int       `json:"next_id"`
+	Items  []Promise `json:"items"`
+}
+
 // Commitment 是一条未来约定：定在某天某时的事。
 type Commitment struct {
 	ID       string    `json:"id"`
@@ -152,6 +203,7 @@ func NewStore(dir string) *Store { return &Store{dir: dir} }
 
 func (s *Store) planPath() string        { return filepath.Join(s.dir, "plan.json") }
 func (s *Store) commitmentsPath() string { return filepath.Join(s.dir, "commitments.json") }
+func (s *Store) promisesPath() string    { return filepath.Join(s.dir, "promises.json") }
 
 // LoadPlan 返回当前的表；文件不存在时返回零值（Date 为空）。
 func (s *Store) LoadPlan() (Plan, error) {
@@ -263,6 +315,64 @@ func (s *Store) UpdateCommitments(mutate func(cs *[]Commitment, next func() stri
 		f.Items = []Commitment{}
 	}
 	return f.Items, s.writeJSON(s.commitmentsPath(), f)
+}
+
+// LoadPromises 返回全部答应过的事，按记录顺序。
+func (s *Store) LoadPromises() ([]Promise, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.loadPromises()
+	return f.Items, err
+}
+
+func (s *Store) loadPromises() (promisesFile, error) {
+	var f promisesFile
+	raw, err := os.ReadFile(s.promisesPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return f, nil
+		}
+		return f, fmt.Errorf("读取答应过的事失败: %w", err)
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return f, fmt.Errorf("答应过的事文件损坏: %w", err)
+	}
+	return f, nil
+}
+
+// UpdatePromises 在锁内读-改-写台账。mutate 可经 next 取一个新 id。
+func (s *Store) UpdatePromises(mutate func(ps *[]Promise, next func() string) (bool, error)) ([]Promise, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.loadPromises()
+	if err != nil {
+		return nil, err
+	}
+	if f.NextID <= 0 {
+		f.NextID = 1
+		for _, pr := range f.Items { // 兼容手写的文件：从现存最大号往后取
+			var n int
+			if _, err := fmt.Sscanf(pr.ID, "p%d", &n); err == nil && n >= f.NextID {
+				f.NextID = n + 1
+			}
+		}
+	}
+	next := func() string {
+		id := fmt.Sprintf("p%d", f.NextID)
+		f.NextID++
+		return id
+	}
+	changed, err := mutate(&f.Items, next)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return f.Items, nil
+	}
+	if f.Items == nil {
+		f.Items = []Promise{}
+	}
+	return f.Items, s.writeJSON(s.promisesPath(), f)
 }
 
 // writeJSON 原子写回（tmp + rename），权限 0600：日程属于对话内容的一部分。
@@ -397,6 +507,53 @@ func sortCommitments(cs []Commitment) {
 		}
 		return cs[i].Start < cs[j].Start
 	})
+}
+
+// sortPromises 按到期日排，同一天按记录顺序（SliceStable）。
+func sortPromises(ps []Promise) {
+	sort.SliceStable(ps, func(i, j int) bool { return ps[i].Date < ps[j].Date })
+}
+
+// countPending 数还没了结的条数。上限只卡未了结的：已了结的留着供 list_promises
+// 回头查，不该因为历史攒多了就拒绝记新的。
+func countPending(ps []Promise) int {
+	n := 0
+	for i := range ps {
+		if !ps[i].settled() {
+			n++
+		}
+	}
+	return n
+}
+
+// promiseByCN 把方向写成人话。两个方向必须在字面上分得开——
+// 混在一起模型会去催对方做它自己答应的事。
+func promiseByCN(by string) string {
+	if by == promiseByUser {
+		return "对方答应："
+	}
+	return "你答应："
+}
+
+// promiseByShort 只给称呼，用在句子里。
+func promiseByShort(by string) string {
+	if by == promiseByUser {
+		return "对方"
+	}
+	return "你"
+}
+
+// promiseResultCN 把了结方式写成人话。
+func promiseResultCN(result string) string {
+	switch result {
+	case promiseDone:
+		return "做到了"
+	case promiseMissed:
+		return "没做成"
+	case promiseDropped:
+		return "不作数了"
+	}
+	return result
 }
 
 // fmtDateCN 把 YYYY-MM-DD 写成「8 月 23 日（周日）」。

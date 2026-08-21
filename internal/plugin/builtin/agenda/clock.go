@@ -170,9 +170,57 @@ func (p *Plugin) tick(ctx context.Context) {
 			log.Printf("agenda: 扫表失败: %v", err)
 		}
 	}
+	p.sweepPromises(ctx, day)
+
 	for _, d := range dues {
 		p.wg.Add(1)
 		go p.runActivity(ctx, d, now)
+	}
+}
+
+// sweepPromises 把过了宽限期还没了结的事标成「没做成」，并为每条留一行注记。
+//
+// 不这么做的话，台账里会攒下一批永远 pending 的条目：注入侧已经按日期把它们滤掉了，
+// 于是模型再也看不见，而它们仍然占着条数上限、也仍然出现在 list_promises 里，
+// 表现成「明明了结过却还挂着」。收束改的是状态，因此天然幂等——扫过一遍之后
+// 它们不再是 pending，下一拍什么都不会发生，不需要另外记「上次扫到哪天」。
+//
+// 注记而不是开口理由：这是给人看的一笔账，不该变成角色主动找上来说的话。
+func (p *Plugin) sweepPromises(ctx context.Context, day time.Time) {
+	cutoff := day.AddDate(0, 0, -promiseGraceDays).Format(dateLayout)
+	now := p.now()
+	var missed []Promise
+	for _, tag := range p.allDomains() {
+		if _, err := p.storeFor(tag).UpdatePromises(func(ps *[]Promise, _ func() string) (bool, error) {
+			changed := false
+			for i := range *ps {
+				pr := &(*ps)[i]
+				if pr.settled() || pr.Date >= cutoff {
+					continue
+				}
+				pr.Status, pr.Settled = promiseMissed, now
+				missed = append(missed, *pr)
+				changed = true
+			}
+			return changed, nil
+		}); err != nil {
+			log.Printf("agenda: 收束答应过的事失败: %v", err)
+		}
+	}
+	if len(missed) == 0 {
+		return
+	}
+	s := p.snapshot()
+	if s.sessions == nil {
+		return
+	}
+	sid, _, err := s.sessions.LastActive()
+	if err != nil || sid == "" {
+		return
+	}
+	for _, pr := range missed {
+		p.postNotice(ctx, sid, fmt.Sprintf("%s答应的「%s」（%s）到期没有了结，已记为没做成。",
+			promiseByShort(pr.By), pr.Title, fmtDateCN(pr.Date, now.Location())))
 	}
 }
 
