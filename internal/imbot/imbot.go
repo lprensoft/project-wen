@@ -189,8 +189,21 @@ func (c *Core) UsersFor(sessionID string) []string { return c.binding.UsersFor(s
 
 // SessionFor 返回该用户的当前会话，没有（或已被删除）时新建并落映射。
 func (c *Core) SessionFor(userID string) (string, error) {
+	// 装了分通道路由时，组内共用一个当前会话，本通道的绑定与它不一致就加入它。
+	// 不这么做的话，你在另一条通道上打的字会落进那条通道自己的会话，两个人格就此
+	// 分家，而回表时的自动接管又会把人从原会话拖走（见 group.go）。
+	if sid := groupAnchor(); sid != "" && c.cfg.Sessions.Exists(sid) {
+		if c.binding.Get(userID) != sid {
+			if err := c.binding.Set(userID, sid); err != nil {
+				return "", err
+			}
+			log.Printf("%s: 用户 %s 加入分通道的当前会话 %s", c.cfg.PluginName, userID, sid)
+		}
+		return sid, nil
+	}
 	if sid := c.binding.Get(userID); sid != "" {
 		if c.cfg.Sessions.Exists(sid) {
+			setGroupAnchor(sid)
 			return sid, nil
 		}
 		// 会话文件已被删除，重建
@@ -199,7 +212,11 @@ func (c *Core) SessionFor(userID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return sid, c.binding.Set(userID, sid)
+	if err := c.binding.Set(userID, sid); err != nil {
+		return "", err
+	}
+	setGroupAnchor(sid)
+	return sid, nil
 }
 
 // Handle 是入站消息的分发层：去重 → 准入 → /apply /deny 直投确认代理 → 其余进队列。

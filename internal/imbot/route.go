@@ -89,9 +89,12 @@ func IsChannel(name string) bool {
 }
 
 // SetRouter 安装路由，传 nil 清除。单所有者：后装的覆盖先装的。
+//
+// 一并清掉组内会话锚（见 group.go）：装卸路由意味着分通道的开关或配置变了，此前那个
+// 锚属于旧配置。留着它，重新启用时会把各通道拉回一个可能早已不该用的会话。
 func SetRouter(r Router) {
 	regMu.Lock()
-	router = r
+	router, anchor = r, ""
 	regMu.Unlock()
 }
 
@@ -175,11 +178,20 @@ func (c *Core) pushTo(ctx context.Context, sessionID, text string, paced bool) b
 				c.cfg.PluginName, len(known))
 			return false
 		}
+		prev := c.binding.Get(known[0])
 		if err := c.binding.Set(known[0], sessionID); err != nil {
 			log.Printf("%s: 保存会话映射失败: %v", c.cfg.PluginName, err)
 			return false
 		}
-		log.Printf("%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
+		if prev != "" && prev != sessionID {
+			// 接管改写了一个已有的绑定：那个用户原本在别的会话里，此刻被搬了过来。
+			// 装了会话锚之后这该是罕见事（各通道本就共用一个会话），留痕是为了万一
+			// 再漂时有迹可循——此前它是完全无声的，表现出来就是「切回来接不上了」。
+			log.Printf("%s: 用户 %s 由会话 %s 改绑到 %s（分通道投递）", c.cfg.PluginName, known[0], prev, sessionID)
+			c.notice(ctx, sessionID, "「"+c.cfg.PluginName+"」上的用户原本在会话 "+prev+" 里，已改绑到当前会话。")
+		} else {
+			log.Printf("%s: 已把用户 %s 接到会话 %s（分通道投递）", c.cfg.PluginName, known[0], sessionID)
+		}
 		users = known
 	}
 
