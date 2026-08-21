@@ -93,3 +93,23 @@ func TestLevelNames(t *testing.T) {
 		t.Fatal("越界档位应为「未知」")
 	}
 }
+
+// 写入一侧不看真实时钟：调用方按自己的时钟写下的状态，要按调用方的「现在」判断有效性。
+// 日程插件整套跑在可注入的时钟上，「今天 16:30 结束」这条状态不该因为真实时间过了
+// 16:30 就写不进去（那曾表现为一到下午整包测试就失败）。
+func TestSetDoesNotJudgeByWallClock(t *testing.T) {
+	reset()
+	t.Cleanup(reset)
+	past := time.Now().Add(-2 * time.Hour)
+	Set(State{Source: "a", Activity: "两小时前那场会", Level: Heavy,
+		Since: past.Add(-time.Hour), Until: past})
+
+	// 按调用方的时钟，那时它还没结束
+	if st, ok := Current(past.Add(-time.Minute)); !ok || st.Activity != "两小时前那场会" {
+		t.Fatalf("按调用方的「现在」应当取得到: %+v ok=%v", st, ok)
+	}
+	// 按此刻读，它早就过去了——过期由读取一侧判定
+	if _, ok := Current(time.Now()); ok {
+		t.Fatal("按此刻读应当已过期")
+	}
+}
