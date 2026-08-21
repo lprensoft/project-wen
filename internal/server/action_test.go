@@ -104,3 +104,49 @@ func TestStartActionIgnoresBadBody(t *testing.T) {
 		t.Errorf("坏 body 不该产生草稿值，实际 %v", p.got)
 	}
 }
+
+// mdPlugin 的操作正文声明为 markdown。
+type mdPlugin struct{ draftPlugin }
+
+func (p *mdPlugin) Name() string { return "mdy" }
+func (p *mdPlugin) ActionState(string) (plugin.ActionState, error) {
+	return plugin.ActionState{Status: plugin.ActionDone, Message: "### 标题\n\n- 一条", Markdown: true}, nil
+}
+
+// 「按 markdown 渲染」是插件声明的，要原样传到界面；不声明的一律是纯文本，
+// 字段不出现在 JSON 里——绝大多数操作给的是纯文本，界面不该去猜。
+func TestActionStateCarriesMarkdownFlag(t *testing.T) {
+	plain := &draftPlugin{}
+	md := &mdPlugin{}
+	m := plugin.NewManager(plugin.InitContext{}, "")
+	for _, p := range []plugin.Plugin{plain, md} {
+		if err := m.Register(p, plugin.PluginConfig{Enabled: true}); err != nil {
+			t.Fatalf("注册插件: %v", err)
+		}
+	}
+	s := &Server{plugins: m}
+
+	get := func(name string) map[string]any {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/api/plugins/"+name+"/actions/test", nil)
+		r.SetPathValue("name", name)
+		r.SetPathValue("key", "test")
+		w := httptest.NewRecorder()
+		s.pluginActionState(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: HTTP %d — %s", name, w.Code, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%s: 解析响应: %v", name, err)
+		}
+		return out
+	}
+
+	if got := get("mdy"); got["markdown"] != true {
+		t.Fatalf("声明了 markdown 的没传出去: %v", got)
+	}
+	if got := get("drafty"); got["markdown"] != nil {
+		t.Fatalf("没声明的不该出现 markdown 字段: %v", got)
+	}
+}
