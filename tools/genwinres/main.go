@@ -22,6 +22,11 @@ import (
 // semverRe 匹配 vMAJOR.MINOR.PATCH。资源里的第四段（build）恒为 0。
 var semverRe = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
 
+// copyright 是 exe 属性里的「版权」一行，与 LICENSE 的署名保持一致。
+// 年份写死而不取当前年：.syso 随库提交，发布流水线会检查 go generate 之后无 diff，
+// 取 time.Now() 会让这份生成物在跨年那天自己变成 diff，把发布卡住。
+const copyright = "Copyright (c) 2026 Hao Ren. MIT License."
+
 func main() {
 	m := semverRe.FindStringSubmatch(version.Version)
 	if m == nil {
@@ -50,6 +55,7 @@ func main() {
 			OriginalFilename: "wen.exe",
 			FileVersion:      plain,
 			ProductVersion:   plain,
+			LegalCopyright:   copyright,
 		},
 		VarFileInfo: goversioninfo.VarFileInfo{
 			Translation: goversioninfo.Translation{LangID: 0x0804, CharsetID: 0x04B0}, // 简体中文 / Unicode
