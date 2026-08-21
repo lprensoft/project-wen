@@ -1356,24 +1356,51 @@ async function startPluginAction(pluginName, actionDef, draft) {
     renderActionState({ status: "error", message: "操作启动失败：" + e.message });
     return;
   }
+  // 连不上时不立刻判死：有的操作会把服务重启掉（程序更新就是），那期间这里必然
+  // 查不通，但几秒后同一个操作的结果就在新进程里等着被取走。重试的上限按最坏情况
+  // 的重启时间给，超过了才当作真的断了。
+  let misses = 0;
+  let lastMessage = "";
+  const maxMisses = 20; // × 1.5 秒 ≈ 30 秒
   const poll = async () => {
     try {
       const res = await fetch(url);
+      if (res.status === 401) {
+        // 服务重启会让登录会话失效（令牌只在内存里），远程访问时会走到这里
+        renderActionState({ status: "error", message: "登录已失效（服务可能已重启），请刷新页面重新登录。" });
+        actionPollTimer = null;
+        return;
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "HTTP " + res.status);
       }
       const st = await res.json();
+      misses = 0;
+      lastMessage = st.message || "";
       renderActionState(st);
       if (st.status === "done" || st.status === "error") {
         actionPollTimer = null;
-        if (st.status === "done") loadSettingsPlugins(); // 操作可能改变按钮文案（如「绑定」变「重新绑定」）
+        if (st.status === "done") {
+          // 操作可能改变按钮文案（如「绑定」变「重新绑定」、「检查更新」变「更新到 vX 并重启」）
+          loadSettingsPlugins();
+          refreshOpenPluginActions(pluginName);
+        }
         return;
       }
     } catch (e) {
-      renderActionState({ status: "error", message: "查询进展失败：" + e.message });
-      actionPollTimer = null;
-      return;
+      misses += 1;
+      if (misses > maxMisses) {
+        renderActionState({ status: "error", message: "查询进展失败：" + e.message });
+        actionPollTimer = null;
+        return;
+      }
+      // 重新渲染最后一次取到的进展再加一句提示，而不是往上追加——
+      // 否则重试二十次就会堆出二十行同样的话
+      renderActionState({
+        status: "pending",
+        message: (lastMessage ? lastMessage + "\n\n" : "") + "（与服务的连接中断，正在重试…）",
+      });
     }
     actionPollTimer = setTimeout(poll, 1500);
   };
@@ -1409,6 +1436,7 @@ const configSaveBtn = $("#btn-config-save");
 
 let configPlugin = null; // 当前编辑的插件状态
 let configInputs = new Map(); // 配置项 key -> 输入元素
+let configActionEls = new Map(); // 操作 key -> {btn, desc}，操作结束后就地更新文案用
 
 function openPluginConfig(p) {
   configPlugin = p;
@@ -1422,6 +1450,7 @@ function openPluginConfig(p) {
     configFormEl.appendChild(buildConfigField(f, values[f.key]));
   }
   // 插件的操作入口（如扫码绑定）附在配置项之后；点击后转入操作进展弹窗
+  configActionEls = new Map();
   for (const a of p.actions || []) {
     const row = document.createElement("div");
     row.className = "plugin-config-action";
@@ -1433,12 +1462,12 @@ function openPluginConfig(p) {
     // 「测试」类操作正是为「保存之前先验一下」而存在的，关掉就等于要求先保存。
     btn.addEventListener("click", () => startPluginAction(p.name, a, readConfigValues()));
     row.appendChild(btn);
-    if (a.description) {
-      const desc = document.createElement("div");
-      desc.className = "field-desc";
-      desc.textContent = a.description;
-      row.appendChild(desc);
-    }
+    const desc = document.createElement("div");
+    desc.className = "field-desc";
+    desc.textContent = a.description || "";
+    desc.classList.toggle("hidden", !a.description);
+    row.appendChild(desc);
+    configActionEls.set(a.key, { btn, desc });
     configFormEl.appendChild(row);
   }
   // 没有配置项（纯操作入口）时保存与恢复默认没有意义
@@ -1448,6 +1477,31 @@ function openPluginConfig(p) {
   configModal.classList.remove("hidden");
   const first = configFormEl.querySelector("input, select, textarea");
   if (first) first.focus();
+}
+
+// 操作结束后就地更新配置弹窗里那几个按钮的文案。
+//
+// 只动按钮，不重建整个表单：表单里可能有填了一半、还没保存的内容，而「操作」正是
+// 为「保存之前先验一下」而存在的（见 openPluginConfig 里那条注释）。文案会变是因为
+// 插件的状态变了——「检查更新」在查到新版之后就该变成「更新到 vX 并重启」，
+// 不然按钮上写的和点下去发生的事就对不上了。
+async function refreshOpenPluginActions(name) {
+  if (!configPlugin || configPlugin.name !== name) return;
+  try {
+    const list = await fetch("/api/plugins").then((r) => r.json());
+    const fresh = (list || []).find((p) => p.name === name);
+    if (!fresh || !configPlugin || configPlugin.name !== name) return;
+    configPlugin.actions = fresh.actions || [];
+    for (const a of configPlugin.actions) {
+      const els = configActionEls.get(a.key);
+      if (!els) continue;
+      els.btn.textContent = a.label;
+      els.desc.textContent = a.description || "";
+      els.desc.classList.toggle("hidden", !a.description);
+    }
+  } catch (e) {
+    // 拿不到就维持原样：按钮点下去以插件当时的状态为准，文案旧一点不影响正确性
+  }
 }
 
 function closePluginConfig() {

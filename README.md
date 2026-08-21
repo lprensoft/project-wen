@@ -29,6 +29,7 @@
 - **模型可配置**：提供商与模型在设置页增删改并热切换，下一次请求即生效；支持 OpenAI 兼容协议与 Anthropic Messages API
 - **命令执行有人把关**：`exec_command` 采取执行前拦截并交人确认，极高危命令直接拒绝（见下），不做那种能被轻易绕过的路径沙箱
 - **Web UI**：`go:embed` 内嵌单页聊天界面，SSE 流式输出，思考过程与工具调用可视化，后台任务的动静也会实时出现在会话里
+- **自己更新自己**：每天查一次 GitHub 上的新版本，设置页上一键完成下载、校验（SHA256）、试运行、替换与重启，Windows / macOS / Linux 都不需要包管理器；只查不装，装不装由你点
 - **Session 管理**：每个会话一个 JSONL 文件（首行 meta + 逐行消息），重启不丢历史
 - **单一配置文件**：全部配置（含 API Key）统一在 `config.yaml`（已被 .gitignore 保护），值支持 `${VAR}` 从环境变量读取
 
@@ -61,6 +62,7 @@ wen serve [-c 配置] [-p 端口]  启动服务
 wen config [栏目] [-c 配置]    引导式修改配置（栏目：plugins / models / server）
 wen status [-c 配置]           打印当前配置与运行状态
 wen eval <脚本.json> [-o 文件]  回放一段脚本对话，生成文风与角色一致性报告
+wen update [--check] [-y]  检查并安装新版本
 wen version                打印版本号
 wen help [命令]            显示帮助
 ```
@@ -550,6 +552,30 @@ Anthropic 模式下多一个**提示词缓存**开关（默认开启）：开启
 | `merge_window_sec` | 3 | 合并连发消息的窗口（秒），0 关闭 |
 | `human_pace` | 关 | 像人一样发消息：回复分条、带打字间隔，并提示模型用聊天口吻 |
 
+## 程序更新（self_update 插件）
+
+程序自己会更新自己：后台每天查一次 GitHub 上有没有新的正式版，有的话在设置页「程序维护 · 程序更新」的齿轮里一键完成下载、校验、替换与重启。三个平台都支持，不需要包管理器，也不需要重新解压覆盖。
+
+按钮的文案就是下一步会发生的事：不知道有没有新版时它是「检查更新」，点一下只查，把版本号与更新说明摆出来；查到新版后它变成「更新到 vX.Y.Z 并重启」，再点才真的动手。中间这一步之差就是确认。
+
+一次更新会依次做这些事，任何一步不过就整个中止，程序文件保持原样：
+
+1. 确认安装目录可写（装在 `/usr/local/bin`、`Program Files` 或由包管理器装的会在这里停下，并提示用原来的方式升级）
+2. 按本机的系统与架构下载对应的发布包，用发布里的 `SHA256SUMS.txt` 校验
+3. 解出新的二进制，**先跑一次 `wen version`**——校验和过了不代表它在这台机器上起得来（架构不符、被杀软改写都会卡在这一步）
+4. 替换程序文件。Linux 与 macOS 上直接换掉（运行中的进程不受影响），Windows 上把旧的挪成 `wen.exe.old`，下次启动时清理
+5. 重启服务。Linux 与 macOS 上原地换掉进程映像（PID 不变），Windows 上起新进程再退出
+
+重启期间界面会断开几秒然后自动接上，进展窗会从「正在重启」接到「已更新到 vX.Y.Z」。**重启会中断正在进行的对话**；远程访问的话登录会话也会失效（令牌只在内存里），需要重新登录一次。不想让它自己重启就关掉「更新后自动重启」，更新照做，等你下次自己启动时生效。
+
+配置项只有三个：自动检查的开关（默认开）、检查周期（默认 24 小时）、更新后是否自动重启（默认开）。自动检查**只查不装**——装不装始终是你点的。整个插件也可以直接关掉，那样连查都不查。它不给模型任何东西：不注入提示词、不提供工具，角色不知道有这回事。
+
+命令行下是 `wen update`：不加参数只报告，`--check` 只查，`-y` 才会真的替换程序文件。它不会去重启另一个进程里跑着的服务，只提示你重启——要一步到位就用设置页那个按钮。
+
+只认正式版：滚动的 `dev` 预发布不参与（它的 tag 固定叫 dev，没有可比较的版本号）；跑着开发版（`v0.6.1-3-gxxxxxxx`）时，同号的正式版不会被当成升级——那是降级。
+
+校验和保证的是「下载的东西没坏」，不是「发布本身没被动过手脚」——信任锚是 TLS 与 GitHub 账号。
+
 ## 回放评测（wen eval）
 
 调一次提示词之后，角色是变好了还是变坏了？`wen eval` 把这件事从「再聊几句感觉一下」变成可以重复跑的脚本：
@@ -731,6 +757,8 @@ ReadWritePaths=/opt/wen
 WantedBy=multi-user.target
 ```
 
+自更新与这两种部署方式都相容：Linux 上的重启是原地换掉进程映像（PID 不变），启停脚本的 pid 文件仍然有效，systemd 也察觉不到一次退出，不会被 `Restart=` 抢先拉起。前提是那个二进制对运行它的用户可写——上面的 `chown -R wen:wen /opt/wen` 加 `ReadWritePaths=/opt/wen` 正好满足；二进制若放在 root 拥有的目录里，设置页上的更新会在第一步就停下并提示用原来的方式升级。
+
 首次部署：
 
 ```sh
@@ -815,7 +843,8 @@ internal/plugin/builtin/ 内置系统插件（注册顺序即提示词拼接顺�
                          roleplay / dualpersona / scene / weather / belongings / bodysense / health / mood / people / agenda / relationship / unspoken / presence / stylewatch /
                          memory / sessionsearch / skills /
                          heartbeat / scheduler /
-                         qqbot / wechatbot / larkbot（飞书 + Lark）/ telegrambot
+                         qqbot / wechatbot / larkbot（飞书 + Lark）/ telegrambot /
+                         selfupdate
 internal/imbot/          消息通道的公共骨架（分发 / 命令 / 会话绑定 / 确认代理 / 通道路由）
 internal/cue/            「开口理由」公告板：产生方按事件投递，心跳开口前取走
 internal/availability/   「忙碌状态」公告板：日程在活动进行中写，心跳与消息通道读
@@ -824,6 +853,7 @@ internal/mdtext/         markdown 分段与转纯文本，各通道的格式降�
 internal/textclip/       插件注入文本的预算截断，各插件共用
 internal/statustext/     状态输出的措辞，各通道的 /status 共用
 internal/runlock/        运行实例登记（wen.lock），wen config 据此判定在线 / 离线
+internal/updater/        自更新：查发布、下载校验、替换可执行文件、重启（三平台各自的做法）
 internal/session/        JSONL 会话存储
 internal/server/         HTTP API + SSE + 内嵌 Web UI
 internal/version/        版本号的唯一来源（界面、/status、启动日志与 exe 属性共用）
@@ -846,7 +876,7 @@ tools/                   构建期生成器：genicon（favicon）、genwinres�
 - `TurnObserver`（`OnTurnEnd()`）——观察每轮对话的结束。在收尾的同步路径上广播，实现必须快速返回，耗时工作自行开 goroutine。
 - `StatusReporter`（`StatusLines()`）——向状态命令贡献一行运行状况。与 `SystemPrompt` 同契约（廉价、无副作用）。
 - `Actionable`（`Actions()` / `StartAction()` / `ActionState()`）——声明可在设置页触发的流程（如扫码绑定），状态含说明文字与一张可选 PNG。`StartAction` 应立即返回，长流程放后台并自带超时。
-- `Categorized`（`Category()`）——声明功能分组（基础工具 / 记忆与检索 / 角色演绎 / 后台任务 / 消息通道），设置页据此分节展示。只影响展示，不影响注册顺序。
+- `Categorized`（`Category()`）——声明功能分组（基础工具 / 记忆与检索 / 角色演绎 / 后台任务 / 消息通道 / 程序维护），设置页据此分节展示。只影响展示，不影响注册顺序。
 - `FailureTranslator`（`TranslateFailure()`）——轮次失败时把失败转成一句正常回复的机会（`roleplay` 据此把内容拦截演成角色的走神）。单所有者、按逆注册序征询，只在真人在场的轮次尝试；转译文本以正常助手消息落盘，原始错误转入会话注记；配置类错误（`llm.IsConfigError`）必须放行原样报出。
 - `NoticeObserver`（`OnNotice()`）——会话注记落盘并送达 Web 界面之后收到广播（IM 通道据此把后台工作的说明推给绑定用户）。事件携带的是已截断的落盘文本。
 

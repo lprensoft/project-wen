@@ -11,6 +11,7 @@ const (
 	CategoryPersona    = "角色演绎"
 	CategoryBackground = "后台任务"
 	CategoryChannel    = "消息通道"
+	CategoryProgram    = "程序维护"
 	CategoryOther      = "其他"
 )
 

@@ -162,7 +162,7 @@ func newOfflineBackend(cfg *config.Config) (*offlineBackend, error) {
 	plugins := buildPlugins(cfg, plugin.InitContext{
 		Workdir:    cfg.Agent.Workdir,
 		SessionDir: cfg.SessionDir(),
-	}, plugin.WithoutInit())
+	}, nil, plugin.WithoutInit())
 	plugins.Resolve()
 
 	return &offlineBackend{

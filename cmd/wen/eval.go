@@ -109,11 +109,12 @@ func runEval(args []string) error {
 }
 
 // evalSuppressed 圈出评测时不启动的插件：消息通道会连到真实平台，后台任务会在评测
-// 会话上插话（心跳挑的正是「最近活跃的会话」，评测会话在临时目录里就是唯一的那个）。
+// 会话上插话（心跳挑的正是「最近活跃的会话」，评测会话在临时目录里就是唯一的那个），
+// 程序维护会在评测中途去够外网、甚至把脚下的二进制换掉。
 // 按分组判断而不是点名：以后再加一条 IM 或一种后台任务，这里不用改。
 func evalSuppressed(p plugin.Plugin) bool {
 	switch plugin.CategoryOf(p) {
-	case plugin.CategoryBackground, plugin.CategoryChannel:
+	case plugin.CategoryBackground, plugin.CategoryChannel, plugin.CategoryProgram:
 		return true
 	}
 	return false
