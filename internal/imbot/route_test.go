@@ -12,7 +12,7 @@ func resetRegistry(t *testing.T) {
 	t.Helper()
 	clear := func() {
 		regMu.Lock()
-		declared, liveCores, router = nil, map[string]*Core{}, nil
+		declared, liveCores, router, anchor = nil, map[string]*Core{}, nil, ""
 		regMu.Unlock()
 	}
 	clear()

@@ -153,6 +153,9 @@ func (c *Core) cmdNew(ctx context.Context, msg Message) {
 		c.send(ctx, msg, "保存会话映射失败："+err.Error())
 		return
 	}
+	// 分通道时 /new 移动整组：其余通道在各自的下一条消息上加入这个新会话。
+	// 只搬自己的话，另一条通道会留在旧会话里，两个人格当场分家。
+	setGroupAnchor(sid)
 	c.send(ctx, msg, "✨ 已新建会话（"+sid+"），接下来的消息将进入新会话。")
 }
 
