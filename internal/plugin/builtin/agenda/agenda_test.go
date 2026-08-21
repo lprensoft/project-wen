@@ -780,7 +780,7 @@ func TestTickEndAndCatchUp(t *testing.T) {
 	if in := recvInput(t, h); !strings.HasPrefix(in, "【日程·结束】现在 16:35，「和林舟在图书馆查资料」（14:00-16:30）该结束了。") {
 		t.Fatalf("结束输入不符：\n%s", in)
 	}
-	cues := cue.Take(time.Now())
+	cues := cue.Take(h.clk.now())
 	if len(cues) != 1 || cues[0].Key != "back|a1" || cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" ||
 		!cues[0].Expire.Equal(at(16, 35).Add(90*time.Minute)) {
 		t.Fatalf("结束后应投「刚回来」理由: %+v", cues)
@@ -838,17 +838,17 @@ func TestSoonCue(t *testing.T) {
 	h.setPlan(t, Item{Title: "和对方吃晚饭", Start: "18:30", End: "20:00", WithUser: true, Flex: flexFixed})
 	h.clk.set(at(17, 0))
 	h.tick()
-	if cue.Pending(time.Now()) {
+	if cue.Pending(h.clk.now()) {
 		t.Fatal("提前 90 分钟不该投")
 	}
 	h.clk.set(at(17, 40))
 	h.tick()
-	cues := cue.Take(time.Now())
+	cues := cue.Take(h.clk.now())
 	if len(cues) != 1 || cues[0].Key != "soon|a1" || cues[0].Text != "再过 50 分钟是和对方的约定：和对方吃晚饭（18:30）。" || !cues[0].Expire.Equal(at(18, 30)) {
 		t.Fatalf("提前提醒不符: %+v", cues)
 	}
 	h.tick()
-	if cue.Pending(time.Now()) {
+	if cue.Pending(h.clk.now()) {
 		t.Fatal("同一项不重投")
 	}
 	if h.calls.Load() != 0 {
@@ -1053,7 +1053,7 @@ func TestBackCueAfterFailedEndTurn(t *testing.T) {
 	h.tick()
 	recvInput(t, h)
 
-	cues := cue.Take(time.Now())
+	cues := cue.Take(h.clk.now())
 	if len(cues) != 1 || cues[0].Key != "back|a1" ||
 		cues[0].Text != "你刚结束「和林舟在图书馆查资料」（16:30 回来）：聊了一下午。" {
 		t.Fatalf("轮次失败也该投「刚回来」: %+v", cues)
@@ -1069,7 +1069,7 @@ func TestNoBackCueWhenSessionBusy(t *testing.T) {
 	h.clk.set(at(8, 45))
 	h.tick()
 	<-h.notices // 放弃时留的那条注记
-	if cue.Pending(time.Now()) {
+	if cue.Pending(h.clk.now()) {
 		t.Fatal("会话繁忙放弃时不该投「刚回来」")
 	}
 }

@@ -46,10 +46,15 @@ func TestExpiredNotDelivered(t *testing.T) {
 	if got := Take(time.Now().Add(2 * time.Hour)); len(got) != 0 {
 		t.Errorf("过期理由不该送达: %+v", got)
 	}
-	// 一开始就过期的投递直接拒收
+	// 投递时不看时钟，故一开始就过期的能入板，但消费侧一律拦下，对外仍是没送达
 	Post(Cue{Source: "s", Key: "dead", Text: "早过期", Expire: time.Now().Add(-time.Minute)})
 	if Pending(time.Now()) {
-		t.Error("已过期的投递不该入板")
+		t.Error("已过期的理由不该送达")
+	}
+	// 没带过期时刻的仍然拒收：那是投递方漏填，不是「过期与否」的判断
+	Post(Cue{Source: "s", Key: "noexp", Text: "没写有效期"})
+	if got := Take(time.Time{}); len(got) != 0 {
+		t.Errorf("缺过期时刻的投递不该入板: %+v", got)
 	}
 }
 
