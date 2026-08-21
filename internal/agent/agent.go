@@ -227,12 +227,13 @@ func (a *Agent) run(ctx context.Context, sessionID, userInput string, emit func(
 	}
 
 	// 组装上下文，分稳定段与易变段两层：
-	//   system（环境块 + 启用插件的提示词片段 + 可选配置提示词）+ 历史 + 本轮状态 + 本条
+	//   system（环境块 + 工具约定 + 历史约定 + 启用插件的提示词片段 + 可选配置提示词）
+	//   + 历史 + 本轮状态 + 本条
 	// 易变的内容（当前时间、插件的每轮片段）**不进 system**，而是拼在本轮输入之前。
 	// 一处改动解决两件事：模型判断「现在」时不必跨几千 token 主动比对，
 	// 且 system 与历史成为整轮之间字节一致的前缀，提示词缓存才可能命中。
 	msgs := make([]llm.Message, 0, len(history)+2)
-	parts := []string{envContext(opts.Workdir), toolRules}
+	parts := []string{envContext(opts.Workdir), toolRules, historyRules}
 	parts = append(parts, a.plugins.SystemPrompts()...)
 	if opts.SystemPrompt != "" {
 		parts = append(parts, opts.SystemPrompt)

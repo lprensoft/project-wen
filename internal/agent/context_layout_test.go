@@ -280,3 +280,43 @@ func TestDayMarkNeverSplitsToolResults(t *testing.T) {
 		}
 	}
 }
+
+// [历史与时间] 里引述了两种标注的措辞，而真正生成它们的是 dayMark 与 gapNote。
+// 两处分头改就会指向一段模型在上下文里根本找不到的东西，说明反而变成误导。
+func TestHistoryRulesQuoteRealMarkers(t *testing.T) {
+	// 取标注里到第一个数字为止的那段固定措辞，日期与时长是变的，措辞不是
+	lead := func(s string) string {
+		s = strings.TrimPrefix(s, "（")
+		if i := strings.IndexAny(s, "0123456789"); i > 0 {
+			s = s[:i]
+		}
+		return strings.TrimRight(s, " ") // 数字前的那个空格是排版，不是措辞
+	}
+	for _, tc := range []struct{ what, marker string }{
+		{"日界线", dayMark(time.Date(2026, 8, 20, 9, 0, 0, 0, time.Local))},
+		{"间隔", gapNote(time.Now().Add(-14*time.Hour), time.Now())},
+	} {
+		if got := lead(tc.marker); got == "" || !strings.Contains(historyRules, got) {
+			t.Errorf("[历史与时间] 没有引用真正的%s措辞 %q:\n%s", tc.what, got, historyRules)
+		}
+	}
+}
+
+// 这段是缓存前缀的一部分，必须整轮之间逐字节不变——它是常量，测试盯着别人把它改成函数。
+func TestHistoryRulesIsInSystem(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := session.NewStore(dir)
+	meta, _ := store.Create()
+	provider := &mockProvider{turns: []mockTurn{{content: "答"}, {content: "答"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Run(context.Background(), meta.ID, "一", func(Event) {})
+	ag.Run(context.Background(), meta.ID, "二", func(Event) {})
+	for i, r := range provider.reqs {
+		if !strings.Contains(r.Messages[0].Content, "[历史与时间]") {
+			t.Fatalf("第 %d 轮的 system 里没有 [历史与时间]", i)
+		}
+	}
+	if provider.reqs[0].Messages[0].Content != provider.reqs[1].Messages[0].Content {
+		t.Error("system 前缀在两轮之间发生了变化")
+	}
+}
