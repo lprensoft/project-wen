@@ -17,6 +17,7 @@
       document.documentElement.dataset.chatWidth = localStorage.getItem("wen-chat-width") || "medium";
     })();
   </script>
+  <script src="i18n.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -25,26 +26,26 @@
       <div class="sidebar-header">
         <span class="logo" role="img" aria-label="Wen Agent"></span>
         <div class="header-actions">
-          <button id="btn-new" class="btn-primary" title="新建会话">＋ 新会话</button>
+          <button id="btn-new" class="btn-primary" data-i18n="session.new" data-i18n-title="session.newTitle"></button>
         </div>
       </div>
       <ul id="session-list" class="session-list"></ul>
       <div class="sidebar-footer">
         <div class="footer-left">
-          <button id="btn-settings" class="btn-icon btn-square" title="设置">
+          <button id="btn-settings" class="btn-icon btn-square" data-i18n-title="settings.open">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
           <span id="version-label" class="version-label"></span>
         </div>
-        <div id="theme-seg" class="theme-seg" title="界面风格">
+        <div id="theme-seg" class="theme-seg" data-i18n-title="theme.title">
           <span class="theme-seg-thumb"></span>
-          <button class="theme-seg-btn" data-theme-opt="system" title="跟随系统">
+          <button class="theme-seg-btn" data-theme-opt="system" data-i18n-title="theme.system">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           </button>
-          <button class="theme-seg-btn" data-theme-opt="light" title="浅色">
+          <button class="theme-seg-btn" data-theme-opt="light" data-i18n-title="theme.light">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
           </button>
-          <button class="theme-seg-btn" data-theme-opt="dark" title="深色">
+          <button class="theme-seg-btn" data-theme-opt="dark" data-i18n-title="theme.dark">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           </button>
         </div>
@@ -53,28 +54,28 @@
 
     <main class="chat">
       <div id="messages" class="messages">
-        <div class="empty-hint" id="empty-hint">新建或选择一个会话开始对话</div>
+        <div class="empty-hint" id="empty-hint" data-i18n="chat.empty"></div>
       </div>
       <form id="chat-form" class="composer">
         <div class="composer-box">
           <div id="cmd-menu" class="cmd-menu hidden"></div>
-          <textarea id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+          <textarea id="input" rows="1" data-i18n-placeholder="chat.placeholder"></textarea>
           <div class="composer-bar">
             <div class="composer-anchor">
-              <button type="button" id="btn-filter" class="chip" title="选择聊天区显示哪些内容">
+              <button type="button" id="btn-filter" class="chip" data-i18n-title="chat.filterTitle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M7 12h10"/><path d="M11 19h2"/></svg>
-                <span>显示内容</span>
+                <span data-i18n="chat.filterChip"></span>
               </button>
               <div id="filter-menu" class="popup-menu hidden"></div>
             </div>
             <div class="composer-anchor anchor-right">
-              <button type="button" id="btn-model" class="chip" title="切换当前使用的模型">
+              <button type="button" id="btn-model" class="chip" data-i18n-title="chat.modelTitle">
                 <span id="model-label">—</span>
                 <svg class="chip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <div id="model-menu" class="popup-menu align-right hidden"></div>
             </div>
-            <button type="submit" id="btn-send" class="btn-send" title="发送" aria-label="发送">
+            <button type="submit" id="btn-send" class="btn-send" data-i18n-title="chat.send" data-i18n-aria-label="chat.send">
               <svg class="icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
               <svg class="icon-stop" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
             </button>
@@ -86,81 +87,90 @@
 
   <div id="settings-view" class="settings-view hidden">
     <div class="settings-header">
-      <button id="btn-settings-back" class="btn-icon btn-square" title="返回">
+      <button id="btn-settings-back" class="btn-icon btn-square" data-i18n-title="common.back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
       </button>
-      <span class="settings-title">设置</span>
+      <span class="settings-title" data-i18n="settings.title"></span>
     </div>
     <div class="settings-main">
       <nav class="settings-nav" id="settings-nav">
         <button class="settings-nav-item active" data-section="general">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-          <span>通用</span>
+          <span data-i18n="settings.nav.general"></span>
         </button>
         <button class="settings-nav-item" data-section="plugins">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h3a3 3 0 0 0 6 0h3a2 2 0 0 1 2 2v3a3 3 0 0 0 0 6v3a2 2 0 0 1-2 2h-3a3 3 0 0 1-6 0H6a2 2 0 0 1-2-2v-3a3 3 0 0 1 0-6V6a2 2 0 0 1 2-2z"/></svg>
-          <span>插件</span>
+          <span data-i18n="settings.nav.plugins"></span>
         </button>
         <button class="settings-nav-item" data-section="access">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span>访问控制</span>
+          <span data-i18n="settings.nav.access"></span>
         </button>
         <button class="settings-nav-item" data-section="models">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
-          <span>模型</span>
+          <span data-i18n="settings.nav.models"></span>
         </button>
       </nav>
       <div class="settings-content">
         <section class="settings-section" id="section-general">
-          <h3>通用</h3>
-          <p class="settings-desc">界面外观设定，只影响本机的浏览器显示，不写入服务端配置。</p>
+          <h3 data-i18n="settings.general.title"></h3>
+          <p class="settings-desc" data-i18n="settings.general.desc"></p>
           <div class="field">
-            <span class="field-label">聊天栏宽度</span>
+            <span class="field-label" data-i18n="settings.language.label"></span>
+            <span class="field-desc" data-i18n="settings.language.desc"></span>
+            <div class="seg-group" id="lang-seg">
+              <button type="button" class="seg-btn" data-lang="auto" data-i18n="settings.language.auto"></button>
+              <button type="button" class="seg-btn" data-lang="zh" data-i18n="settings.language.zh"></button>
+              <button type="button" class="seg-btn" data-lang="en" data-i18n="settings.language.en"></button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label" data-i18n="settings.chatWidth.label"></span>
             <span class="field-desc" id="chat-width-desc"></span>
             <div class="seg-group" id="chat-width-seg">
-              <button type="button" class="seg-btn" data-width="narrow">窄</button>
-              <button type="button" class="seg-btn" data-width="medium">中</button>
-              <button type="button" class="seg-btn" data-width="wide">宽</button>
+              <button type="button" class="seg-btn" data-width="narrow" data-i18n="settings.chatWidth.narrow"></button>
+              <button type="button" class="seg-btn" data-width="medium" data-i18n="settings.chatWidth.medium"></button>
+              <button type="button" class="seg-btn" data-width="wide" data-i18n="settings.chatWidth.wide"></button>
             </div>
           </div>
         </section>
         <section class="settings-section hidden" id="section-plugins">
-          <h3>插件</h3>
-          <p class="settings-desc">开关立即生效并持久化，作用于下一次对话请求。</p>
+          <h3 data-i18n="settings.plugins.title"></h3>
+          <p class="settings-desc" data-i18n="settings.plugins.desc"></p>
           <div id="settings-plugins"></div>
         </section>
         <section class="settings-section hidden" id="section-access">
-          <h3>访问控制</h3>
-          <p class="settings-desc">来自本机的访问免登录，其它来源需要口令。口令存于 &lt;配置目录&gt;/auth.json，不写入 config.yaml。</p>
+          <h3 data-i18n="settings.access.title"></h3>
+          <p class="settings-desc" data-i18n="settings.access.desc"></p>
           <div id="access-state" class="access-state"></div>
           <form id="access-form" class="access-form">
             <div class="field" id="access-current-field">
-              <label class="field-label" for="access-current">当前口令</label>
+              <label class="field-label" for="access-current" data-i18n="access.current"></label>
               <input id="access-current" type="password" autocomplete="current-password">
             </div>
             <div class="field">
-              <label class="field-label" for="access-new">新口令</label>
-              <span class="field-desc">至少 8 位。留空并保存表示清除口令（仅在只监听本机时允许）。</span>
+              <label class="field-label" for="access-new" data-i18n="access.new"></label>
+              <span class="field-desc" data-i18n="access.newDesc"></span>
               <input id="access-new" type="password" autocomplete="new-password">
             </div>
             <div class="field">
-              <label class="field-label" for="access-confirm">确认新口令</label>
+              <label class="field-label" for="access-confirm" data-i18n="access.confirm"></label>
               <input id="access-confirm" type="password" autocomplete="new-password">
             </div>
             <div id="access-error" class="modal-error hidden"></div>
             <div class="access-actions">
-              <button id="btn-access-save" class="btn-primary" type="submit">保存</button>
-              <button id="btn-access-logout" class="btn-ghost" type="button">退出登录</button>
+              <button id="btn-access-save" class="btn-primary" type="submit" data-i18n="common.save"></button>
+              <button id="btn-access-logout" class="btn-ghost" type="button" data-i18n="access.logout"></button>
             </div>
           </form>
         </section>
         <section class="settings-section hidden" id="section-models">
-          <h3>模型</h3>
-          <p class="settings-desc">改动写入 &lt;配置目录&gt;/models.json，保存后下一次对话请求即生效。</p>
+          <h3 data-i18n="settings.models.title"></h3>
+          <p class="settings-desc" data-i18n="settings.models.desc"></p>
           <div id="models-error" class="modal-error hidden"></div>
           <div class="models-toolbar">
             <span id="models-current" class="models-current"></span>
-            <button id="btn-add-provider" class="btn-primary" type="button">＋ 新增提供商</button>
+            <button id="btn-add-provider" class="btn-primary" type="button" data-i18n="models.addProvider"></button>
           </div>
           <div id="settings-models" class="provider-list"></div>
         </section>
@@ -171,18 +181,18 @@
   <div id="plugin-config-modal" class="modal-overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="plugin-config-title">
       <div class="modal-head">
-        <span class="modal-title" id="plugin-config-title">插件配置</span>
-        <button id="btn-config-close" class="btn-icon btn-square" type="button" title="关闭">
+        <span class="modal-title" id="plugin-config-title" data-i18n="plugins.configModalTitle"></span>
+        <button id="btn-config-close" class="btn-icon btn-square" type="button" data-i18n-title="common.close">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
       <form id="plugin-config-form" class="modal-body"></form>
       <div id="plugin-config-error" class="modal-error hidden"></div>
       <div class="modal-foot">
-        <button id="btn-config-reset" class="btn-ghost" type="button">恢复默认</button>
+        <button id="btn-config-reset" class="btn-ghost" type="button" data-i18n="common.resetDefaults"></button>
         <span class="modal-foot-gap"></span>
-        <button id="btn-config-cancel" class="btn-ghost" type="button">取消</button>
-        <button id="btn-config-save" class="btn-primary" type="button">保存</button>
+        <button id="btn-config-cancel" class="btn-ghost" type="button" data-i18n="common.cancel"></button>
+        <button id="btn-config-save" class="btn-primary" type="button" data-i18n="common.save"></button>
       </div>
     </div>
   </div>
@@ -190,8 +200,8 @@
   <div id="plugin-action-modal" class="modal-overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="plugin-action-title">
       <div class="modal-head">
-        <span class="modal-title" id="plugin-action-title">插件操作</span>
-        <button id="btn-action-close" class="btn-icon btn-square" type="button" title="关闭">
+        <span class="modal-title" id="plugin-action-title" data-i18n="plugins.actionModalTitle"></span>
+        <button id="btn-action-close" class="btn-icon btn-square" type="button" data-i18n-title="common.close">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
@@ -201,7 +211,7 @@
       </div>
       <div class="modal-foot">
         <span class="modal-foot-gap"></span>
-        <button id="btn-action-dismiss" class="btn-ghost" type="button">关闭</button>
+        <button id="btn-action-dismiss" class="btn-ghost" type="button" data-i18n="common.close"></button>
       </div>
     </div>
   </div>
@@ -209,18 +219,18 @@
   <div id="provider-modal" class="modal-overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
       <div class="modal-head">
-        <span class="modal-title" id="provider-modal-title">提供商</span>
-        <button id="btn-provider-close" class="btn-icon btn-square" type="button" title="关闭">
+        <span class="modal-title" id="provider-modal-title" data-i18n="provider.modalTitle"></span>
+        <button id="btn-provider-close" class="btn-icon btn-square" type="button" data-i18n-title="common.close">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
       <form id="provider-form" class="modal-body"></form>
       <div id="provider-error" class="modal-error hidden"></div>
       <div class="modal-foot">
-        <button id="btn-provider-test" class="btn-ghost" type="button">测试连接</button>
+        <button id="btn-provider-test" class="btn-ghost" type="button" data-i18n="provider.test"></button>
         <span class="modal-foot-gap"></span>
-        <button id="btn-provider-cancel" class="btn-ghost" type="button">取消</button>
-        <button id="btn-provider-save" class="btn-primary" type="button">保存</button>
+        <button id="btn-provider-cancel" class="btn-ghost" type="button" data-i18n="common.cancel"></button>
+        <button id="btn-provider-save" class="btn-primary" type="button" data-i18n="common.save"></button>
       </div>
     </div>
   </div>
@@ -228,8 +238,8 @@
   <div id="model-modal" class="modal-overlay hidden">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="model-modal-title">
       <div class="modal-head">
-        <span class="modal-title" id="model-modal-title">模型</span>
-        <button id="btn-model-close" class="btn-icon btn-square" type="button" title="关闭">
+        <span class="modal-title" id="model-modal-title" data-i18n="model.modalTitle"></span>
+        <button id="btn-model-close" class="btn-icon btn-square" type="button" data-i18n-title="common.close">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
@@ -237,8 +247,8 @@
       <div id="model-error" class="modal-error hidden"></div>
       <div class="modal-foot">
         <span class="modal-foot-gap"></span>
-        <button id="btn-model-cancel" class="btn-ghost" type="button">取消</button>
-        <button id="btn-model-save" class="btn-primary" type="button">保存</button>
+        <button id="btn-model-cancel" class="btn-ghost" type="button" data-i18n="common.cancel"></button>
+        <button id="btn-model-save" class="btn-primary" type="button" data-i18n="common.save"></button>
       </div>
     </div>
   </div>

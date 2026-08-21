@@ -3,15 +3,47 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>登录 · Wen Agent</title>
+  <title>Wen Agent</title>
   <link rel="icon" href="favicon.ico" sizes="any">
   <script>
-    // 与主界面同一套主题标记。这一页刻意不引用 style.css：
-    // 认证中间件只放行登录页本身，放开整个静态目录会把未登录能看到的东西变多。
+    // 与主界面同一套主题标记与语言判定。这一页刻意不引用 style.css 与 i18n.js：
+    // 认证中间件只放行登录页本身，放开整个静态目录会把未登录能看到的东西变多，
+    // 而这里只有四句话，为它多放行一个文件不划算。判定规则与 i18n.js 一致：
+    // localStorage 的三态（auto / zh / en）优先，auto 时按 navigator.languages 逐个认。
     (function () {
       var s = localStorage.getItem("wen-theme") || "system";
       var dark = s === "dark" || (s === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
       document.documentElement.dataset.theme = dark ? "dark" : "light";
+
+      var saved = localStorage.getItem("wen-lang");
+      var lang = saved === "zh" || saved === "en" ? saved : detect();
+      function detect() {
+        var list = (navigator.languages && navigator.languages.length)
+          ? navigator.languages : [navigator.language || ""];
+        for (var i = 0; i < list.length; i++) {
+          var c = String(list[i]).toLowerCase();
+          if (c === "zh" || c.indexOf("zh-") === 0) return "zh";
+          if (c === "en" || c.indexOf("en-") === 0) return "en";
+        }
+        return "en";
+      }
+      window.WEN_TEXT = lang === "en" ? {
+        title: "Sign in · Wen Agent",
+        sub: "Enter the access password",
+        label: "Access password",
+        submit: "Sign in",
+        failed: "Sign-in failed",
+        offline: "Can't reach the service",
+      } : {
+        title: "登录 · Wen Agent",
+        sub: "请输入访问口令",
+        label: "访问口令",
+        submit: "登录",
+        failed: "登录失败",
+        offline: "无法连接服务",
+      };
+      document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+      document.title = window.WEN_TEXT.title;
     })();
   </script>
   <style>
@@ -66,10 +98,10 @@
   <form class="card" id="form">
     <img class="logo" src="assets/logo-512.png" alt="">
     <h1>Wen Agent</h1>
-    <p class="sub">请输入访问口令</p>
-    <label for="pwd">访问口令</label>
+    <p class="sub" id="sub"></p>
+    <label for="pwd" id="pwd-label"></label>
     <input id="pwd" type="password" autocomplete="current-password" autofocus>
-    <button id="submit" type="submit">登录</button>
+    <button id="submit" type="submit"></button>
     <div id="err" class="err hidden"></div>
   </form>
   <script>
@@ -77,6 +109,11 @@
     const pwd = document.getElementById("pwd");
     const submit = document.getElementById("submit");
     const err = document.getElementById("err");
+
+    // 文案在首屏前就由 <head> 里的脚本定好，这里只是填进去
+    document.getElementById("sub").textContent = WEN_TEXT.sub;
+    document.getElementById("pwd-label").textContent = WEN_TEXT.label;
+    submit.textContent = WEN_TEXT.submit;
 
     function fail(msg) {
       err.textContent = msg;
@@ -101,9 +138,9 @@
         });
         if (res.ok) { location.replace("/"); return; }
         const body = await res.json().catch(() => ({}));
-        fail(body.error || "登录失败");
+        fail(body.error || WEN_TEXT.failed);
       } catch {
-        fail("无法连接服务");
+        fail(WEN_TEXT.offline);
       } finally {
         submit.disabled = false;
       }
