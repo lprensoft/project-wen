@@ -126,3 +126,157 @@ func TestLongGapIsMarkedInHistory(t *testing.T) {
 		}
 	}
 }
+
+// dayMarkOf 从发出去的消息里挑出带某天日界线的那条。
+func dayMarkOf(msgs []llm.Message, day string) (string, bool) {
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "以下是 "+day) {
+			return m.Content, true
+		}
+	}
+	return "", false
+}
+
+// 历史里的「明天」要能被定位到具体哪一天，靠的是它写在哪条日界线下面。
+// 只有 gapNote 的话，模型得把那条消息到末尾的间隔逐段累加才知道过了几天。
+func TestDayBoundaryIsMarkedInHistory(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := session.NewStore(dir)
+	meta, _ := store.Create()
+	day1 := time.Now().Add(-48 * time.Hour)
+	day2 := time.Now().Add(-24 * time.Hour)
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "前天的问"}, TS: day1})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "前天的答"}, TS: day1.Add(time.Minute)})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "昨天的问"}, TS: day2})
+
+	provider := &mockProvider{turns: []mockTurn{{content: "答"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Run(context.Background(), meta.ID, "今天的问", func(Event) {})
+
+	msgs := provider.reqs[0].Messages
+	for _, d := range []string{day1.Format("2006-01-02"), day2.Format("2006-01-02")} {
+		if _, ok := dayMarkOf(msgs, d); !ok {
+			t.Errorf("缺 %s 的日界线:%s%+v", d, "\n", msgs)
+		}
+	}
+	// 日界线落在那天第一条消息上，不是随便哪一条
+	if got, _ := dayMarkOf(msgs, day2.Format("2006-01-02")); !strings.Contains(got, "昨天的问") {
+		t.Errorf("日界线该落在当天第一条消息上，实际 %q", got)
+	}
+	// 同一天只标一次
+	if n := strings.Count(joinContents(msgs), "以下是 "+day1.Format("2006-01-02")); n != 1 {
+		t.Errorf("同一天应只标一次，得到 %d 次", n)
+	}
+	// 标注只加在发出去的副本上
+	_, stored, _ := store.Get(meta.ID)
+	for _, m := range stored {
+		if strings.Contains(m.Content, "以下是 ") {
+			t.Errorf("日界线不该落盘: %q", m.Content)
+		}
+	}
+}
+
+func joinContents(msgs []llm.Message) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		b.WriteString(m.Content)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// 角色主动开口的那一轮，注入的提示是一次性输入、后续上下文里已被剔掉，
+// 那条助手消息前面没有用户消息可依附。此前它一点时间信号都没有——
+// 而「昨天说的明天」多半正是那么说出口的。
+func TestDayMarkStandsAloneBeforeAssistantMessage(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := session.NewStore(dir)
+	meta, _ := store.Create()
+	yesterday := time.Now().Add(-24 * time.Hour)
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "前天聊的"}, TS: yesterday.Add(-24 * time.Hour)})
+	// 心跳那一轮：一次性输入不进后续上下文，只剩助手自己说的这句
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "【心跳】"}, TS: yesterday, Kind: session.KindEphemeral})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "明天给你带菜"}, TS: yesterday.Add(time.Minute)})
+
+	provider := &mockProvider{turns: []mockTurn{{content: "答"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Run(context.Background(), meta.ID, "今天的问", func(Event) {})
+
+	msgs := provider.reqs[0].Messages
+	var idx = -1
+	for i, m := range msgs {
+		if m.Content == "明天给你带菜" {
+			idx = i
+		}
+	}
+	if idx < 1 {
+		t.Fatalf("没找到那条助手消息:%s%+v", "\n", msgs)
+	}
+	prev := msgs[idx-1]
+	if !strings.Contains(prev.Content, "以下是 "+yesterday.Format("2006-01-02")) {
+		t.Errorf("助手主动开口那条前面应单独插一条日界线，实际前一条是 %q", prev.Content)
+	}
+	if prev.Role != llm.RoleUser {
+		t.Errorf("插入的标注应是 user 角色（组装层会与相邻的 user 合并），实际 %q", prev.Role)
+	}
+}
+
+// 工具结果那几条中间插不得：Anthropic 侧连续的 user 消息会合并成一条，
+// tool_result block 必须排在最前，中间夹一段文字就把它们拆散了。
+// 跨零点的轮次因此要把日界线顺延到工具结果之后，而不是插在中间。
+func TestDayMarkNeverSplitsToolResults(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := session.NewStore(dir)
+	meta, _ := store.Create()
+	// 真正跨零点：昨天 23:50 发起，两个结果分别落在 23:55 与今天 00:05
+	n := time.Now()
+	mid := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.Local)
+	before := mid.Add(-10 * time.Minute)
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleUser, Content: "查一下"}, TS: before})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "c1", Name: "echo", Arguments: []byte("{}")},
+			{ID: "c2", Name: "echo", Arguments: []byte("{}")},
+		}}, TS: before})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleTool, Content: "结果一", ToolCallID: "c1"},
+		TS:      before.Add(5 * time.Minute)})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleTool, Content: "结果二", ToolCallID: "c2"},
+		TS:      mid.Add(5 * time.Minute)})
+	store.Append(meta.ID, session.StoredMessage{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "查到了"}, TS: mid.Add(5 * time.Minute)})
+
+	provider := &mockProvider{turns: []mockTurn{{content: "答"}}}
+	ag := New(provider, newTestManager(t), store, Options{Model: "test"})
+	ag.Run(context.Background(), meta.ID, "今天的问", func(Event) {})
+
+	msgs := provider.reqs[0].Messages
+	for i, m := range msgs {
+		if len(m.ToolCalls) > 0 && (i+1 >= len(msgs) || msgs[i+1].Role != llm.RoleTool) {
+			t.Fatalf("tool_use 之后必须紧跟 tool_result，实际第 %d 条之后是 %+v", i, msgs[i+1:])
+		}
+		// 两条工具结果之间不能夹任何东西
+		if m.Role == llm.RoleTool && m.ToolCallID == "c1" {
+			if i+1 >= len(msgs) || msgs[i+1].Role != llm.RoleTool {
+				t.Fatalf("日界线被插进了两条工具结果之间: %+v", msgs[i+1:])
+			}
+		}
+	}
+	// 顺延而不是丢掉：跨过零点的那一天仍要标出来，落点在工具结果之后
+	if _, ok := dayMarkOf(msgs, mid.Format("2006-01-02")); !ok {
+		t.Fatalf("被工具结果挡住的日界线应顺延，而不是丢掉:%s%+v", "\n", msgs)
+	}
+	for i, m := range msgs {
+		if m.Content == "查到了" && (i < 1 || !strings.Contains(msgs[i-1].Content, "以下是 "+mid.Format("2006-01-02"))) {
+			t.Errorf("顺延后的日界线该落在工具结果之后那条助手消息前，实际前一条是 %+v", msgs[i-1])
+		}
+	}
+}
