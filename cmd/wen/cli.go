@@ -61,6 +61,16 @@ func commands() []command {
 			run:     runStatus,
 		},
 		{
+			name:    "update",
+			usage:   "wen update [--check] [-y] [-c 配置文件]",
+			summary: "检查并安装新版本",
+			detail: "查 GitHub 上最新的正式版，把更新说明打出来。\n" +
+				"加 -y 才会真的下载、校验并替换当前程序文件；--check 只查不装。\n" +
+				"它不重启正在运行的服务——要一步到位地更新并重启，\n" +
+				"用设置页「程序维护 · 程序更新」里的那个按钮。",
+			run: runUpdate,
+		},
+		{
 			name:    "version",
 			usage:   "wen version",
 			summary: "打印版本号",

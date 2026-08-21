@@ -38,6 +38,7 @@ import (
 	"wen/internal/plugin/builtin/roleplay"
 	"wen/internal/plugin/builtin/scene"
 	"wen/internal/plugin/builtin/scheduler"
+	"wen/internal/plugin/builtin/selfupdate"
 	"wen/internal/plugin/builtin/sessionsearch"
 	"wen/internal/plugin/builtin/skills"
 	"wen/internal/plugin/builtin/stylewatch"
@@ -48,6 +49,7 @@ import (
 	"wen/internal/plugin/builtin/wechatbot"
 	"wen/internal/runlock"
 	"wen/internal/server"
+	"wen/internal/updater"
 	"wen/internal/version"
 )
 
@@ -67,7 +69,28 @@ func runServe(args []string) {
 		cfg.Server.Port = *port
 	}
 
-	rt, err := buildRuntime(cfg, runtimeOverrides{})
+	// 可执行文件的位置在这里就取好，不等到要重启时再问。
+	// Linux 上 /proc/self/exe 在文件被替换之后会变成「……(deleted)」，而自更新做的
+	// 正是替换这个文件——启动时取到的才是那个还能拿去 exec 的路径。
+	exePath, exeErr := updater.ExePath()
+	if exeErr != nil {
+		log.Printf("提示: 无法定位当前程序（%v），自更新与重启将不可用", exeErr)
+	}
+
+	// restartCh 传「换好新版了，可以重启」。缓冲 1 且非阻塞投递：重启只需要发生一次。
+	restartCh := make(chan string, 1)
+	var requestRestart func(reason string) error
+	if exeErr == nil {
+		requestRestart = func(reason string) error {
+			select {
+			case restartCh <- reason:
+			default: // 已经有一次在排队了，这一次直接算数
+			}
+			return nil
+		}
+	}
+
+	rt, err := buildRuntime(cfg, runtimeOverrides{Restart: requestRestart})
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
@@ -138,12 +161,45 @@ func runServe(args []string) {
 			log.Fatal(err)
 		}
 	}()
-	<-rootCtx.Done()
-	log.Printf("收到退出信号，正在关闭…")
+	var restartReason string
+	select {
+	case <-rootCtx.Done():
+		log.Printf("收到退出信号，正在关闭…")
+	case restartReason = <-restartCh:
+		log.Printf("%s：正在关闭当前实例…", restartReason)
+	}
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutCtx)
 	plugins.StopAll()
+
+	if restartReason != "" {
+		// 交棒之前必须先松开这两样：端口（Windows 上新进程要重新 bind 它）与
+		// 登记文件（新进程起来会重新登记）。顺序是硬的——Shutdown 已经关掉监听，
+		// 这里补上登记文件，然后才轮到新进程。
+		releaseLock()
+		relaunch(exePath)
+	}
+}
+
+// relaunch 用（已经被换成新版的）可执行文件接替当前进程。
+//
+// 两个平台的做法不同（见 updater.Relaunch）：Linux 与 macOS 上 execve 原地换掉进程
+// 映像，PID 不变；Windows 没有这一层，只能起新进程再让自己退出。失败不是致命的——
+// 程序文件已经是新版，人工启动一次就行，所以这里只报告，让日志说清现状。
+func relaunch(exePath string) {
+	if exePath == "" {
+		log.Printf("无法定位当前程序，未能自动重启。程序文件已是新版，手工启动即可。")
+		return
+	}
+	log.Printf("正在用新版程序重启：%s", exePath)
+	if err := updater.Relaunch(exePath, os.Args[1:]); err != nil {
+		log.Printf("自动重启失败: %v。程序文件已是新版，手工启动即可。", err)
+		return
+	}
+	if updater.RelaunchExits {
+		log.Printf("新版程序已启动，本进程退出。")
+	}
 }
 
 // authSummary 把访问控制的实际状态写成一行，供启动日志使用。
@@ -198,7 +254,7 @@ var needsSetupPlugins = map[string]bool{
 // 开关与配置的唯一来源是 <配置目录>/plugins.state.json（由设置页维护）；这里给出的只是
 // 首次安装、状态文件还不存在时的初值。
 // ictx 中的模型与会话能力在 Agent 建好之前就要传进来，全部是闭包延迟取值。
-func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Option) *plugin.Manager {
+func buildPlugins(cfg *config.Config, ictx plugin.InitContext, restart selfupdate.RestartFunc, opts ...plugin.Option) *plugin.Manager {
 	m := plugin.NewManager(ictx, filepath.Join(cfg.BaseDir, "plugins.state.json"), opts...)
 	// agenda 排「和谁」时只认人物库里的名字：people 的只读查询经构造函数交给它，
 	// 这是插件之间直接的 Go 依赖，不走核心机制（见 people.Lookup 的说明）
@@ -237,6 +293,9 @@ func buildPlugins(cfg *config.Config, ictx plugin.InitContext, opts ...plugin.Op
 		// 租户域，凭证互不通用，分成两个插件才能同时连两边
 		qqbot.New(), wechatbot.New(),
 		larkbot.NewFeishu(), larkbot.NewLark(), telegrambot.New(),
+		// self_update 排在最后：它不注入任何提示词，注册顺序对它只剩展示含义，
+		// 而「程序维护」这一节摆在设置页最下面也是对的——它与角色、记忆、通道都无关
+		selfupdate.New(selfupdate.Options{Restart: restart}),
 	}
 	for _, p := range builtins {
 		// Config 留空：插件自己声明的默认值就是初值，不需要在这里重复一遍

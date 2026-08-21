@@ -877,6 +877,11 @@ body {
 /* 插件操作弹窗：图片（如二维码）居中，说明文字在下 */
 .plugin-action-body { align-items: center; text-align: center; }
 .plugin-action-image { max-width: 260px; max-height: 260px; border-radius: 8px; background: #fff; padding: 8px; }
+/* 没有图片的操作（纯文本结果）：这里必须真的把 img 藏掉。样式表里没有全局的
+   .hidden 规则，光加类不生效——留下的是一个没有 src 的 img，浏览器给它画一个
+   16×16 的占位方块，看起来就是文字上方莫名多了个小点 */
+.plugin-action-image.hidden { display: none; }
+.plugin-config-action .field-desc.hidden { display: none; }
 .plugin-action-message { font-size: 13px; color: var(--text); white-space: pre-wrap; }
 .plugin-action-message.action-error { color: var(--danger, #d33); }
 /* 没有图片时结果是纯文本（如技能清单）：居中的多行列表读起来是乱的，改左对齐 */

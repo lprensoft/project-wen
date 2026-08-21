@@ -34,6 +34,10 @@ type runtimeOverrides struct {
 	SessionDir string
 	// PluginOpts 透传给插件管理器：改写插件持久化目录、压住某些插件不启用等。
 	PluginOpts []plugin.Option
+	// Restart 用新版程序重启服务，交给自更新插件在替换完成后调用。
+	// 为 nil 表示这个装配形态下重启不可用（评测就是），插件据此降级为
+	// 「更新完成，重启后生效」。
+	Restart func(reason string) error
 }
 
 // buildRuntime 按配置把各层装配起来。
@@ -127,7 +131,7 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 			return info, nil
 		},
 	}
-	plugins = buildPlugins(cfg, ictx, ov.PluginOpts...)
+	plugins = buildPlugins(cfg, ictx, ov.Restart, ov.PluginOpts...)
 
 	// 模型配置：config.yaml 提供初始值，界面上的改动存 models.json 并优先生效
 	models, err = modelcfg.NewStore(filepath.Join(cfg.BaseDir, "models.json"), cfg)
