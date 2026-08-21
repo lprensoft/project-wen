@@ -106,7 +106,9 @@ jobs:
             GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "$ldflags" -o "$work/$binary" ./cmd/wen
 
             # 只给二进制的话，用户拿到手不知道配置从哪来
-            cp config.example.yaml README.md CHANGELOG.md LICENSE "$work/"
+            cp config.example.yaml README.md README.en.md CHANGELOG.md LICENSE "$work/"
+            # README 里的细节都在 docs/，不一并打包的话包里的链接全是死的
+            cp -r docs "$work/"
 
             if [ "$goos" = "windows" ]; then
               (cd build && zip -qr "../dist/${name}.zip" "$name")
