@@ -410,6 +410,7 @@ func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 		"事实：关于对方及其处境的、不易重新得知的信息",
 		"踩坑：已经验证过的失败原因与正确做法",
 		"经历：自己做过、遇到过的事",
+		"边界：任何一方明确表达过的不愿意与坚持",
 	}
 	for _, d := range defs {
 		if !strings.Contains(extractPrompt, d) {
@@ -430,12 +431,68 @@ func TestExtractPromptCriteriaMatchesPromptGuide(t *testing.T) {
 	if !strings.Contains(extractPrompt, agendaRule) || !strings.Contains(promptGuide, agendaRule) {
 		t.Errorf("「单次安排归日程」的判据应在两份提示词里措辞一致")
 	}
+	// 「边界」与「经历」的分界两边都要写出来：一次拒绝完全符合「自己遇到过的事」，
+	// 不写分界就会被前一类吸走，连带按生活片段淡忘掉。
+	const border = "自己表达的边界归这一类，不归「经历」"
+	if !strings.Contains(extractPrompt, border) || !strings.Contains(promptGuide, border) {
+		t.Error("「边界」与「经历」的分界应在两份提示词里措辞一致")
+	}
 	// 旧的纯工程窄措辞不得回归
 	for _, bad := range []string{"工作方式或表达方式要求", "项目或协作上确定下来"} {
 		if strings.Contains(extractPrompt, bad) {
 			t.Errorf("extractPrompt 仍含纯工程窄判据 %q", bad)
 		}
 	}
+}
+
+// 「边界」排在 Types 末尾：索引经 TurnPrompt 每轮重发，新类插在中间会让既有分组
+// 整体重排，等于让提示词前缀作废一次。
+func TestBoundaryTypeSortsLast(t *testing.T) {
+	if got := Types[len(Types)-1]; got != typeBoundary {
+		t.Errorf("Types 末位 = %q, want %q", got, typeBoundary)
+	}
+	for _, s := range []string{listSchema(), saveSchema(t)} {
+		if !strings.Contains(s, typeBoundary) {
+			t.Errorf("工具 schema 的分类取值缺「%s」：%s", typeBoundary, s)
+		}
+	}
+}
+
+// 自动提炼路径强制边界类不淡忘：立场的改变要有来由、由修订承载，不能由 decay
+// 无声发生。其余分类照旧听模型的。
+func TestBoundaryTypeNeverDecaysOnExtract(t *testing.T) {
+	c := &fakeComplete{replies: []string{
+		`[{"name":"不聊他前任","description":"他明确说过不想聊这件事","type":"边界",` +
+			`"content":"他说提起前任会不舒服，请不要再问。","decay":true},` +
+			`{"name":"这周在搬家","description":"最近忙着搬家","type":"经历",` +
+			`"content":"周末两天都在搬东西。","decay":true}]`,
+	}}
+	p := newPluginWithComplete(t, c, map[string]any{"decay": true})
+
+	if _, err := p.OnCompact(context.Background(), plugin.CompactEvent{History: sampleHistory()}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"不聊他前任": false, "这周在搬家": true}
+	for name, wantDecay := range want {
+		e, err := p.snapshot().store.Get(name)
+		if err != nil {
+			t.Fatalf("%s 应已落盘：%v", name, err)
+		}
+		if e.Decay != wantDecay {
+			t.Errorf("%s 的 Decay = %v, want %v", name, e.Decay, wantDecay)
+		}
+	}
+	if !strings.Contains(c.prompts[0], "边界类一律填 false") {
+		t.Error("淡忘引导应说明边界类不标淡忘")
+	}
+}
+
+// listSchema / saveSchema 取两个工具的参数表原文，用来核对分类取值。
+func listSchema() string { return string((&listTool{}).Schema()) }
+
+func saveSchema(t *testing.T) string {
+	t.Helper()
+	return string((&saveTool{p: newPluginWithComplete(t, nil, nil)}).Schema())
 }
 
 // 「经历」是第五类：角色自己做过、遇到过的事。两条路径都得认得它——工具能存，
