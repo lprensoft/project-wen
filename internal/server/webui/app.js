@@ -348,6 +348,9 @@ loadModelSwitcher();
 marked.setOptions({ gfm: true, breaks: true });
 
 function renderMarkdown(el, text) {
+  // md-body 是 markdown 正文的共用排版类（标题、列表、代码块、表格）。
+  // 聊天气泡与插件操作弹窗都靠它，样式只有一份。
+  el.classList.add("md-body");
   el.innerHTML = DOMPurify.sanitize(marked.parse(text || ""));
   for (const a of el.querySelectorAll("a")) {
     a.target = "_blank";
@@ -1321,7 +1324,15 @@ const actionMessageEl = $("#plugin-action-message");
 let actionPollTimer = null;
 
 function renderActionState(st) {
-  actionMessageEl.textContent = st.message || "";
+  // 是不是 markdown 由插件声明（见 plugin.ActionState.Markdown），界面不去猜：
+  // 绝大多数操作给的是纯文本，拿 markdown 解析它们，正文里的 * 会变强调、
+  // 四个空格会变代码块。默认这一支与从前完全一致。
+  if (st.markdown) {
+    renderMarkdown(actionMessageEl, st.message || "");
+  } else {
+    actionMessageEl.classList.remove("md-body");
+    actionMessageEl.textContent = st.message || "";
+  }
   if (st.image) {
     actionImageEl.src = "data:image/png;base64," + st.image;
     actionImageEl.classList.remove("hidden");
@@ -1361,6 +1372,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
   // 的重启时间给，超过了才当作真的断了。
   let misses = 0;
   let lastMessage = "";
+  let lastMarkdown = false;
   const maxMisses = 20; // × 1.5 秒 ≈ 30 秒
   const poll = async () => {
     try {
@@ -1378,6 +1390,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       const st = await res.json();
       misses = 0;
       lastMessage = st.message || "";
+      lastMarkdown = !!st.markdown;
       renderActionState(st);
       if (st.status === "done" || st.status === "error") {
         actionPollTimer = null;
@@ -1399,6 +1412,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       // 否则重试二十次就会堆出二十行同样的话
       renderActionState({
         status: "pending",
+        markdown: lastMarkdown, // 重连提示不该把已经渲染好的正文打回纯文本
         message: (lastMessage ? lastMessage + "\n\n" : "") + "（与服务的连接中断，正在重试…）",
       });
     }

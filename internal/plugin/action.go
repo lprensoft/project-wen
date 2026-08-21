@@ -27,7 +27,16 @@ const (
 type ActionState struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"` // 人类可读的进展或结果说明
-	Image   []byte `json:"image,omitempty"`   // 可选 PNG，界面渲染为 data URI
+	// Markdown 声明 Message 是 markdown，界面按 markdown 渲染它。
+	//
+	// 由产出方声明而不是由界面去猜：绝大多数操作给的是纯文本（一行结论、一份清单），
+	// 拿 markdown 去解析它们，正文里的 * 或 _ 就会变成强调、四个空格会变成代码块。
+	// 只有自己知道「我这段正文来自别处的 markdown」的插件才该打开它——程序更新那段
+	// 更新说明取自 GitHub 的发布正文，是现成的 markdown。
+	//
+	// 零值是纯文本，既有实现不受影响。
+	Markdown bool   `json:"markdown,omitempty"`
+	Image    []byte `json:"image,omitempty"` // 可选 PNG，界面渲染为 data URI
 	// Link 是操作涉及的一个链接原文（如编码进二维码的 URL）。图形界面用 Image，
 	// 终端界面拿它自行渲染（如字符二维码）——同一内容的两种呈现。
 	Link string `json:"link,omitempty"`

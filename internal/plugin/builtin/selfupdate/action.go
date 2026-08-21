@@ -111,7 +111,10 @@ func (p *Plugin) run(seq uint64, install bool, s snapshot) {
 	}
 	if !install {
 		// 第一次点：只报告。按钮文案随之变成「更新到 vX 并重启」，再点才装。
-		p.finish(seq, plugin.ActionState{Status: plugin.ActionDone, Message: foundMessage(rel)})
+		// 这一条里嵌着 GitHub 的发布正文，本来就是 markdown，交给界面按 markdown 渲染。
+		p.finish(seq, plugin.ActionState{
+			Status: plugin.ActionDone, Message: foundMessage(rel), Markdown: true,
+		})
 		return
 	}
 	p.install(ctx, seq, s, rel)

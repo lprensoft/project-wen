@@ -81,12 +81,12 @@ body {
 *::-webkit-scrollbar-corner { background-color: transparent; }
 
 /* 代码块两个主题下都是深色底，跟随主题的深色滑块在浅色主题里会看不见 */
-.bubble.md pre::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.22); }
-.bubble.md pre::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.38); }
+.md-body pre::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.22); }
+.md-body pre::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.38); }
 
 @supports not selector(::-webkit-scrollbar) {
   * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
-  .bubble.md pre { scrollbar-color: rgba(255, 255, 255, 0.22) transparent; }
+  .md-body pre { scrollbar-color: rgba(255, 255, 255, 0.22) transparent; }
 }
 
 .app { display: flex; height: 100vh; }
@@ -290,23 +290,23 @@ body {
 .msg.assistant .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 
 /* ---------- Markdown 内容（助手气泡） ---------- */
-.bubble.md { white-space: normal; }
+.md-body { white-space: normal; }
 
-.bubble.md > *:first-child { margin-top: 0; }
-.bubble.md > *:last-child { margin-bottom: 0; }
+.md-body > *:first-child { margin-top: 0; }
+.md-body > *:last-child { margin-bottom: 0; }
 
-.bubble.md p { margin: 0 0 8px; }
+.md-body p { margin: 0 0 8px; }
 
-.bubble.md h1, .bubble.md h2, .bubble.md h3, .bubble.md h4 {
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
   margin: 14px 0 6px;
   line-height: 1.4;
 }
-.bubble.md h1 { font-size: 18px; }
-.bubble.md h2 { font-size: 16px; }
-.bubble.md h3 { font-size: 15px; }
-.bubble.md h4 { font-size: 14px; }
+.md-body h1 { font-size: 18px; }
+.md-body h2 { font-size: 16px; }
+.md-body h3 { font-size: 15px; }
+.md-body h4 { font-size: 14px; }
 
-.bubble.md code {
+.md-body code {
   font-family: Consolas, "Courier New", monospace;
   font-size: 12.5px;
   background: var(--code-bg);
@@ -314,7 +314,7 @@ body {
   border-radius: 4px;
 }
 
-.bubble.md pre {
+.md-body pre {
   background: var(--pre-bg);
   color: var(--pre-text);
   padding: 10px 14px;
@@ -323,24 +323,24 @@ body {
   margin: 8px 0;
   line-height: 1.55;
 }
-.bubble.md pre code {
+.md-body pre code {
   background: none;
   padding: 0;
   color: inherit;
 }
 
-.bubble.md ul, .bubble.md ol { margin: 4px 0 8px; padding-left: 22px; }
-.bubble.md li { margin: 2px 0; }
-.bubble.md li > p { margin: 0; }
+.md-body ul, .md-body ol { margin: 4px 0 8px; padding-left: 22px; }
+.md-body li { margin: 2px 0; }
+.md-body li > p { margin: 0; }
 
-.bubble.md blockquote {
+.md-body blockquote {
   border-left: 3px solid var(--border);
   padding: 2px 0 2px 10px;
   margin: 8px 0;
   color: var(--text-dim);
 }
 
-.bubble.md table {
+.md-body table {
   border-collapse: collapse;
   margin: 8px 0;
   display: block;
@@ -348,16 +348,16 @@ body {
   overflow-x: auto;
   font-size: 13px;
 }
-.bubble.md th, .bubble.md td {
+.md-body th, .md-body td {
   border: 1px solid var(--border);
   padding: 5px 10px;
   text-align: left;
 }
-.bubble.md th { background: var(--tool-bg); }
+.md-body th { background: var(--tool-bg); }
 
-.bubble.md a { color: var(--accent); }
-.bubble.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-.bubble.md img { max-width: 100%; border-radius: 6px; }
+.md-body a { color: var(--accent); }
+.md-body hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md-body img { max-width: 100%; border-radius: 6px; }
 
 .msg.assistant .bubble.streaming::after {
   content: "▍";
@@ -874,7 +874,12 @@ body {
 /* 说明里可能带目录路径：换行要保留，长路径要能断开而不是把弹窗撑宽 */
 .plugin-config-action .field-desc { white-space: pre-line; overflow-wrap: anywhere; }
 
-/* 插件操作弹窗：图片（如二维码）居中，说明文字在下 */
+/* 插件操作弹窗：图片（如二维码）居中，说明文字在下。
+   单独压一个高度上限：这个弹窗的正文可长可短（一行结论、一份技能清单、
+   一整段更新说明），只靠 .modal 的 max-height: 100% 的话，长正文会把弹窗撑到
+   贴着屏幕上下边——能滚，但整屏都被它占住。压到七成屏高，超出的部分在
+   .modal-body 里滚动。 */
+#plugin-action-modal .modal { max-height: min(100%, 70vh); }
 .plugin-action-body { align-items: center; text-align: center; }
 .plugin-action-image { max-width: 260px; max-height: 260px; border-radius: 8px; background: #fff; padding: 8px; }
 /* 没有图片的操作（纯文本结果）：这里必须真的把 img 藏掉。样式表里没有全局的
@@ -883,6 +888,11 @@ body {
 .plugin-action-image.hidden { display: none; }
 .plugin-config-action .field-desc.hidden { display: none; }
 .plugin-action-message { font-size: 13px; color: var(--text); white-space: pre-wrap; }
+/* 按 markdown 渲染的正文（如更新说明）：排版交给与聊天区同一套 .md-body 规则，
+   pre-wrap 要让位——段落与换行已经由 <p> / <br> 表达，再叠一层保留空白，
+   段间的空行会翻倍。这条得写在这里而不是靠 .md-body 自己那句 white-space: normal：
+   两者特指度相同，而 .plugin-action-message 在后面，会赢。 */
+.plugin-action-message.md-body { white-space: normal; text-align: left; }
 .plugin-action-message.action-error { color: var(--danger, #d33); }
 /* 没有图片时结果是纯文本（如技能清单）：居中的多行列表读起来是乱的，改左对齐 */
 .plugin-action-image.hidden + .plugin-action-message {
