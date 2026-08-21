@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 
 	"wen/internal/config"
@@ -85,12 +86,14 @@ type onlineBackend struct {
 }
 
 func (b *onlineBackend) mode() string {
-	return fmt.Sprintf("在线（服务运行于 %s，改动立即生效）", b.addr)
+	return trf("cli.mode.online", "在线（服务运行于 %s，改动立即生效）", b.addr)
 }
 
 func (b *onlineBackend) listPlugins() ([]plugin.Status, error) {
 	var out []plugin.Status
-	err := b.c.get("/api/plugins", &out)
+	// 语言随请求带过去：服务端不记任何人的语言，同一个服务可能同时连着
+	// 一个中文浏览器和一个英文的 wen config。
+	err := b.c.get("/api/plugins?lang="+url.QueryEscape(uiLang), &out)
 	return out, err
 }
 
@@ -172,11 +175,13 @@ func newOfflineBackend(cfg *config.Config) (*offlineBackend, error) {
 }
 
 func (b *offlineBackend) mode() string {
-	return "离线（服务未运行，改动在下次启动时生效）"
+	return tr("cli.mode.offline", "离线（服务未运行，改动在下次启动时生效）")
 }
 
 func (b *offlineBackend) listPlugins() ([]plugin.Status, error) {
-	return b.plugins.List(), nil
+	// 离线模式下没有服务端，翻译就在本进程里做——这也是本地化必须是一次
+	// 普通的库调用、而不是 HTTP 层某个中间件的原因。
+	return plugin.Localize(uiLang, b.plugins.List()), nil
 }
 
 func (b *offlineBackend) setPluginEnabled(name string, on bool) error {

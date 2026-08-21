@@ -13,6 +13,13 @@ window.fetch = async (input, init) => {
 };
 
 const $ = (sel) => document.querySelector(sel);
+
+// 插件的名称、说明与配置项文字由服务端下发，当前语言随请求带过去。服务端不记
+// 任何人的语言：同一个服务可能同时连着一个中文浏览器和一个英文的 wen config，
+// 谁后到谁就会改掉先到的人的界面。
+function withLang(url) {
+  return url + (url.includes("?") ? "&" : "?") + "lang=" + encodeURIComponent(I18N.lang);
+}
 const messagesEl = $("#messages");
 const sessionListEl = $("#session-list");
 const inputEl = $("#input");
@@ -1118,9 +1125,9 @@ async function openSettings() {
 
 async function loadSettingsPlugins() {
   try {
-    renderSettingsPlugins(await fetch("/api/plugins").then((r) => r.json()));
+    renderSettingsPlugins(await fetch(withLang("/api/plugins")).then((r) => r.json()));
   } catch (e) {
-    settingsPluginsEl.textContent = t("plugins.loadFailed", { msg: e.message });
+    settingsPluginsEl.textContent = t("settings.plugins.loadFailed", { msg: e.message });
   }
 }
 
@@ -1216,7 +1223,7 @@ function closeSettings() {
 }
 
 // 与 internal/plugin 的 SourceBuiltin / SourceExternal 对应
-const SOURCE_LABEL_KEYS = { builtin: "plugins.source.builtin", external: "plugins.source.external" };
+const SOURCE_LABEL_KEYS = { builtin: "settings.plugins.source.builtin", external: "settings.plugins.source.external" };
 
 // 按功能分组分节展示：组间与组内都保持注册顺序（分组名随每个插件由后端给出），
 // 未声明分组的插件（如外源插件）由后端归入「其他」，自然落在最后。
@@ -1225,22 +1232,22 @@ function renderSettingsPlugins(list) {
   const order = [];
   const byCat = new Map();
   for (const p of list) {
-    // 分组名由后端给出（未声明的插件后端已归入「其他」），属于服务端文案，
-    // 这一句只是后端漏发时的兜底，跟着它的措辞走。
-    const cat = p.category || "其他";
-    if (!byCat.has(cat)) {
-      byCat.set(cat, []);
-      order.push(cat);
+    // 按稳定标识分组、按译名展示：分组的展示名会随界面语言变，拿它当身份的话，
+    // 同一组会因为译名不同而裂成两组。后端未声明分组的插件已被归进 other。
+    const key = p.category_key || "other";
+    if (!byCat.has(key)) {
+      byCat.set(key, { label: p.category || key, items: [] });
+      order.push(key);
     }
-    byCat.get(cat).push(p);
+    byCat.get(key).items.push(p);
   }
   for (const cat of order) {
     const title = document.createElement("div");
     title.className = "plugin-group-title";
-    title.textContent = cat;
+    title.textContent = byCat.get(cat).label;
     const grid = document.createElement("div");
     grid.className = "plugin-grid";
-    for (const p of byCat.get(cat)) grid.appendChild(buildPluginCard(p));
+    for (const p of byCat.get(cat).items) grid.appendChild(buildPluginCard(p));
     settingsPluginsEl.append(title, grid);
   }
 }
@@ -1271,7 +1278,7 @@ function buildPluginCard(p) {
     const gear = document.createElement("button");
     gear.type = "button";
     gear.className = "btn-icon btn-square btn-gear";
-    gear.title = t("plugins.configure");
+    gear.title = t("settings.plugins.configure");
     gear.innerHTML = gearIconSVG;
     gear.addEventListener("click", () => openPluginConfig(p));
     actions.appendChild(gear);
@@ -1290,30 +1297,30 @@ function buildPluginCard(p) {
   };
   addTag(SOURCE_LABEL_KEYS[p.source]
     ? t(SOURCE_LABEL_KEYS[p.source])
-    : p.source || t("plugins.source.builtin"), "tag-source");
-  if (p.has_prompt) addTag(t("plugins.hasPrompt"));
+    : p.source || t("settings.plugins.source.builtin"), "tag-source");
+  if (p.has_prompt) addTag(t("settings.plugins.hasPrompt"));
 
   // 依赖未满足时不让开：后端也会拒绝，这里只是别让用户白点一次
   const unmet = p.unmet || [];
   if (unmet.length > 0) {
-    addTag(t("plugins.blocked", { names: I18N.list(unmet) }), "tag-blocked");
+    addTag(t("settings.plugins.blocked", { names: I18N.list(unmet) }), "tag-blocked");
     input.disabled = true;
-    label.title = t("plugins.blockedTitle", { names: I18N.list(unmet) });
+    label.title = t("settings.plugins.blockedTitle", { names: I18N.list(unmet) });
     card.classList.add("plugin-card-blocked");
   } else if ((p.requires || []).length > 0) {
-    addTag(t("plugins.requires", { names: I18N.list(p.requires) }));
+    addTag(t("settings.plugins.requires", { names: I18N.list(p.requires) }));
   }
   // 冲突只告警不阻止：能力相抵的代价由用户自己权衡
   const conflicting = p.conflicting || [];
   if (p.enabled && conflicting.length > 0) {
-    addTag(t("plugins.conflicts", { names: I18N.list(conflicting) }), "tag-warn");
+    addTag(t("settings.plugins.conflicts", { names: I18N.list(conflicting) }), "tag-warn");
   }
   card.appendChild(tags);
 
   // 工具名不再逐个占一个标签（数量多时会把版面撑乱），改为悬停查看
   const tools = p.tool_names || [];
   if (tools.length > 0) {
-    card.title = t("plugins.tools", { names: I18N.list(tools) });
+    card.title = t("settings.plugins.tools", { names: I18N.list(tools) });
   }
 
   const desc = document.createElement("div");
@@ -1325,7 +1332,7 @@ function buildPluginCard(p) {
     const want = input.checked;
     input.disabled = true;
     try {
-      const res = await fetch("/api/plugins/" + encodeURIComponent(p.name), {
+      const res = await fetch(withLang("/api/plugins/" + encodeURIComponent(p.name)), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: want }),
@@ -1338,7 +1345,7 @@ function buildPluginCard(p) {
     } catch (e) {
       input.checked = !want; // 失败回滚开关状态
       input.disabled = false;
-      addError(t("plugins.toggleFailed", { msg: e.message }));
+      addError(t("settings.plugins.toggleFailed", { msg: e.message }));
     }
   });
 
@@ -1391,7 +1398,7 @@ function renderActionState(st) {
 // 能验证还没保存的配置。
 async function startPluginAction(pluginName, actionDef, draft) {
   actionTitleEl.textContent = pluginName + " · " + actionDef.label;
-  renderActionState({ message: t("plugins.actionStarting") });
+  renderActionState({ message: t("settings.plugins.actionStarting") });
   actionModal.classList.remove("hidden");
   const url =
     "/api/plugins/" + encodeURIComponent(pluginName) +
@@ -1407,7 +1414,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       throw new Error(err.error || "HTTP " + res.status);
     }
   } catch (e) {
-    renderActionState({ status: "error", message: t("plugins.actionStartFailed", { msg: e.message }) });
+    renderActionState({ status: "error", message: t("settings.plugins.actionStartFailed", { msg: e.message }) });
     return;
   }
   // 连不上时不立刻判死：有的操作会把服务重启掉（程序更新就是），那期间这里必然
@@ -1422,7 +1429,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       const res = await fetch(url);
       if (res.status === 401) {
         // 服务重启会让登录会话失效（令牌只在内存里），远程访问时会走到这里
-        renderActionState({ status: "error", message: t("plugins.actionExpired") });
+        renderActionState({ status: "error", message: t("settings.plugins.actionExpired") });
         actionPollTimer = null;
         return;
       }
@@ -1447,7 +1454,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
     } catch (e) {
       misses += 1;
       if (misses > maxMisses) {
-        renderActionState({ status: "error", message: t("plugins.actionPollFailed", { msg: e.message }) });
+        renderActionState({ status: "error", message: t("settings.plugins.actionPollFailed", { msg: e.message }) });
         actionPollTimer = null;
         return;
       }
@@ -1456,7 +1463,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       renderActionState({
         status: "pending",
         markdown: lastMarkdown, // 重连提示不该把已经渲染好的正文打回纯文本
-        message: (lastMessage ? lastMessage + "\n\n" : "") + t("plugins.actionRetrying"),
+        message: (lastMessage ? lastMessage + "\n\n" : "") + t("settings.plugins.actionRetrying"),
       });
     }
     actionPollTimer = setTimeout(poll, 1500);
@@ -1498,7 +1505,7 @@ let configActionEls = new Map(); // 操作 key -> {btn, desc}，操作结束后�
 function openPluginConfig(p) {
   configPlugin = p;
   configInputs = new Map();
-  configTitleEl.textContent = t("plugins.configTitle", { name: p.name });
+  configTitleEl.textContent = t("settings.plugins.configTitle", { name: p.name });
   configFormEl.textContent = "";
   showConfigError("");
   const fields = p.config_fields || [];
@@ -1545,7 +1552,7 @@ function openPluginConfig(p) {
 async function refreshOpenPluginActions(name) {
   if (!configPlugin || configPlugin.name !== name) return;
   try {
-    const list = await fetch("/api/plugins").then((r) => r.json());
+    const list = await fetch(withLang("/api/plugins")).then((r) => r.json());
     const fresh = (list || []).find((p) => p.name === name);
     if (!fresh || !configPlugin || configPlugin.name !== name) return;
     configPlugin.actions = fresh.actions || [];
@@ -1630,9 +1637,9 @@ function buildConfigField(f, value) {
 
 function rangeHint(f) {
   if (f.type !== "int") return "";
-  if (f.min !== undefined && f.max !== undefined) return t("plugins.range", { min: f.min, max: f.max });
-  if (f.min !== undefined) return t("plugins.min", { min: f.min });
-  if (f.max !== undefined) return t("plugins.max", { max: f.max });
+  if (f.min !== undefined && f.max !== undefined) return t("settings.plugins.range", { min: f.min, max: f.max });
+  if (f.min !== undefined) return t("settings.plugins.min", { min: f.min });
+  if (f.max !== undefined) return t("settings.plugins.max", { max: f.max });
   return "";
 }
 
@@ -1665,7 +1672,7 @@ async function savePluginConfig() {
   const name = configPlugin.name;
   configSaveBtn.disabled = true;
   try {
-    const res = await fetch("/api/plugins/" + encodeURIComponent(name) + "/config", {
+    const res = await fetch(withLang("/api/plugins/" + encodeURIComponent(name) + "/config"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ config: readConfigValues() }),
@@ -1677,7 +1684,7 @@ async function savePluginConfig() {
     renderSettingsPlugins(await res.json());
     closePluginConfig();
   } catch (e) {
-    showConfigError(t("plugins.saveFailed", { msg: e.message }));
+    showConfigError(t("settings.plugins.saveFailed", { msg: e.message }));
   } finally {
     configSaveBtn.disabled = false;
   }

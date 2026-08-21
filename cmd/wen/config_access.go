@@ -19,21 +19,21 @@ func accessSection(b backend) error {
 
 		opts := []huh.Option[string]{}
 		if st.EnvManaged {
-			opts = append(opts, huh.NewOption("（口令由环境变量提供，此处不可修改）", back))
+			opts = append(opts, huh.NewOption(tr("cli.access.envManaged", "（口令由环境变量提供，此处不可修改）"), back))
 		} else if st.HasPassword {
 			opts = append(opts,
-				huh.NewOption("修改口令", "set"),
-				huh.NewOption("清除口令", "clear"),
+				huh.NewOption(tr("cli.access.change", "修改口令"), "set"),
+				huh.NewOption(tr("cli.access.clear", "清除口令"), "clear"),
 			)
 		} else {
-			opts = append(opts, huh.NewOption("设置口令", "set"))
+			opts = append(opts, huh.NewOption(tr("cli.access.set", "设置口令"), "set"))
 		}
-		opts = append(opts, huh.NewOption("← 返回", back))
+		opts = append(opts, huh.NewOption(tr("cli.back", "← 返回"), back))
 
 		choice := opts[0].Value // 光标停在第一项，见 topMenu 的说明
 		if err := run(huh.NewSelect[string]().
-			Title("访问控制").
-			Description(fitLines(describeAuth(st) + "\n口令存于 <配置目录>/auth.json，不写入 config.yaml。")).
+			Title(tr("cli.access.title", "访问控制")).
+			Description(fitLines(describeAuth(st) + "\n" + tr("cli.access.where", "口令存于 <配置目录>/auth.json，不写入 config.yaml。"))).
 			Options(opts...).
 			Value(&choice)); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {
@@ -53,16 +53,16 @@ func accessSection(b backend) error {
 				note("× %v", err)
 				continue
 			}
-			note("✓ 口令已保存")
+			note(tr("cli.access.saved", "✓ 口令已保存"))
 			if !st.Exposed {
-				note("  当前只监听本机；要对外提供服务，把 config.yaml 的 server.host 改成 0.0.0.0 后重启。")
+				note(tr("cli.access.loopbackHint", "  当前只监听本机；要对外提供服务，把 config.yaml 的 server.host 改成 0.0.0.0 后重启。"))
 			}
 		case "clear":
 			if err := b.changePassword(askCurrent(), ""); err != nil {
 				note("× %v", err)
 				continue
 			}
-			note("✓ 口令已清除，此后只能本机访问")
+			note(tr("cli.access.cleared", "✓ 口令已清除，此后只能本机访问"))
 		}
 	}
 }
@@ -72,17 +72,17 @@ func setPasswordForm(b backend, needCurrent bool) error {
 
 	fields := []huh.Field{}
 	if needCurrent {
-		fields = append(fields, huh.NewInput().Title("当前口令").
+		fields = append(fields, huh.NewInput().Title(tr("cli.access.currentPwd", "当前口令")).
 			EchoMode(huh.EchoModePassword).Value(&current))
 	}
 	fields = append(fields,
-		huh.NewInput().Title("新口令").Description("至少 8 位").
+		huh.NewInput().Title(tr("cli.access.newPwd", "新口令")).Description(tr("cli.access.minLen", "至少 8 位")).
 			EchoMode(huh.EchoModePassword).Value(&next),
-		huh.NewInput().Title("确认新口令").
+		huh.NewInput().Title(tr("cli.access.confirmPwd", "确认新口令")).
 			EchoMode(huh.EchoModePassword).Value(&confirm).
 			Validate(func(s string) error {
 				if s != next {
-					return errors.New("两次输入不一致")
+					return errors.New(tr("cli.access.mismatch", "两次输入不一致"))
 				}
 				return nil
 			}),
@@ -97,7 +97,7 @@ func setPasswordForm(b backend, needCurrent bool) error {
 // 取不到就交空串，让 Change 去拒绝——校验只应有一处。
 func askCurrent() string {
 	var s string
-	if err := run(huh.NewInput().Title("当前口令").
+	if err := run(huh.NewInput().Title(tr("cli.access.currentPwd", "当前口令")).
 		EchoMode(huh.EchoModePassword).Value(&s)); err != nil {
 		return ""
 	}

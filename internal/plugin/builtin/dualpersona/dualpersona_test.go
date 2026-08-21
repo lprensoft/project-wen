@@ -442,8 +442,14 @@ func TestChannelOptionsListAllDeclaredChannels(t *testing.T) {
 		t.Fatalf("已声明的通道应出现在候选里：%+v", opts)
 	}
 	// 没启动的通道要标出来，否则选了个连不上的看不出问题
-	if !strings.Contains(found.Label, "未启用") {
-		t.Errorf("未启动的通道应标注出来，得到 %q", found.Label)
+	if !found.Unavailable {
+		t.Errorf("未启用的通道应当标记 Unavailable，得到 %+v", *found)
+	}
+	// 那句「未启用」由翻译层缀上（它得跟着界面语言走），这里连带验一下
+	if got := plugin.Localize("zh", []plugin.Status{{
+		ConfigFields: []plugin.ConfigField{{Key: "k", Options: []plugin.ConfigOption{*found}}},
+	}})[0].ConfigFields[0].Options[0].Label; !strings.Contains(got, "未启用") {
+		t.Errorf("翻译层应把「未启用」缀上，得到 %q", got)
 	}
 }
 

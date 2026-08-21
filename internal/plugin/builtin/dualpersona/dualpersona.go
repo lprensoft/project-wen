@@ -200,18 +200,14 @@ func (p *Plugin) route(sessionID string) string {
 	return s.outerChannel
 }
 
-// channelOptions 列出全部已声明的 IM 通道，未启用的在文案里标出来。
+// channelOptions 列出全部已声明的 IM 通道，未启用的标出来（那句「未启用」由翻译层缀上，见 plugin.Localize）。
 //
 // 候选取「已声明」而非「已启用」：单选框的取值一旦不在候选里，整份配置就保存不了，
 // 那样临时关掉一条通道会连带让这里的配置失效。
 func channelOptions() []plugin.ConfigOption {
 	opts := []plugin.ConfigOption{{Value: "", Label: "不指定（按原路回复）"}}
 	for _, ch := range imbot.Channels() {
-		label := ch.Label
-		if !ch.Live {
-			label += "（未启用）"
-		}
-		opts = append(opts, plugin.ConfigOption{Value: ch.Name, Label: label})
+		opts = append(opts, plugin.ConfigOption{Value: ch.Name, Label: ch.Label, Unavailable: !ch.Live})
 	}
 	return opts
 }

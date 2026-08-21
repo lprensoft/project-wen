@@ -1,0 +1,151 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"sort"
+	"testing"
+
+	"wen/internal/config"
+	"wen/internal/i18n"
+	"wen/internal/plugin"
+)
+
+// 插件元数据的翻译键从插件自己的声明推出来，没有一份手写的清单——那也意味着
+// 「哪些键还没翻」只能靠跑一遍才知道。这个测试就是那一遍：它把全部内置插件建
+// 起来（不初始化，只读声明），推出全部键，与语言包逐一对照。
+//
+// 漏译不会让程序出错，只会让英文界面上冒出一行中文，而那种缺陷肉眼极难发现——
+// 二十八张卡片、一百多个配置项，谁也不会一条条看过去。所以把它交给测试。
+//
+// 要生成/补全语言包的骨架：
+//
+//	WEN_I18N_DUMP=zh go test ./cmd/wen -run TestLocaleCoverage   # 全部键与中文原文
+//	WEN_I18N_DUMP=missing go test ./cmd/wen -run TestLocaleCoverage
+//
+// 后者只列还没翻的，输出可以直接拿去填。
+
+func metadataStrings(t *testing.T) map[string]string {
+	t.Helper()
+	cfg := &config.Config{BaseDir: t.TempDir()}
+	m := buildPlugins(cfg, plugin.InitContext{Workdir: t.TempDir()}, nil, plugin.WithoutInit())
+	m.Resolve()
+
+	out := map[string]string{}
+	put := func(key, zh string) {
+		if zh == "" {
+			return // 没有原文就没有要翻的东西（说明是可选字段，插件没写）
+		}
+		out[key] = zh
+	}
+	for _, st := range m.List() {
+		put(plugin.DescKey(st.Name), st.Description)
+		put(plugin.CategoryTextKey(st.CategoryKey), st.Category)
+		for _, f := range st.ConfigFields {
+			put(plugin.FieldLabelKey(st.Name, f.Key), f.Label)
+			put(plugin.FieldDescKey(st.Name, f.Key), f.Description)
+			for _, o := range f.Options {
+				put(plugin.OptionKey(st.Name, f.Key, o.Value), o.Label)
+			}
+		}
+		// Actions 只在插件启用且初始化后才暴露，这里拿不到（WithoutInit）。
+		// 操作的文案因此不进这份清单，由 TestActionKeys 单独盯着。
+	}
+	return out
+}
+
+func TestLocaleCoverage(t *testing.T) {
+	if err := i18n.Err(); err != nil {
+		t.Fatalf("语言包加载失败: %v", err)
+	}
+	want := metadataStrings(t)
+
+	switch os.Getenv("WEN_I18N_DUMP") {
+	case "zh":
+		dump(t, want)
+		return
+	case "missing":
+		have := keySet(i18n.Keys(i18n.LangEN))
+		missing := map[string]string{}
+		for k, zh := range want {
+			if !have[k] {
+				missing[k] = zh
+			}
+		}
+		dump(t, missing)
+		return
+	}
+
+	have := keySet(i18n.Keys(i18n.LangEN))
+	var missing []string
+	for k := range want {
+		if !have[k] {
+			missing = append(missing, k)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("语言包 en 缺 %d 条插件元数据的译文（用 WEN_I18N_DUMP=missing 导出待填的骨架）:\n%s",
+			len(missing), joinLimit(missing, 20))
+	}
+
+	// 反向也要查：插件改了配置项的 Key、删了一个字段，语言包里那条就成了死键。
+	// 死键不会造成故障，但会让「还差多少条」这个数字永远对不上。
+	var stale []string
+	for k := range have {
+		if _, ok := want[k]; !ok && isPluginKey(k) && !derivedElsewhere[k] {
+			stale = append(stale, k)
+		}
+	}
+	sort.Strings(stale)
+	if len(stale) > 0 {
+		t.Errorf("语言包 en 有 %d 条对不上任何插件声明的死键:\n%s", len(stale), joinLimit(stale, 20))
+	}
+}
+
+func isPluginKey(k string) bool { return len(k) > 7 && k[:7] == "plugin." }
+
+// 这几条 plugin.* 的键不是从插件声明推出来的，因此不算死键：
+//   - 「未启用」那句提示由翻译层缀在候选项后面，与具体插件无关；
+//   - 「其他」分组只在插件没声明分组时出现，内置插件都声明了，外部插件才会走到。
+var derivedElsewhere = map[string]bool{
+	plugin.UnavailableKey:                           true,
+	plugin.CategoryTextKey(plugin.CategoryKeyOther): true,
+}
+
+func keySet(keys []string) map[string]bool {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
+}
+
+func dump(t *testing.T, m map[string]string) {
+	t.Helper()
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 键多起来之后日志读不了，给个直接落文件的出口
+	if out := os.Getenv("WEN_I18N_OUT"); out != "" {
+		if err := os.WriteFile(out, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%d 条已写入 %s", len(m), out)
+		return
+	}
+	t.Logf("%d 条:\n%s", len(m), b)
+}
+
+func joinLimit(ss []string, n int) string {
+	out := ""
+	for i, s := range ss {
+		if i == n {
+			out += "  …\n"
+			break
+		}
+		out += "  " + s + "\n"
+	}
+	return out
+}

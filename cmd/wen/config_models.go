@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -19,24 +18,24 @@ func modelsSection(b backend) error {
 		}
 
 		opts := []huh.Option[string]{
-			huh.NewOption("切换当前模型", "current"),
-			huh.NewOption("新增提供商", "add"),
+			huh.NewOption(tr("cli.models.switch", "切换当前模型"), "current"),
+			huh.NewOption(tr("cli.models.addProvider", "新增提供商"), "add"),
 		}
 		for _, p := range doc.Providers {
 			opts = append(opts, huh.NewOption(
-				fmt.Sprintf("编辑 %s（%s，%d 个模型%s）",
+				trf("cli.models.editProvider", "编辑 %s（%s，%d 个模型%s）",
 					p.Name, p.Type, len(p.Models), keyHint(p)),
 				"edit:"+p.Name))
 		}
-		opts = append(opts, huh.NewOption("← 返回", back))
+		opts = append(opts, huh.NewOption(tr("cli.back", "← 返回"), back))
 		for i, o := range opts {
 			opts[i] = huh.NewOption(fit(o.Key), o.Value)
 		}
 
 		choice := "current" // 光标停在第一项，见 topMenu 的说明
 		if err := run(huh.NewSelect[string]().
-			Title("模型").
-			Description(fitLines(fmt.Sprintf("当前：%s / %s\n%s",
+			Title(tr("cli.models.title", "模型")).
+			Description(fitLines(trf("cli.models.current", "当前：%s / %s\n%s",
 								doc.Current.Provider, doc.Current.Model, b.mode()))).
 			Height(listHeight(len(opts), 3)). // chrome：标题 1 行 + 说明 2 行
 			Options(opts...).
@@ -72,9 +71,9 @@ func modelsSection(b backend) error {
 
 func keyHint(p providerView) string {
 	if p.HasAPIKey {
-		return "，密钥 " + p.MaskedKey
+		return trf("cli.models.keySet", "，密钥 %s", p.MaskedKey)
 	}
-	return "，未配置密钥"
+	return tr("cli.models.keyUnset", "，未配置密钥")
 }
 
 // switchCurrent 两步选：先提供商，再该提供商下的模型。
@@ -84,10 +83,10 @@ func switchCurrent(b backend, doc modelsDoc) error {
 		provOpts = append(provOpts, huh.NewOption(p.Name, p.Name))
 	}
 	if len(provOpts) == 0 {
-		return errors.New("还没有配置任何提供商")
+		return errors.New(tr("cli.models.noProvider", "还没有配置任何提供商"))
 	}
 	provider := doc.Current.Provider
-	if err := run(huh.NewSelect[string]().Title("提供商").
+	if err := run(huh.NewSelect[string]().Title(tr("cli.models.provider", "提供商")).
 		Options(provOpts...).Value(&provider)); err != nil {
 		return err
 	}
@@ -99,18 +98,18 @@ func switchCurrent(b backend, doc modelsDoc) error {
 		}
 	}
 	if len(models) == 0 {
-		return fmt.Errorf("提供商 %s 下还没有模型，请先在「编辑 %s」里添加", provider, provider)
+		return errors.New(trf("cli.models.noModel", "提供商 %s 下还没有模型，请先在「编辑 %s」里添加", provider, provider))
 	}
 	modelOpts := make([]huh.Option[string], 0, len(models))
 	for _, m := range models {
 		label := m.ID
 		if m.Name != "" {
-			label = fmt.Sprintf("%s（%s）", m.Name, m.ID)
+			label = trf("cli.models.modelLabel", "%s（%s）", m.Name, m.ID)
 		}
 		modelOpts = append(modelOpts, huh.NewOption(label, m.ID))
 	}
 	model := doc.Current.Model
-	if err := run(huh.NewSelect[string]().Title("模型").
+	if err := run(huh.NewSelect[string]().Title(tr("cli.models.title", "模型")).
 		Options(modelOpts...).Value(&model)); err != nil {
 		return err
 	}
@@ -118,7 +117,7 @@ func switchCurrent(b backend, doc modelsDoc) error {
 	if err := b.setCurrentModel(modelcfg.Selection{Provider: provider, Model: model}); err != nil {
 		return err
 	}
-	note("✓ 当前模型已切换为 %s / %s", provider, model)
+	note(trf("cli.models.switched", "✓ 当前模型已切换为 %s / %s", provider, model))
 	return nil
 }
 
@@ -138,9 +137,9 @@ func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
 	cache := cacheToString(p.PromptCache)
 	remove := false
 
-	keyDesc := "留空表示不修改"
+	keyDesc := tr("cli.models.keyKeep", "留空表示不修改")
 	if !p.HasAPIKey {
-		keyDesc = "尚未配置"
+		keyDesc = tr("cli.models.keyNone", "尚未配置")
 	}
 
 	typeOpts := make([]huh.Option[string], 0)
@@ -153,33 +152,33 @@ func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
 	}
 
 	fields := []huh.Field{
-		huh.NewInput().Title("名称").Description("唯一标识，也是界面上的显示名").Value(&name).
+		huh.NewInput().Title(tr("cli.models.name", "名称")).Description(tr("cli.models.nameDesc", "唯一标识，也是界面上的显示名")).Value(&name).
 			Validate(func(s string) error {
 				if strings.TrimSpace(s) == "" {
-					return errors.New("名称不能为空")
+					return errors.New(tr("cli.models.nameEmpty", "名称不能为空"))
 				}
 				return nil
 			}),
-		huh.NewSelect[string]().Title("接口类型").Options(typeOpts...).Value(&typ),
+		huh.NewSelect[string]().Title(tr("cli.models.apiType", "接口类型")).Options(typeOpts...).Value(&typ),
 		huh.NewInput().Title("Base URL").Value(&baseURL),
 		huh.NewInput().Title("API Key").Description(keyDesc).
 			EchoMode(huh.EchoModePassword).Value(&newKey),
-		huh.NewSelect[string]().Title("思考参数方言").
-			Description("仅 openai_compat 生效").Options(dialectOpts...).Value(&dialect),
-		huh.NewSelect[string]().Title("提示词缓存").
-			Description("仅 anthropic 生效。命中约十分之一价，未命中的写入多付约四分之一；\n对话间隔常超过几分钟时关掉更省。").
+		huh.NewSelect[string]().Title(tr("cli.models.dialect", "思考参数方言")).
+			Description(tr("cli.models.dialectDesc", "仅 openai_compat 生效")).Options(dialectOpts...).Value(&dialect),
+		huh.NewSelect[string]().Title(tr("cli.models.cache", "提示词缓存")).
+			Description(tr("cli.models.cacheDesc", "仅 anthropic 生效。命中约十分之一价，未命中的写入多付约四分之一；\n对话间隔常超过几分钟时关掉更省。")).
 			Options(
-				huh.NewOption("跟随默认（开启）", ""),
-				huh.NewOption("开启", "on"),
-				huh.NewOption("关闭", "off"),
+				huh.NewOption(tr("cli.models.cacheDefault", "跟随默认（开启）"), ""),
+				huh.NewOption(tr("cli.models.cacheOn", "开启"), "on"),
+				huh.NewOption(tr("cli.models.cacheOff", "关闭"), "off"),
 			).Value(&cache),
-		huh.NewText().Title("模型列表").
-			Description("一行一个，格式：模型id  或  模型id | 显示名").
+		huh.NewText().Title(tr("cli.models.list", "模型列表")).
+			Description(tr("cli.models.listDesc", "一行一个，格式：模型id  或  模型id | 显示名")).
 			Lines(8).Value(&modelsText),
 	}
 	if !isNew {
 		fields = append(fields, huh.NewConfirm().
-			Title("删除这个提供商").Affirmative("删除").Negative("保留").Value(&remove))
+			Title(tr("cli.models.deleteTitle", "删除这个提供商")).Affirmative(tr("cli.delete", "删除")).Negative(tr("cli.keep", "保留")).Value(&remove))
 	}
 
 	if err := huh.NewForm(huh.NewGroup(fields...)).Run(); err != nil {
@@ -192,7 +191,7 @@ func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
 		if err := b.saveModels(next); err != nil {
 			return err
 		}
-		note("✓ 提供商 %s 已删除", p.Name)
+		note(trf("cli.models.deleted", "✓ 提供商 %s 已删除", p.Name))
 		return nil
 	}
 
@@ -210,7 +209,7 @@ func editProvider(b backend, doc modelsDoc, p providerView, isNew bool) error {
 	if err := b.saveModels(next); err != nil {
 		return err
 	}
-	note("✓ 提供商 %s 已保存", edited.Name)
+	note(trf("cli.models.savedProvider", "✓ 提供商 %s 已保存", edited.Name))
 	return nil
 }
 
