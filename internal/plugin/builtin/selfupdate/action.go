@@ -215,7 +215,7 @@ func (p *Plugin) check(ctx context.Context, s snapshot) (updater.Release, error)
 	p.st.LastCheck = p.now()
 	p.st.Latest = rel.Tag
 	p.st.LatestAt = rel.PublishedAt
-	p.st.Notes = truncateNotes(rel.Body)
+	p.st.Notes = truncateNotes(updater.ReleaseNotes(rel.Body))
 	p.saveLocked()
 	p.mu.Unlock()
 	return rel, nil
@@ -267,7 +267,7 @@ func foundMessage(rel updater.Release) string {
 		fmt.Fprintf(&b, "，发布于 %s", rel.PublishedAt.Local().Format("2006-01-02"))
 	}
 	b.WriteString("。\n")
-	if notes := strings.TrimSpace(rel.Body); notes != "" {
+	if notes := updater.ReleaseNotes(rel.Body); notes != "" {
 		b.WriteString("\n")
 		b.WriteString(truncateNotes(notes))
 		b.WriteString("\n")

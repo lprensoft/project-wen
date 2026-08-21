@@ -57,7 +57,7 @@ func runUpdate(args []string) error {
 		fmt.Printf("（发布于 %s）", rel.PublishedAt.Local().Format("2006-01-02"))
 	}
 	fmt.Println("：")
-	if notes := strings.TrimSpace(rel.Body); notes != "" {
+	if notes := updater.ReleaseNotes(rel.Body); notes != "" {
 		fmt.Println()
 		fmt.Println(indent(notes, "  "))
 	}

@@ -36,7 +36,7 @@ func (p *Plugin) StatusLines() []string {
 	if !s.autoCheck {
 		line += "，自动检查已关闭"
 	} else {
-		line += fmt.Sprintf("，每 %s 查一次", humanizeInterval(s.interval))
+		line += "，" + humanizeInterval(s.interval) + "查一次"
 	}
 	return []string{line}
 }
@@ -56,8 +56,12 @@ func humanizeAge(d time.Duration) string {
 }
 
 func humanizeInterval(d time.Duration) string {
-	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
-		return fmt.Sprintf("%d 天", int(d.Hours()/24))
+	switch {
+	case d == 24*time.Hour:
+		return "每天"
+	case d > 24*time.Hour && d%(24*time.Hour) == 0:
+		return fmt.Sprintf("每 %d 天", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("每 %d 小时", int(d.Hours()))
 	}
-	return fmt.Sprintf("%d 小时", int(d.Hours()))
 }

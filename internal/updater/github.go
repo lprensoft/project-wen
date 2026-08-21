@@ -185,6 +185,23 @@ func BinaryName(goos string) string {
 	return "wen"
 }
 
+// ReleaseNotes 从发布正文里取出「这一版改了什么」那部分。
+//
+// 发布说明由流水线拼成两段：CHANGELOG 里对应版本那一节，一条 `---`，再一段
+// 「下载哪个」的表格与首次运行说明。后半段是给要去 Releases 页面手工下载的人看的，
+// 摆进「程序自己更新自己」的窗口里只是噪声——那些步骤正是这个功能替人做掉的。
+//
+// 认不出那条分隔线就原样返回：宁可多显示一段，也不要因为格式变了就把更新说明整个吞掉。
+func ReleaseNotes(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			return strings.TrimSpace(strings.Join(lines[:i], "\n"))
+		}
+	}
+	return strings.TrimSpace(body)
+}
+
 // Plan 是一次更新的执行计划：下哪个包、期望的校验和是多少。
 type Plan struct {
 	Release Release
@@ -233,7 +250,7 @@ func (c *Client) Prepare(ctx context.Context, rel Release) (Plan, error) {
 
 // lookupSum 在 sha256sum 格式的清单里找某个文件名对应的哈希。
 func lookupSum(text, name string) (string, bool) {
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) != 2 {
 			continue
