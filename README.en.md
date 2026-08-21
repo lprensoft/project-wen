@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><b>An AI character who lives a life of her own — and stays the same person while doing it.</b></p>
+<p align="center"><b>An AI character who lives a life of their own — and stays the same person while doing it.</b></p>
 
 <p align="center"><a href="README.md">中文</a>　·　English</p>
 
