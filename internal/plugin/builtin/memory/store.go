@@ -20,10 +20,14 @@ import (
 )
 
 // Types 是记忆的分类取值（同时决定索引中的分组顺序）。
-var Types = []string{"偏好", "约定", "事实", "踩坑", "经历"}
+// 顺序决定索引里的分组顺序，新类一律排在末尾：索引经 TurnPrompt 每轮重发，
+// 插在中间会让既有分组整体重排，等于每加一类就让提示词前缀作废一次。
+var Types = []string{"偏好", "约定", "事实", "踩坑", "经历", "边界"}
 
 const (
 	defaultType = "事实"
+	// typeBoundary 是唯一被代码按名字区分的分类：自动提炼路径强制它不淡忘。
+	typeBoundary = "边界"
 	// descMaxRunes 限制钩子长度：索引每一轮对话都会重复发送，单条必须有确定上界。
 	descMaxRunes = 40
 	// slugMaxRunes 远离各文件系统的长度边界（NTFS 上限为 255 个 UTF-16 单元）。

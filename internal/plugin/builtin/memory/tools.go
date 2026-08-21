@@ -29,7 +29,7 @@ func (t *listTool) Schema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"keyword": {"type": "string", "description": "过滤关键词，对标题、摘要与正文做包含匹配；留空表示不过滤"},
-			"type": {"type": "string", "description": "按分类过滤", "enum": ["偏好", "约定", "事实", "踩坑", "经历"]}
+			"type": {"type": "string", "description": "按分类过滤", "enum": ["偏好", "约定", "事实", "踩坑", "经历", "边界"]}
 		}
 	}`)
 }
@@ -136,7 +136,7 @@ func (t *saveTool) Schema() json.RawMessage {
 		"properties": {
 			"name": {"type": "string", "description": "标题，简短且唯一"},
 			"description": {"type": "string", "description": "一句话摘要，会出现在记忆索引里，过长会被截断"},
-			"type": {"type": "string", "description": "分类；经历指自己做过、遇到过的事，与关于对方的事实区分", "enum": ["偏好", "约定", "事实", "踩坑", "经历"]},
+			"type": {"type": "string", "description": "分类；经历指自己做过、遇到过的事，与关于对方的事实区分；边界指明确表达过的不愿意与坚持，优先于经历", "enum": ["偏好", "约定", "事实", "踩坑", "经历", "边界"]},
 			"content": {"type": "string", "description": "完整内容"},
 			"mode": {"type": "string", "description": "同名记忆已存在时的处理方式，默认拒绝", "enum": ["create", "replace"]}%s
 		},
@@ -147,7 +147,7 @@ func (t *saveTool) Schema() json.RawMessage {
 // decayProp 只在开启淡忘时出现在参数表里：关着的时候它没有任何作用，
 // 摆在那里只会让模型多花一次判断。
 const decayProp = `,
-			"decay": {"type": "boolean", "description": "这条记忆是否会随时间淡忘，久未提及后先只剩要点、最终移出记忆库；长期有效的内容不要设"}`
+			"decay": {"type": "boolean", "description": "这条记忆是否会随时间淡忘，久未提及后先只剩要点、最终移出记忆库；长期有效的内容不要设，边界类一律不要设"}`
 
 func (t *saveTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
