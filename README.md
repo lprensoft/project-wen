@@ -7,6 +7,8 @@
 
 <p align="center"><b>让 AI 角色像活人一样过日子，也像熟人一样性格稳定。</b></p>
 
+<p align="center">An AI character who lives a life of their own — and stays the same person while doing it.</p>
+
 <p align="center">中文　·　<a href="README.en.md">English</a></p>
 
 一个有自己生活的 AI 虚拟人格。用 Go 编写，单二进制部署，理念源自刘哲宏的 [project-sue-](https://github.com/lzh830913-wq/project-sue-)。它追求的不是「回答得好」，而是两件事：**活人感**——角色有自己的一天、自己的社交圈，会生小病、有没说出口的心里话，隔久了会主动找你说话，在聊天软件里像人一样发消息；**性格稳定可控**——对你的态度不忽远忽近，历史被压缩、换了会话也还是同一个人，而且每一分性格与状态都落在看得见、能开关、可配置的插件里，不靠模型即兴。
