@@ -98,6 +98,14 @@ func buildRuntime(cfg *config.Config, ov runtimeOverrides) (*runtime, error) {
 			}
 			return ag.CompactTurn(ctx, sessionID)
 		},
+		// 「那一天有什么可说的」：汇总各启用插件对某一天的贡献（见 plugin.DayReporter），
+		// 按日收束的日记靠它在正文前加上天气这类客观事实
+		DayFacts: func(date string) []string {
+			if plugins == nil {
+				return nil
+			}
+			return plugins.DayFacts(date)
+		},
 		// 与 server 的 GET /api/status 同源，保证远端界面与 Web UI 的状态输出一致
 		Status: func(sessionID string) (plugin.StatusInfo, error) {
 			if models == nil {

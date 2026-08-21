@@ -24,6 +24,9 @@ const stateFile = "state.json"
 type persisted struct {
 	Places  map[string]Place  `json:"places,omitempty"`
 	Reports map[string]Report `json:"reports,omitempty"`
+	// Days 是按日留档（地点 → 日期 → 概要）。日记在第二天才来问那一天的天气，
+	// 只存最近一次观测的话，隔几天一起收束时就补不齐了（见 dayfacts.go）。
+	Days map[string]map[string]DayInfo `json:"days,omitempty"`
 }
 
 func statePath(dir string) string { return filepath.Join(dir, stateFile) }
@@ -56,6 +59,9 @@ func (p *Plugin) loadInto(dir string, wanted []string) {
 		if rep, ok := st.Reports[loc]; ok && !rep.Fetched.IsZero() {
 			o.cur, o.curOK = rep, true
 		}
+		if days, ok := st.Days[loc]; ok && len(days) > 0 {
+			o.days = days
+		}
 	}
 }
 
@@ -65,13 +71,16 @@ func (p *Plugin) save(dir string) {
 		return
 	}
 	p.dataMu.RLock()
-	st := persisted{Places: map[string]Place{}, Reports: map[string]Report{}}
+	st := persisted{Places: map[string]Place{}, Reports: map[string]Report{}, Days: map[string]map[string]DayInfo{}}
 	for loc, o := range p.obs {
 		if o.placeOK {
 			st.Places[loc] = o.place
 		}
 		if o.curOK {
 			st.Reports[loc] = o.cur
+		}
+		if len(o.days) > 0 {
+			st.Days[loc] = o.days
 		}
 	}
 	p.dataMu.RUnlock()

@@ -53,6 +53,10 @@ type InitContext struct {
 	// Status 取当前模型配置与（可选的）会话用量快照，供插件向远端界面展示状态，
 	// 与 Web UI 的状态命令同源。为 nil 表示不可用。
 	Status StatusFunc
+	// DayFacts 问「某一天有什么可说的」，汇总各启用插件的回答（见 DayReporter）。
+	// 日期是本地时区的 2006-01-02。为 nil 表示不可用，插件应据此降级——
+	// 补不上那一句不该让功能本身停摆。
+	DayFacts DayFactsFunc
 }
 
 // StatusInfo 是当前模型配置与会话用量的快照。
