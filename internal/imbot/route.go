@@ -24,7 +24,7 @@ import (
 
 var (
 	regMu     sync.RWMutex
-	declared  []ChannelInfo    // 按声明顺序，Live 在 Channels() 里现算
+	declared  []ChannelInfo // 按声明顺序，Live 在 Channels() 里现算
 	liveCores = map[string]*Core{}
 	router    Router
 )

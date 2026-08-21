@@ -413,7 +413,7 @@ func (a *Agent) stream(ctx context.Context, provider llm.Provider, opts Options,
 }
 
 // translateFailure 在模型调用失败后给插件一个把失败转成一句正常回复的机会
-//（经 Manager.TranslateFailure，单所有者）。成功时：文本以增量事件送出、以正常
+// （经 Manager.TranslateFailure，单所有者）。成功时：文本以增量事件送出、以正常
 // 助手消息落盘（带本轮可见域标签），原始错误转入会话注记——注记只给人看、
 // 永不进模型上下文，真相因此不丢。
 //

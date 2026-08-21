@@ -75,7 +75,7 @@ func TestDeclareIsIdempotentAndOrdered(t *testing.T) {
 	Declare("qq_bot", "QQ")
 	Declare("wechat_bot", "微信")
 	Declare("qq_bot", "别的名字") // 重复声明应被忽略
-	Declare("", "空名字")         // 空名字不进表
+	Declare("", "空名字")        // 空名字不进表
 
 	got := Channels()
 	if len(got) != 2 {

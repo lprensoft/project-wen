@@ -178,3 +178,14 @@ go build -o wen.exe ./cmd/wen   # 构建
 go test ./...                   # 测试
 go run ./cmd/wen                # 运行（读取 ./config.yaml，密钥也在其中）
 ```
+
+**查 gofmt 要先去掉 `\r`。** 工作区是 CRLF（`core.autocrlf`，库里存的是 LF），`gofmt -l ./...` 会把**每个** .go 文件都列出来，等于没有信号——正因如此格式漂移过很久没人发现。可用的做法是先把副本正规化成 LF 再比：
+
+```bash
+T=$(mktemp -d); git ls-files '*.go' | while read -r f; do
+  tr -d '\r' < "$f" > "$T/a.go"; gofmt "$T/a.go" > "$T/b.go"
+  cmp -s "$T/a.go" "$T/b.go" || echo "$f"
+done
+```
+
+要回写就把 gofmt 的输出转回 CRLF（`awk '{printf "%s\r\n", $0}'`），别直接写 LF 进工作区。差异几乎全来自中文注释的宽度计算（gofmt 按东亚宽度对齐行尾注释与结构体标签），以及 Go 1.19 起对**文档注释**的规范化（`//` 后会补一个空格，包括后面接全角括号时）。
