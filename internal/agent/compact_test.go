@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"wen/internal/llm"
 	"wen/internal/plugin"
@@ -285,5 +286,72 @@ func TestCompactPromptPlainWithoutPrompters(t *testing.T) {
 	}
 	if !strings.HasPrefix(prompt, compactPrompt) || !strings.Contains(prompt, compactHistoryHeader) {
 		t.Error("基础要求与历史正文应原样保留")
+	}
+}
+
+// at 造一个本地时刻，日期部分是这几个用例关心的全部。
+func at(y, mo, d, hh, mm int) time.Time {
+	return time.Date(y, time.Month(mo), d, hh, mm, 0, 0, time.Local)
+}
+
+func stamped(m session.StoredMessage, ts time.Time) session.StoredMessage {
+	m.TS = ts
+	return m
+}
+
+// 压缩器此前拿到的是一堵没有时间信息的对话墙，原文里的「明天」只能原样抄进摘要，
+// 而摘要永不裁剪。日界线是它写出绝对日期的唯一原料。
+func TestSerializeHistoryMarksDayBoundaries(t *testing.T) {
+	got := serializeHistory([]session.StoredMessage{
+		stamped(msg(llm.RoleUser, "u1"), at(2026, 8, 20, 9, 0)),
+		stamped(msg(llm.RoleAssistant, "明天给你带菜"), at(2026, 8, 20, 22, 0)),
+		stamped(msg(llm.RoleUser, "u2"), at(2026, 8, 21, 8, 0)),
+	})
+	want := "（以下是 2026-08-20 星期四 的对话）\n用户: u1\n助手: 明天给你带菜\n" +
+		"（以下是 2026-08-21 星期五 的对话）\n用户: u2\n"
+	if got != want {
+		t.Errorf("序列化结果不符:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// 同一天只标一次，且没有时间戳的消息（旧会话）不该凭空造出日界线。
+func TestSerializeHistoryOneMarkPerDay(t *testing.T) {
+	got := serializeHistory([]session.StoredMessage{
+		stamped(msg(llm.RoleUser, "a"), at(2026, 8, 20, 9, 0)),
+		stamped(msg(llm.RoleUser, "b"), at(2026, 8, 20, 18, 0)),
+		msg(llm.RoleUser, "c"),
+	})
+	if n := strings.Count(got, "以下是 2026-08-20"); n != 1 {
+		t.Errorf("同一天应只标一次，得到 %d 次:\n%s", n, got)
+	}
+	if strings.Count(got, "以下是") != 1 {
+		t.Errorf("缺时间戳的消息不该产生日界线:\n%s", got)
+	}
+}
+
+// 一次性输入与注记不进压缩原文，它们的日期也不该带出日界线来。
+func TestSerializeHistorySkipsEphemeralForDayMark(t *testing.T) {
+	eph := stamped(msg(llm.RoleUser, "心跳提示"), at(2026, 8, 21, 3, 0))
+	eph.Kind = session.KindEphemeral
+	got := serializeHistory([]session.StoredMessage{
+		stamped(msg(llm.RoleUser, "u1"), at(2026, 8, 20, 9, 0)),
+		eph,
+		stamped(msg(llm.RoleUser, "u2"), at(2026, 8, 21, 8, 0)),
+	})
+	if strings.Contains(got, "心跳提示") {
+		t.Errorf("一次性输入不该进压缩原文:\n%s", got)
+	}
+	if !strings.Contains(got, "（以下是 2026-08-21 星期五 的对话）\n用户: u2") {
+		t.Errorf("日界线应落在真正进入原文的那条消息前:\n%s", got)
+	}
+}
+
+// 摘要永不裁剪，里面留下「明天」就等于把一条空气待办焊死在上下文最前面。
+func TestCompactPromptDemandsAbsoluteDates(t *testing.T) {
+	p := buildCompactPrompt(nil, "用户: x")
+	for _, want := range []string{"具体日期", "「明天」", "期限在哪一天"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("压缩提示词缺少对绝对日期的要求 %q:\n%s", want, p)
+		}
 	}
 }
