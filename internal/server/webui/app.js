@@ -27,7 +27,7 @@ let chatAbort = null;      // 进行中对话的中断控制器，非 null 表�
 function setSending(on) {
   busy = on;
   sendBtn.classList.toggle("stop", on);
-  sendBtn.title = on ? "停止生成" : "发送";
+  sendBtn.title = on ? t("chat.stop") : t("chat.send");
   sendBtn.setAttribute("aria-label", sendBtn.title);
 }
 
@@ -65,7 +65,10 @@ applyTheme();
 const chatWidthSeg = $("#chat-width-seg");
 const chatWidthDesc = $("#chat-width-desc");
 
+let chatWidthSetting = localStorage.getItem("wen-chat-width") || "medium";
+
 function applyChatWidth(name) {
+  chatWidthSetting = name;
   document.documentElement.dataset.chatWidth = name;
   localStorage.setItem("wen-chat-width", name);
   for (const btn of chatWidthSeg.querySelectorAll(".seg-btn")) {
@@ -73,14 +76,34 @@ function applyChatWidth(name) {
   }
   // 实际宽度取自计算样式而不是 JS 里的常量，改 CSS 就会跟着变
   const px = getComputedStyle(document.documentElement).getPropertyValue("--chat-width").trim();
-  chatWidthDesc.textContent = `消息与输入框所占的栏宽，窗口不够宽时自动收窄。当前 ${px}。`;
+  chatWidthDesc.textContent = t("settings.chatWidth.desc", { width: px });
 }
 
 chatWidthSeg.addEventListener("click", (e) => {
   const btn = e.target.closest(".seg-btn");
   if (btn) applyChatWidth(btn.dataset.width);
 });
-applyChatWidth(localStorage.getItem("wen-chat-width") || "medium");
+applyChatWidth(chatWidthSetting);
+
+// ---------- 通用设置：界面语言 ----------
+// 与主题、聊天栏宽度同一套三段控件，三态：跟随浏览器 / 中文 / English。
+// 字典、自动识别与存储都在 i18n.js 里，这里只管按钮的选中态与切换后的重绘。
+// 语言只存浏览器不上服务端：同一个服务可能一台电脑一台手机各用一种语言，
+// 而服务端配置是共享的。
+
+const langSeg = $("#lang-seg");
+
+function markLangSeg() {
+  for (const btn of langSeg.querySelectorAll(".seg-btn")) {
+    btn.classList.toggle("active", btn.dataset.lang === I18N.setting);
+  }
+}
+
+langSeg.addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (btn) I18N.set(btn.dataset.lang);
+});
+markLangSeg();
 
 // ---------- 输入框工具条上的弹出菜单 ----------
 // 筛选与模型切换共用一套开合逻辑：同时最多开一个，点击别处或按 Esc 关闭。
@@ -131,10 +154,10 @@ const arrowIconSVG =
 // 唯一的例外是「提示词」——它还要让服务端开始采集，见 sendMessage。
 
 const FILTERS = [
-  { key: "prompt", label: "发给模型的提示词", note: "调试用" },
-  { key: "tools", label: "工具调用" },
-  { key: "thinking", label: "思考过程" },
-  { key: "heartbeat", label: "心跳唤醒" },
+  { key: "prompt", labelKey: "chat.filter.prompt", noteKey: "chat.filter.promptNote" },
+  { key: "tools", labelKey: "chat.filter.tools" },
+  { key: "thinking", labelKey: "chat.filter.thinking" },
+  { key: "heartbeat", labelKey: "chat.filter.heartbeat" },
 ];
 const FILTER_DEFAULTS = { prompt: false, tools: true, thinking: true, heartbeat: true };
 
@@ -166,7 +189,7 @@ function buildFilterMenu() {
   filterMenu.textContent = "";
   const title = document.createElement("div");
   title.className = "popup-title";
-  title.textContent = "聊天区显示以下内容";
+  title.textContent = t("chat.filterHeading");
   filterMenu.appendChild(title);
 
   for (const f of FILTERS) {
@@ -176,12 +199,12 @@ function buildFilterMenu() {
     item.innerHTML = filters[f.key] ? checkIconSVG : blankIconSVG;
     const label = document.createElement("span");
     label.className = "menu-grow";
-    label.textContent = f.label;
+    label.textContent = t(f.labelKey);
     item.appendChild(label);
-    if (f.note) {
+    if (f.noteKey) {
       const note = document.createElement("span");
       note.className = "menu-note";
-      note.textContent = f.note;
+      note.textContent = t(f.noteKey);
       item.appendChild(note);
     }
     item.addEventListener("click", () => {
@@ -211,22 +234,22 @@ async function loadModelSwitcher() {
     switcherDoc = await fetch("/api/models").then((r) => r.json());
     renderModelLabel();
   } catch {
-    modelLabel.textContent = "模型不可用";
+    modelLabel.textContent = t("chat.modelUnavailable");
   }
 }
 
 function renderModelLabel() {
   const cur = (switcherDoc && switcherDoc.current) || {};
   if (!cur.provider) {
-    modelLabel.textContent = "未选择模型";
-    modelChip.title = "切换当前使用的模型";
+    modelLabel.textContent = t("chat.modelNone");
+    modelChip.title = t("chat.modelTitle");
     return;
   }
   const p = switcherDoc.providers.find((x) => x.name === cur.provider);
   const m = p && (p.models || []).find((x) => x.id === cur.model);
   const text = cur.provider + " / " + ((m && m.name) || cur.model || "—");
   modelLabel.textContent = text;
-  modelChip.title = text + "（点击切换）";
+  modelChip.title = t("chat.modelChipTitle", { name: text });
 }
 
 function buildModelMenu() {
@@ -234,7 +257,7 @@ function buildModelMenu() {
   if (!switcherDoc) {
     const tip = document.createElement("div");
     tip.className = "popup-title";
-    tip.textContent = "模型清单加载中…";
+    tip.textContent = t("chat.modelMenuLoading");
     modelMenu.appendChild(tip);
     loadModelSwitcher().then(() => {
       if (!modelMenu.classList.contains("hidden")) buildModelMenu();
@@ -244,7 +267,7 @@ function buildModelMenu() {
   const cur = switcherDoc.current || {};
   const title = document.createElement("div");
   title.className = "popup-title";
-  title.textContent = "切换模型";
+  title.textContent = t("chat.modelMenuTitle");
   modelMenu.appendChild(title);
 
   for (const p of switcherDoc.providers) {
@@ -262,7 +285,9 @@ function buildModelMenu() {
 
     // 不可用的提供商置灰保留而非隐藏——不然会以为配置丢了
     const models = p.models || [];
-    const reason = models.length === 0 ? "无模型" : !p.has_api_key ? "未配置密钥" : "";
+    const reason = models.length === 0
+      ? t("chat.modelNoModels")
+      : !p.has_api_key ? t("chat.modelNoKey") : "";
     if (reason) {
       item.disabled = true;
       const note = document.createElement("span");
@@ -320,7 +345,7 @@ function buildModelSubmenu(p, cur) {
 // 而函数声明同名时后写的会覆盖先写的，两处都会调到设置页那个版本。
 async function quickSwitchModel(provider, model) {
   const prev = modelLabel.textContent;
-  modelLabel.textContent = "切换中…";
+  modelLabel.textContent = t("chat.modelSwitching");
   closePopups(null);
   try {
     const res = await fetch("/api/models/current", {
@@ -336,7 +361,7 @@ async function quickSwitchModel(provider, model) {
     renderModelLabel();
   } catch (e) {
     modelLabel.textContent = prev;
-    addError("切换模型失败：" + e.message);
+    addError(t("chat.modelSwitchFailed", { msg: e.message }));
   }
 }
 
@@ -371,16 +396,16 @@ async function loadSessions() {
 
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = m.title || "（新会话）";
+    title.textContent = m.title || t("session.untitled");
     li.appendChild(title);
 
     const del = document.createElement("button");
     del.className = "btn-del";
     del.textContent = "✕";
-    del.title = "删除会话";
+    del.title = t("session.delete");
     del.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm("删除该会话？")) return;
+      if (!confirm(t("session.deleteConfirm"))) return;
       await fetch(`/api/sessions/${m.id}`, { method: "DELETE" });
       if (currentSession === m.id) {
         currentSession = null;
@@ -456,7 +481,12 @@ setInterval(syncCurrentSession, 5000);
 // ---------- 消息渲染 ----------
 
 function clearMessages() {
-  messagesEl.innerHTML = '<div class="empty-hint" id="empty-hint">新建或选择一个会话开始对话</div>';
+  messagesEl.textContent = "";
+  const hint = document.createElement("div");
+  hint.className = "empty-hint";
+  hint.id = "empty-hint";
+  hint.textContent = t("chat.empty");
+  messagesEl.appendChild(hint);
 }
 
 function hideHint() {
@@ -503,7 +533,7 @@ function addSummaryBlock(text) {
   const details = document.createElement("details");
   details.className = "thinking-block";
   const summary = document.createElement("summary");
-  summary.textContent = "📦 历史摘要（已压缩）";
+  summary.textContent = t("block.summary");
   details.appendChild(summary);
   const div = document.createElement("div");
   div.className = "thinking-content";
@@ -521,7 +551,7 @@ function addThinkingBlock(text, open) {
   details.dataset.kind = "thinking";
   if (open) details.open = true;
   const summary = document.createElement("summary");
-  summary.textContent = "🧠 思考过程";
+  summary.textContent = t("block.thinking");
   details.appendChild(summary);
   const div = document.createElement("div");
   div.className = "thinking-content";
@@ -539,8 +569,11 @@ function addToolBlock(name, args, result) {
   details.dataset.kind = "tool";
 
   const summary = document.createElement("summary");
-  summary.innerHTML = `🔧 调用工具 <span class="tool-name"></span>`;
-  summary.querySelector(".tool-name").textContent = name;
+  summary.append(t("block.tool") + " ");
+  const toolName = document.createElement("span");
+  toolName.className = "tool-name";
+  toolName.textContent = name;
+  summary.appendChild(toolName);
   details.appendChild(summary);
 
   const detail = document.createElement("div");
@@ -557,19 +590,19 @@ function setToolDetail(detailEl, args, result) {
   detailEl.textContent = "";
   const argsLabel = document.createElement("span");
   argsLabel.className = "label";
-  argsLabel.textContent = "参数: ";
+  argsLabel.textContent = t("block.toolArgs");
   detailEl.appendChild(argsLabel);
   detailEl.appendChild(document.createTextNode(formatArgs(args) + "\n"));
   if (result !== undefined && result !== null) {
     const resLabel = document.createElement("span");
     resLabel.className = "label";
-    resLabel.textContent = "结果: ";
+    resLabel.textContent = t("block.toolResult");
     detailEl.appendChild(resLabel);
     detailEl.appendChild(document.createTextNode(result));
   } else {
     const running = document.createElement("span");
     running.className = "label";
-    running.textContent = "执行中…";
+    running.textContent = t("block.toolRunning");
     detailEl.appendChild(running);
   }
 }
@@ -584,11 +617,11 @@ function addPromptBlock(payload) {
 
   const text = JSON.stringify(payload, null, 2);
   const summary = document.createElement("summary");
-  summary.textContent = "📤 发给模型的提示词 ";
+  summary.textContent = t("block.prompt");
   const size = document.createElement("span");
   size.className = "prompt-size";
   const msgCount = (payload && payload.messages && payload.messages.length) || 0;
-  size.textContent = `（${msgCount} 条消息，${formatSize(text.length)}）`;
+  size.textContent = t("block.promptSize", { n: msgCount, size: formatSize(text.length) });
   summary.appendChild(size);
   details.appendChild(summary);
 
@@ -609,9 +642,9 @@ function addPromptBlock(payload) {
 }
 
 function formatSize(chars) {
-  if (chars < 1000) return chars + " 字符";
-  if (chars < 1000000) return (chars / 1000).toFixed(1) + "k 字符";
-  return (chars / 1000000).toFixed(2) + "M 字符";
+  if (chars < 1000) return t("size.chars", { n: chars });
+  if (chars < 1000000) return t("size.kchars", { n: (chars / 1000).toFixed(1) });
+  return t("size.mchars", { n: (chars / 1000000).toFixed(2) });
 }
 
 function formatArgs(args) {
@@ -641,7 +674,7 @@ function addConfirmBlock(ev) {
 
   const head = document.createElement("div");
   head.className = "confirm-head";
-  head.textContent = `⚠️ ${ev.title || "需要确认"}`;
+  head.textContent = "⚠️ " + (ev.title || t("block.confirmTitle"));
   box.appendChild(head);
 
   if (ev.reason) {
@@ -663,11 +696,11 @@ function addConfirmBlock(ev) {
   const deny = document.createElement("button");
   deny.type = "button";
   deny.className = "btn-ghost";
-  deny.textContent = "拒绝";
+  deny.textContent = t("block.confirmDeny");
   const allow = document.createElement("button");
   allow.type = "button";
   allow.className = "btn-danger";
-  allow.textContent = "允许执行";
+  allow.textContent = t("block.confirmAllow");
 
   const settle = (approved, note) => {
     allow.remove();
@@ -692,7 +725,7 @@ function addConfirmBlock(ev) {
     } catch (e) {
       allow.disabled = false;
       deny.disabled = false;
-      status.textContent = "提交失败：" + e.message;
+      status.textContent = t("block.confirmSubmitFailed", { msg: e.message });
     }
   };
   deny.addEventListener("click", () => answer(false));
@@ -720,7 +753,9 @@ function renderHistory(messages) {
       // 机器注入的一次性输入：不渲染成用户气泡，只留一行来源提示。
       // origin=heartbeat 的兜底覆盖标记机制上线前落盘的旧心跳。
       addSysBlock(
-        m.origin === "heartbeat" ? "💓 心跳唤醒" : "⏱ 后台唤醒（" + (m.origin || "系统") + "）",
+        m.origin === "heartbeat"
+          ? t("block.heartbeat")
+          : t("block.backgroundWake", { origin: m.origin || t("block.backgroundWakeSystem") }),
         m.origin === "heartbeat" ? "heartbeat" : "");
     } else if (m.role === "user") {
       addBubble("user", m.content);
@@ -826,8 +861,9 @@ async function sendMessage() {
       } else if (ev.type === "confirm_done") {
         const cb = confirmBlocks[ev.id];
         if (cb) {
-          cb.settle(ev.approved,
-            ev.approved ? "已允许" : ev.expired ? "已超时，按拒绝处理" : "已拒绝");
+          cb.settle(ev.approved, t(
+            ev.approved ? "block.confirmAllowed"
+              : ev.expired ? "block.confirmExpired" : "block.confirmDenied"));
         }
       } else if (ev.type === "compact_start") {
         finishBubble();
@@ -836,7 +872,7 @@ async function sendMessage() {
         compactBlock.className = "thinking-block";
         compactBlock.open = true;
         const cs = document.createElement("summary");
-        cs.textContent = "📦 上下文接近上限，正在自动压缩会话…";
+        cs.textContent = t("chat.compacting");
         compactBlock.appendChild(cs);
         const cc = document.createElement("div");
         cc.className = "thinking-content";
@@ -850,7 +886,7 @@ async function sendMessage() {
         }
       } else if (ev.type === "compact_done") {
         if (ev.error) {
-          addError("自动压缩失败：" + ev.error);
+          addError(t("chat.compactFailed", { msg: ev.error }));
         } else {
           autoCompacted = true; // 流结束后重载历史并提示
           if (compactBlock) compactBlock.open = false;
@@ -858,19 +894,19 @@ async function sendMessage() {
         compactBlock = null;
       } else if (ev.type === "error") {
         sawError = true;
-        addError("出错了：" + (ev.error || "未知错误"));
+        addError(t("chat.error", { msg: ev.error || t("common.unknownError") }));
       } else if (ev.type === "done") {
         finishBubble();
         finishThinking();
         // 一次没有任何正文的成功轮次：不提示的话界面完全静默，像什么都没发生
-        if (!sawText && !sawError) addSysBlock("（本轮没有文本回复）");
+        if (!sawText && !sawError) addSysBlock(t("chat.noText"));
       }
     }
   } catch (e) {
     if (e.name === "AbortError") {
       aborted = true; // 中断 SSE 即取消服务端本轮 ctx，生成随之终止
     } else {
-      addError("请求失败：" + e.message);
+      addError(t("chat.requestFailed", { msg: e.message }));
     }
   } finally {
     finishBubble();
@@ -879,10 +915,10 @@ async function sendMessage() {
     chatAbort = null;
     if (aborted) {
       await selectSession(currentSession); // 半截生成不落盘，按磁盘内容重载对齐
-      addSysBlock("⏹ 已停止生成");
+      addSysBlock(t("chat.stopped"));
     } else if (autoCompacted) {
       await selectSession(currentSession); // 重载压缩后的历史
-      addSysBlock("✅ 会话已自动压缩");
+      addSysBlock(t("chat.autoCompacted"));
     } else {
       refreshFp(); // 本轮内容已在流式过程中上屏，只校准指纹防止轮询重画
     }
@@ -894,8 +930,8 @@ async function sendMessage() {
 // ---------- 命令菜单（输入 / 时弹出，随输入筛选） ----------
 
 const COMMANDS = [
-  { cmd: "/status", desc: "显示 Agent 状态：模型、思考深度、上下文用量、会话 ID、插件状态" },
-  { cmd: "/compact", desc: "压缩当前会话为摘要" },
+  { cmd: "/status", descKey: "cmd.statusDesc" },
+  { cmd: "/compact", descKey: "cmd.compactDesc" },
 ];
 const cmdMenu = $("#cmd-menu");
 let cmdMatches = [];
@@ -923,7 +959,7 @@ function updateCmdMenu() {
     name.textContent = c.cmd;
     const desc = document.createElement("span");
     desc.className = "cmd-desc";
-    desc.textContent = c.desc;
+    desc.textContent = t(c.descKey);
     item.append(name, desc);
     // mousedown + preventDefault：避免输入框先失焦
     item.addEventListener("mousedown", (e) => {
@@ -965,7 +1001,7 @@ async function handleCommand(text) {
   } else if (cmd === "/compact") {
     await runCompact();
   } else {
-    addSysBlock("⚠️ 未知命令：" + cmd + "\n可用命令：/status、/compact");
+    addSysBlock(t("cmd.unknown", { cmd }));
   }
   inputEl.focus();
 }
@@ -977,46 +1013,51 @@ async function runStatus() {
     // 措辞与 internal/statustext 的 Render 一致，两边改动要一起动
     const pct = (used) => ((used / st.context_length) * 100).toFixed(1);
     const lines = [
-      st.version ? "📊 Wen Agent " + st.version : "📊 Agent 状态",
-      "模型：" + st.provider + " / " + st.model + " · 思考深度 " + st.thinking,
+      st.version ? "📊 Wen Agent " + st.version : t("status.head"),
+      t("status.model", { provider: st.provider, model: st.model, thinking: st.thinking }),
     ];
     if (st.session) {
-      // 实测值不加标注，估算值前缀「约」——区别只在这一个字上
+      // 实测值不加标注，估算值那一条多一个「约」——区别只在这一个字上
       const measured = st.session.measured_tokens != null;
       const used = measured ? st.session.measured_tokens : st.session.est_tokens;
-      lines.push(
-        "当前会话：" + st.session.message_count + " 条消息，" + (measured ? "" : "约 ") +
-        used.toLocaleString() + " / " + st.context_length.toLocaleString() +
-        " tokens（占用 " + pct(used) + "%）"
-      );
+      lines.push(t(measured ? "status.session" : "status.sessionApprox", {
+        count: st.session.message_count,
+        used: I18N.num(used),
+        total: I18N.num(st.context_length),
+        pct: pct(used),
+      }));
       // 提示词缓存：字段只在本轮真的命中或写入过时才下发
       if (st.session.cached_tokens != null) {
-        let cache = "提示词缓存：命中 " + st.session.cached_tokens.toLocaleString();
-        if (st.session.cache_write_tokens) cache += " / 写入 " + st.session.cache_write_tokens.toLocaleString();
-        cache += " tokens";
+        let cache = st.session.cache_write_tokens
+          ? t("status.cacheWrite", {
+            hit: I18N.num(st.session.cached_tokens),
+            write: I18N.num(st.session.cache_write_tokens),
+          })
+          : t("status.cache", { hit: I18N.num(st.session.cached_tokens) });
         if (st.session.prompt_tokens) {
           // measured_tokens 含输出，不能拿来当分母
-          cache += "（占本轮输入 " +
-            ((st.session.cached_tokens / st.session.prompt_tokens) * 100).toFixed(1) + "%）";
+          cache += t("status.cacheShare", {
+            pct: ((st.session.cached_tokens / st.session.prompt_tokens) * 100).toFixed(1),
+          });
         }
         lines.push(cache);
       }
       // 会话 ID 便于用 read_session / read_archive 定位这次对话
-      lines.push("会话 ID：" + (st.session.id || currentSession));
+      lines.push(t("status.sessionId", { id: st.session.id || currentSession }));
     } else {
-      lines.push("当前会话：无（上下文窗口 " + st.context_length.toLocaleString() + " tokens）");
+      lines.push(t("status.noSession", { total: I18N.num(st.context_length) }));
     }
     // 插件贡献的状态行（如心跳节奏），没有插件可报时字段不存在
     if (Array.isArray(st.plugin_lines)) lines.push(...st.plugin_lines);
     addSysBlock(lines.join("\n"));
   } catch (e) {
-    addError("获取状态失败：" + e.message);
+    addError(t("status.failed", { msg: e.message }));
   }
 }
 
 async function runCompact() {
   if (!currentSession) {
-    addSysBlock("⚠️ 没有活动会话，无法压缩");
+    addSysBlock(t("compact.noSession"));
     return;
   }
   busy = true;
@@ -1026,7 +1067,7 @@ async function runCompact() {
   block.className = "thinking-block";
   block.open = true;
   const summary = document.createElement("summary");
-  summary.textContent = "📦 正在压缩会话…";
+  summary.textContent = t("compact.running");
   block.appendChild(summary);
   const contentEl = document.createElement("div");
   contentEl.className = "thinking-content";
@@ -1047,16 +1088,16 @@ async function runCompact() {
         scrollBottom();
       } else if (ev.type === "error") {
         failed = true;
-        addError("压缩失败：" + (ev.error || "未知错误"));
+        addError(t("compact.failed", { msg: ev.error || t("common.unknownError") }));
       }
     }
     if (!failed) {
       busy = false; // selectSession 在 busy 时不工作，先复位
       await selectSession(currentSession); // 重新加载压缩后的历史
-      addSysBlock("✅ 压缩完成");
+      addSysBlock(t("compact.done"));
     }
   } catch (e) {
-    addError("压缩失败：" + e.message);
+    addError(t("compact.failed", { msg: e.message }));
   } finally {
     busy = false;
     sendBtn.disabled = false;
@@ -1070,7 +1111,7 @@ const settingsPluginsEl = $("#settings-plugins");
 
 async function openSettings() {
   settingsView.classList.remove("hidden");
-  settingsPluginsEl.textContent = "加载中…";
+  settingsPluginsEl.textContent = t("common.loading");
   loadModels();
   await loadSettingsPlugins();
 }
@@ -1079,7 +1120,7 @@ async function loadSettingsPlugins() {
   try {
     renderSettingsPlugins(await fetch("/api/plugins").then((r) => r.json()));
   } catch (e) {
-    settingsPluginsEl.textContent = "加载插件列表失败：" + e.message;
+    settingsPluginsEl.textContent = t("plugins.loadFailed", { msg: e.message });
   }
 }
 
@@ -1107,13 +1148,11 @@ const accessErrorEl = $("#access-error");
 
 // 状态一句话讲清「现在谁能进来」。措辞与启动日志的 authSummary 对齐。
 function accessSummary(s) {
-  if (s.env_managed) return ["ok", "口令由环境变量 WEN_AUTH_PASSWORD 提供，此处无法修改。"];
-  if (!s.has_password) {
-    return ["warn", "尚未设置口令。服务当前只监听本机，配置了对外监听也会被降级——设置口令并重启后才会真正对外提供服务。"];
-  }
-  if (!s.trust_loopback) return ["ok", "已设置口令，所有来源（包括本机）都需要登录。"];
-  if (s.exposed) return ["ok", "已设置口令。本机访问免登录，其它来源需要登录。"];
-  return ["ok", "已设置口令，但当前只监听本机，外部访问不到。"];
+  if (s.env_managed) return ["ok", t("access.envManaged")];
+  if (!s.has_password) return ["warn", t("access.noPassword")];
+  if (!s.trust_loopback) return ["ok", t("access.allLogin")];
+  if (s.exposed) return ["ok", t("access.loopbackFree")];
+  return ["ok", t("access.localOnly")];
 }
 
 async function loadAccessState() {
@@ -1130,7 +1169,7 @@ async function loadAccessState() {
     for (const id of ["#access-current", "#access-new", "#access-confirm"]) $(id).disabled = locked;
   } catch (e) {
     accessStateEl.className = "access-state warn";
-    accessStateEl.textContent = "读取访问控制状态失败：" + e.message;
+    accessStateEl.textContent = t("access.stateFailed", { msg: e.message });
   }
 }
 
@@ -1140,7 +1179,7 @@ $("#access-form").addEventListener("submit", async (e) => {
 
   const next = $("#access-new").value;
   if (next !== $("#access-confirm").value) {
-    accessErrorEl.textContent = "两次输入的新口令不一致";
+    accessErrorEl.textContent = t("access.mismatch");
     accessErrorEl.classList.remove("hidden");
     return;
   }
@@ -1152,7 +1191,7 @@ $("#access-form").addEventListener("submit", async (e) => {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      accessErrorEl.textContent = body.error || "保存失败";
+      accessErrorEl.textContent = body.error || t("access.saveFailed");
       accessErrorEl.classList.remove("hidden");
       return;
     }
@@ -1160,7 +1199,7 @@ $("#access-form").addEventListener("submit", async (e) => {
     await loadAccessState();
     // 改口令会踢掉所有会话。本机来源靠回环免认证仍在，远程来源会在下一个请求上被弹回登录页。
   } catch (err) {
-    accessErrorEl.textContent = "保存失败：" + err.message;
+    accessErrorEl.textContent = t("access.saveFailedMsg", { msg: err.message });
     accessErrorEl.classList.remove("hidden");
   }
 });
@@ -1177,7 +1216,7 @@ function closeSettings() {
 }
 
 // 与 internal/plugin 的 SourceBuiltin / SourceExternal 对应
-const SOURCE_LABELS = { builtin: "内置", external: "外源" };
+const SOURCE_LABEL_KEYS = { builtin: "plugins.source.builtin", external: "plugins.source.external" };
 
 // 按功能分组分节展示：组间与组内都保持注册顺序（分组名随每个插件由后端给出），
 // 未声明分组的插件（如外源插件）由后端归入「其他」，自然落在最后。
@@ -1186,6 +1225,8 @@ function renderSettingsPlugins(list) {
   const order = [];
   const byCat = new Map();
   for (const p of list) {
+    // 分组名由后端给出（未声明的插件后端已归入「其他」），属于服务端文案，
+    // 这一句只是后端漏发时的兜底，跟着它的措辞走。
     const cat = p.category || "其他";
     if (!byCat.has(cat)) {
       byCat.set(cat, []);
@@ -1230,7 +1271,7 @@ function buildPluginCard(p) {
     const gear = document.createElement("button");
     gear.type = "button";
     gear.className = "btn-icon btn-square btn-gear";
-    gear.title = "配置";
+    gear.title = t("plugins.configure");
     gear.innerHTML = gearIconSVG;
     gear.addEventListener("click", () => openPluginConfig(p));
     actions.appendChild(gear);
@@ -1247,30 +1288,32 @@ function buildPluginCard(p) {
     tag.textContent = text;
     tags.appendChild(tag);
   };
-  addTag(SOURCE_LABELS[p.source] || p.source || "内置", "tag-source");
-  if (p.has_prompt) addTag("注入提示词");
+  addTag(SOURCE_LABEL_KEYS[p.source]
+    ? t(SOURCE_LABEL_KEYS[p.source])
+    : p.source || t("plugins.source.builtin"), "tag-source");
+  if (p.has_prompt) addTag(t("plugins.hasPrompt"));
 
   // 依赖未满足时不让开：后端也会拒绝，这里只是别让用户白点一次
   const unmet = p.unmet || [];
   if (unmet.length > 0) {
-    addTag("需先启用 " + unmet.join("、"), "tag-blocked");
+    addTag(t("plugins.blocked", { names: I18N.list(unmet) }), "tag-blocked");
     input.disabled = true;
-    label.title = "该插件依赖 " + unmet.join("、") + "，需要先启用后才能打开";
+    label.title = t("plugins.blockedTitle", { names: I18N.list(unmet) });
     card.classList.add("plugin-card-blocked");
   } else if ((p.requires || []).length > 0) {
-    addTag("依赖 " + p.requires.join("、"));
+    addTag(t("plugins.requires", { names: I18N.list(p.requires) }));
   }
   // 冲突只告警不阻止：能力相抵的代价由用户自己权衡
   const conflicting = p.conflicting || [];
   if (p.enabled && conflicting.length > 0) {
-    addTag("与 " + conflicting.join("、") + " 能力相抵", "tag-warn");
+    addTag(t("plugins.conflicts", { names: I18N.list(conflicting) }), "tag-warn");
   }
   card.appendChild(tags);
 
   // 工具名不再逐个占一个标签（数量多时会把版面撑乱），改为悬停查看
   const tools = p.tool_names || [];
   if (tools.length > 0) {
-    card.title = "工具：" + tools.join("、");
+    card.title = t("plugins.tools", { names: I18N.list(tools) });
   }
 
   const desc = document.createElement("div");
@@ -1295,7 +1338,7 @@ function buildPluginCard(p) {
     } catch (e) {
       input.checked = !want; // 失败回滚开关状态
       input.disabled = false;
-      addError("切换插件失败：" + e.message);
+      addError(t("plugins.toggleFailed", { msg: e.message }));
     }
   });
 
@@ -1348,7 +1391,7 @@ function renderActionState(st) {
 // 能验证还没保存的配置。
 async function startPluginAction(pluginName, actionDef, draft) {
   actionTitleEl.textContent = pluginName + " · " + actionDef.label;
-  renderActionState({ message: "正在开始…" });
+  renderActionState({ message: t("plugins.actionStarting") });
   actionModal.classList.remove("hidden");
   const url =
     "/api/plugins/" + encodeURIComponent(pluginName) +
@@ -1364,7 +1407,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       throw new Error(err.error || "HTTP " + res.status);
     }
   } catch (e) {
-    renderActionState({ status: "error", message: "操作启动失败：" + e.message });
+    renderActionState({ status: "error", message: t("plugins.actionStartFailed", { msg: e.message }) });
     return;
   }
   // 连不上时不立刻判死：有的操作会把服务重启掉（程序更新就是），那期间这里必然
@@ -1379,7 +1422,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       const res = await fetch(url);
       if (res.status === 401) {
         // 服务重启会让登录会话失效（令牌只在内存里），远程访问时会走到这里
-        renderActionState({ status: "error", message: "登录已失效（服务可能已重启），请刷新页面重新登录。" });
+        renderActionState({ status: "error", message: t("plugins.actionExpired") });
         actionPollTimer = null;
         return;
       }
@@ -1404,7 +1447,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
     } catch (e) {
       misses += 1;
       if (misses > maxMisses) {
-        renderActionState({ status: "error", message: "查询进展失败：" + e.message });
+        renderActionState({ status: "error", message: t("plugins.actionPollFailed", { msg: e.message }) });
         actionPollTimer = null;
         return;
       }
@@ -1413,7 +1456,7 @@ async function startPluginAction(pluginName, actionDef, draft) {
       renderActionState({
         status: "pending",
         markdown: lastMarkdown, // 重连提示不该把已经渲染好的正文打回纯文本
-        message: (lastMessage ? lastMessage + "\n\n" : "") + "（与服务的连接中断，正在重试…）",
+        message: (lastMessage ? lastMessage + "\n\n" : "") + t("plugins.actionRetrying"),
       });
     }
     actionPollTimer = setTimeout(poll, 1500);
@@ -1455,7 +1498,7 @@ let configActionEls = new Map(); // 操作 key -> {btn, desc}，操作结束后�
 function openPluginConfig(p) {
   configPlugin = p;
   configInputs = new Map();
-  configTitleEl.textContent = p.name + " · 配置";
+  configTitleEl.textContent = t("plugins.configTitle", { name: p.name });
   configFormEl.textContent = "";
   showConfigError("");
   const fields = p.config_fields || [];
@@ -1587,9 +1630,9 @@ function buildConfigField(f, value) {
 
 function rangeHint(f) {
   if (f.type !== "int") return "";
-  if (f.min !== undefined && f.max !== undefined) return `取值范围 ${f.min} ~ ${f.max}。`;
-  if (f.min !== undefined) return `不小于 ${f.min}。`;
-  if (f.max !== undefined) return `不大于 ${f.max}。`;
+  if (f.min !== undefined && f.max !== undefined) return t("plugins.range", { min: f.min, max: f.max });
+  if (f.min !== undefined) return t("plugins.min", { min: f.min });
+  if (f.max !== undefined) return t("plugins.max", { max: f.max });
   return "";
 }
 
@@ -1634,7 +1677,7 @@ async function savePluginConfig() {
     renderSettingsPlugins(await res.json());
     closePluginConfig();
   } catch (e) {
-    showConfigError("保存失败：" + e.message);
+    showConfigError(t("plugins.saveFailed", { msg: e.message }));
   } finally {
     configSaveBtn.disabled = false;
   }
@@ -1675,11 +1718,11 @@ const modelsCurrentEl = $("#models-current");
 let modelsDoc = null; // 最近一次 /api/models 的响应
 
 async function loadModels() {
-  modelsEl.textContent = "加载中…";
+  modelsEl.textContent = t("common.loading");
   try {
     renderModels(await fetch("/api/models").then((r) => r.json()));
   } catch (e) {
-    modelsEl.textContent = "加载模型配置失败：" + e.message;
+    modelsEl.textContent = t("models.loadFailed", { msg: e.message });
   }
 }
 
@@ -1730,11 +1773,13 @@ function renderModels(doc) {
 
   const cur = doc.current || {};
   modelsCurrentEl.textContent = "";
-  modelsCurrentEl.append("当前使用：");
+  modelsCurrentEl.append(t("models.current"));
   const b = document.createElement("b");
   const curProvider = doc.providers.find((p) => p.name === cur.provider);
   const curModel = curProvider && (curProvider.models || []).find((m) => m.id === cur.model);
-  b.textContent = cur.provider ? cur.provider + " / " + ((curModel && curModel.name) || cur.model || "—") : "未选择";
+  b.textContent = cur.provider
+    ? cur.provider + " / " + ((curModel && curModel.name) || cur.model || "—")
+    : t("models.currentNone");
   modelsCurrentEl.appendChild(b);
 
   for (const p of doc.providers) {
@@ -1753,20 +1798,22 @@ function buildProviderCard(p) {
   name.className = "provider-name";
   name.textContent = p.name;
   head.append(name, tagEl(typeLabel(p.type)));
-  if (p.source === "config") head.appendChild(tagEl("来自配置文件"));
+  if (p.source === "config") head.appendChild(tagEl(t("models.fromConfig")));
 
   const actions = document.createElement("div");
   actions.className = "provider-actions";
   actions.append(
-    iconButton(gearIconSVG, "编辑提供商", () => openProviderModal(p.name)),
-    iconButton(trashIconSVG, "删除提供商", () => deleteProvider(p.name), "btn-icon-danger"),
+    iconButton(gearIconSVG, t("models.editProvider"), () => openProviderModal(p.name)),
+    iconButton(trashIconSVG, t("models.deleteProvider"), () => deleteProvider(p.name), "btn-icon-danger"),
   );
   head.appendChild(actions);
   card.appendChild(head);
 
   const meta = document.createElement("div");
   meta.className = "provider-meta";
-  meta.textContent = p.base_url + (p.has_api_key ? "  ·  API Key " + p.api_key_masked : "  ·  未配置 API Key");
+  meta.textContent = p.has_api_key
+    ? t("models.metaWithKey", { url: p.base_url, masked: p.api_key_masked })
+    : t("models.metaNoKey", { url: p.base_url });
   card.appendChild(meta);
 
   const list = document.createElement("div");
@@ -1775,13 +1822,13 @@ function buildProviderCard(p) {
   if ((p.models || []).length === 0) {
     const empty = document.createElement("div");
     empty.className = "model-empty";
-    empty.textContent = "暂无模型";
+    empty.textContent = t("models.empty");
     list.appendChild(empty);
   }
   const add = document.createElement("button");
   add.type = "button";
   add.className = "btn-link";
-  add.textContent = "＋ 添加模型";
+  add.textContent = t("models.addModel");
   add.addEventListener("click", () => openModelModal(p.name, null));
   list.appendChild(add);
   card.appendChild(list);
@@ -1793,7 +1840,7 @@ function buildModelRow(p, m) {
   row.className = "model-row";
   const active = modelsDoc.current.provider === p.name && modelsDoc.current.model === m.id;
   if (active) row.classList.add("active");
-  row.title = active ? "当前使用中" : "点击切换到该模型";
+  row.title = active ? t("models.inUse") : t("models.switchTo");
 
   const radio = document.createElement("span");
   radio.className = "model-radio";
@@ -1811,8 +1858,8 @@ function buildModelRow(p, m) {
   const actions = document.createElement("div");
   actions.className = "model-row-actions";
   actions.append(
-    iconButton(pencilIconSVG, "编辑模型", (e) => { e.stopPropagation(); openModelModal(p.name, m.id); }),
-    iconButton(trashIconSVG, "删除模型", (e) => { e.stopPropagation(); deleteModel(p.name, m.id); }, "btn-icon-danger"),
+    iconButton(pencilIconSVG, t("models.editModel"), (e) => { e.stopPropagation(); openModelModal(p.name, m.id); }),
+    iconButton(trashIconSVG, t("models.deleteModel"), (e) => { e.stopPropagation(); deleteModel(p.name, m.id); }, "btn-icon-danger"),
   );
   row.appendChild(actions);
 
@@ -1852,24 +1899,24 @@ async function switchModel(provider, model) {
     }
     renderModels(await res.json());
   } catch (e) {
-    showModelsError("切换模型失败：" + e.message);
+    showModelsError(t("models.switchFailed", { msg: e.message }));
   }
 }
 
 async function deleteProvider(name) {
-  if (!confirm(`确定删除提供商「${name}」？`)) return;
+  if (!confirm(t("models.deleteProviderConfirm", { name }))) return;
   const payload = payloadFromDoc();
   payload.providers = payload.providers.filter((p) => p.name !== name);
   showModelsError("");
   try {
     await putModels(payload);
   } catch (e) {
-    showModelsError("删除失败：" + e.message);
+    showModelsError(t("models.deleteFailed", { msg: e.message }));
   }
 }
 
 async function deleteModel(provider, id) {
-  if (!confirm(`确定删除模型「${id}」？`)) return;
+  if (!confirm(t("models.deleteModelConfirm", { id }))) return;
   const payload = payloadFromDoc();
   const p = payload.providers.find((x) => x.name === provider);
   p.models = (p.models || []).filter((m) => m.id !== id);
@@ -1877,7 +1924,7 @@ async function deleteModel(provider, id) {
   try {
     await putModels(payload);
   } catch (e) {
-    showModelsError("删除失败：" + e.message);
+    showModelsError(t("models.deleteFailed", { msg: e.message }));
   }
 }
 
@@ -1893,7 +1940,7 @@ let providerInputs = {};
 function openProviderModal(name) {
   providerEditing = name || null;
   const p = name ? modelsDoc.providers.find((x) => x.name === name) : null;
-  providerTitleEl.textContent = p ? "编辑提供商 · " + p.name : "新增提供商";
+  providerTitleEl.textContent = p ? t("provider.edit", { name: p.name }) : t("provider.add");
   providerForm.textContent = "";
   showProviderError("");
 
@@ -1909,7 +1956,9 @@ function openProviderModal(name) {
   const urlInput = textInput(p ? p.base_url : defaultBaseURL(typeSelect.value));
   const keyInput = textInput("");
   keyInput.type = "password";
-  keyInput.placeholder = p && p.has_api_key ? "留空表示不修改（当前 " + p.api_key_masked + "）" : "";
+  keyInput.placeholder = p && p.has_api_key
+    ? t("provider.apiKeyPlaceholder", { masked: p.api_key_masked })
+    : "";
 
   // 思考参数方言：OpenAI 兼容协议里各家的思考扩展互不兼容，按提供商选择
   const dialectSelect = document.createElement("select");
@@ -1920,14 +1969,12 @@ function openProviderModal(name) {
     dialectSelect.appendChild(opt);
   }
   dialectSelect.value = (p && p.thinking_dialect) || "deepseek";
-  const dialectField = fieldEl("思考参数方言", dialectSelect,
-    "各家 OpenAI 兼容接口的思考/推理参数写法不同：DeepSeek 用 thinking+reasoning_effort，MiniMax 用 adaptive+reasoning_split，Qwen 用 enable_thinking。选错会被对方 API 以 400 拒绝或思考内容混入正文。");
+  const dialectField = fieldEl(t("provider.dialect"), dialectSelect, t("provider.dialectDesc"));
 
   // 提示词缓存：仅 Anthropic 需要在请求里显式打断点，故只在该模式下出现。
   // 默认开启——未设置（null）与明确开启在效果上一致。
   const cacheSwitch = switchInput(p ? p.prompt_cache !== false : true);
-  const cacheField = fieldEl("提示词缓存", cacheSwitch.wrap,
-    "开启后把不变的部分（工具、system、已有历史）标为可缓存，命中时这部分按约十分之一的价格计费。未命中的写入要多付约四分之一，因此若对话间隔常常超过几分钟（缓存有效期），关掉更省。");
+  const cacheField = fieldEl(t("provider.cache"), cacheSwitch.wrap, t("provider.cacheDesc"));
 
   const syncTypeFields = () => {
     dialectField.classList.toggle("hidden", typeSelect.value !== "openai_compat");
@@ -1944,11 +1991,11 @@ function openProviderModal(name) {
   });
 
   providerForm.append(
-    fieldEl("名称", nameInput, "列表中显示的名字，需唯一。"),
-    fieldEl("API 模式", typeSelect, "Anthropic 模式使用 Messages API；OpenAI 兼容适用于 DeepSeek 等服务。"),
+    fieldEl(t("provider.name"), nameInput, t("provider.nameDesc")),
+    fieldEl(t("provider.type"), typeSelect, t("provider.typeDesc")),
     dialectField,
-    fieldEl("Base URL", urlInput, "服务地址，需以 http:// 或 https:// 开头。"),
-    fieldEl("API Key", keyInput, "保存在本机 models.json 中，不会提交到仓库。"),
+    fieldEl(t("provider.baseUrl"), urlInput, t("provider.baseUrlDesc")),
+    fieldEl(t("provider.apiKey"), keyInput, t("provider.apiKeyDesc")),
     cacheField,
   );
   syncTypeFields();
@@ -2001,7 +2048,7 @@ async function saveProvider() {
     await putModels(payload);
     closeProviderModal();
   } catch (e) {
-    showProviderError("保存失败：" + e.message);
+    showProviderError(t("provider.saveFailed", { msg: e.message }));
   }
 }
 
@@ -2009,10 +2056,10 @@ async function testProvider() {
   const p = providerEditing ? modelsDoc.providers.find((x) => x.name === providerEditing) : null;
   const model = p && (p.models || [])[0];
   if (!model) {
-    showProviderError("请先为该提供商添加模型后再测试");
+    showProviderError(t("provider.testNeedModel"));
     return;
   }
-  showProviderError("正在测试…", "info");
+  showProviderError(t("provider.testing"), "info");
   const testBtn = $("#btn-provider-test");
   testBtn.disabled = true;
   try {
@@ -2033,7 +2080,7 @@ async function testProvider() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || "HTTP " + res.status);
     }
-    showProviderError("连接正常（模型 " + model.id + "）", "ok");
+    showProviderError(t("provider.testOk", { model: model.id }), "ok");
   } catch (e) {
     showProviderError(e.message);
   } finally {
@@ -2054,21 +2101,21 @@ function openModelModal(provider, id) {
   const p = modelsDoc.providers.find((x) => x.name === provider);
   const m = id ? (p.models || []).find((x) => x.id === id) : null;
   modelEditing = { provider, id: id || null };
-  modelTitleEl.textContent = m ? "编辑模型 · " + m.id : "添加模型 · " + provider;
+  modelTitleEl.textContent = m ? t("model.edit", { id: m.id }) : t("model.add", { provider });
   modelForm.textContent = "";
   showModelError("");
 
   const d = modelsDoc.defaults || {};
   const idInput = textInput(m ? m.id : "");
   const nameInput = textInput(m && m.name ? m.name : "");
-  const ctxInput = numberInput(m && m.context_length, `跟随全局（${d.context_length}）`, { min: 1 });
-  const maxInput = numberInput(m && m.max_tokens, `跟随全局（${d.max_tokens}）`, { min: 1 });
-  const tempInput = numberInput(m && m.temperature, `跟随全局（${d.temperature}）`, { min: 0, max: 2, step: 0.1 });
+  const ctxInput = numberInput(m && m.context_length, t("model.followGlobal", { value: d.context_length }), { min: 1 });
+  const maxInput = numberInput(m && m.max_tokens, t("model.followGlobal", { value: d.max_tokens }), { min: 1 });
+  const tempInput = numberInput(m && m.temperature, t("model.followGlobal", { value: d.temperature }), { min: 0, max: 2, step: 0.1 });
 
   const thinkSelect = document.createElement("select");
   const follow = document.createElement("option");
   follow.value = "";
-  follow.textContent = `跟随全局（${d.thinking}）`;
+  follow.textContent = t("model.followGlobal", { value: d.thinking });
   thinkSelect.appendChild(follow);
   for (const lv of modelsDoc.thinking_levels || []) {
     const opt = document.createElement("option");
@@ -2080,16 +2127,14 @@ function openModelModal(provider, id) {
 
   const isAnthropic = p.type === "anthropic";
   modelForm.append(
-    fieldEl("模型 ID", idInput, "传给 API 的模型 id，例如 deepseek-v4-flash。"),
-    fieldEl("显示名", nameInput, "列表中显示的名字，留空则显示模型 ID。"),
-    fieldEl("上下文窗口", ctxInput, "token 数，用于裁剪与自动压缩阈值。留空则使用 config.yaml 的全局值。"),
-    fieldEl("最大输出 tokens", maxInput, "单次回复的输出上限。留空则使用全局值。"),
-    fieldEl("思考模式", thinkSelect, isAnthropic
-      ? "Anthropic 模式下 off 之外的档位映射为 adaptive + effort。"
-      : "off 关闭思考，其余为思考强度。"),
-    fieldEl("temperature", tempInput, isAnthropic
-      ? "Anthropic 模式忽略此项：当前世代 Claude 模型不接受采样参数。"
-      : "0 ~ 2，思考开启时不生效。留空则使用全局值。"),
+    fieldEl(t("model.id"), idInput, t("model.idDesc")),
+    fieldEl(t("model.name"), nameInput, t("model.nameDesc")),
+    fieldEl(t("model.context"), ctxInput, t("model.contextDesc")),
+    fieldEl(t("model.maxTokens"), maxInput, t("model.maxTokensDesc")),
+    fieldEl(t("model.thinking"), thinkSelect,
+      t(isAnthropic ? "model.thinkingDescAnthropic" : "model.thinkingDesc")),
+    fieldEl(t("model.temperature"), tempInput,
+      t(isAnthropic ? "model.temperatureDescAnthropic" : "model.temperatureDesc")),
   );
   modelInputs = { id: idInput, name: nameInput, context_length: ctxInput, max_tokens: maxInput, thinking: thinkSelect, temperature: tempInput };
 
@@ -2136,7 +2181,7 @@ async function saveModel() {
     await putModels(payload);
     closeModelModal();
   } catch (e) {
-    showModelError("保存失败：" + e.message);
+    showModelError(t("model.saveFailed", { msg: e.message }));
   }
 }
 
@@ -2165,7 +2210,7 @@ function stepButton(svg, input, dir) {
   btn.type = "button";
   btn.className = "number-step";
   btn.tabIndex = -1; // 键盘上下键本来就能调值，按钮不进 Tab 顺序
-  btn.title = dir > 0 ? "增加" : "减少";
+  btn.title = t(dir > 0 ? "common.increase" : "common.decrease");
   btn.innerHTML = svg;
   btn.addEventListener("click", () => {
     // 空值时从下限（没有下限则从 0）起步，避免浏览器各自的默认行为
@@ -2342,6 +2387,29 @@ $("#chat-form").addEventListener("submit", (e) => {
 });
 
 $("#btn-new").addEventListener("click", newSession);
+
+// 切换语言后就地重绘：静态文案由 i18n.js 自己填，动态渲染出来的部分在这里点名重画。
+// 不整页刷新，是因为那会丢掉输入框里没发出去的内容与消息区的滚动位置——而语言是
+// 装完调一次的设置，为它清空正在写的一段话不值当。
+function retranslate() {
+  markLangSeg();
+  setSending(busy);
+  applyChatWidth(chatWidthSetting);
+  renderModelLabel();
+  loadSessions();
+  if (currentSession && !busy) {
+    renderedFp = ""; // 指纹作废，让同步把消息区按新语言整体重画
+    syncCurrentSession();
+  }
+  if (!settingsView.classList.contains("hidden")) {
+    loadSettingsPlugins();
+    loadModels();
+    const nav = $(".settings-nav-item.active");
+    if (nav && nav.dataset.section === "access") loadAccessState();
+  }
+}
+
+I18N.onChange(retranslate);
 
 loadSessions();
 
