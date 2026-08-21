@@ -41,12 +41,19 @@ var (
 
 // Post 投递一条理由。同 (Source, Key) 覆盖旧条目（保持原有位置），
 // 随后叫醒消费方（若装了回调）。
+//
+// 这里刻意不判断「是不是已经过期」，也不顺手剪枝：那要看时钟，而投递方的时钟
+// 未必是本进程的墙上时钟——插件的定时逻辑都是可注入时钟的（日程按假时钟算出
+// 「16:30 回来」，过期时刻自然也在那条时间线上）。Post 若拿 time.Now() 去卡，
+// 等于用另一条时间线否决投递方的判断，理由会被静默扔掉。过期与否统一由消费侧
+// 的 Take / Pending 按各自的 now 裁定，它们本来就带这个参数。代价是一条已经
+// 过期的理由会占着一个槽位直到下次消费，对 maxCues 那个量级无所谓。
 func Post(c Cue) {
-	if c.Text == "" || !c.Expire.After(time.Now()) {
+	// 过期时刻仍是硬要求，只是「有没有过期」不在这里判——空值等于没带，拒收
+	if c.Text == "" || c.Expire.IsZero() {
 		return
 	}
 	mu.Lock()
-	pruneLocked(time.Now())
 	replaced := false
 	for i := range cues {
 		if cues[i].Source == c.Source && cues[i].Key == c.Key {
