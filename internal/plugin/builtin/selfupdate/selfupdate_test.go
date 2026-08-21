@@ -31,6 +31,14 @@ const newTag = "v999.0.0"
 // 包里那个「二进制」是段 shell 脚本，只会打印自己的版本号——试运行那一步要真的
 // 把它跑起来，所以 Windows 上装不了（见 TestInstallAndRestart 的 skip）。
 func fakeGitHub(t *testing.T, tag string) *httptest.Server {
+	return fakeGitHubSums(t, tag, true)
+}
+
+// fakeGitHubSums 的 goodSum 为 false 时清单里给一个对不上的哈希。校验失败那条路径
+// 必须由这里制造，不能在外面套一层代理去改写清单：发布 JSON 里的下载地址是绝对的，
+// 代理转发不到它，于是「以为在测校验失败，其实一路顺利地装上了」——真发生过，
+// 而且在 Windows 上还因为试运行那步先失败而看起来是通过的。
+func fakeGitHubSums(t *testing.T, tag string, goodSum bool) *httptest.Server {
 	t.Helper()
 
 	payload := []byte("#!/bin/sh\necho " + tag + "\n")
@@ -54,7 +62,11 @@ func fakeGitHub(t *testing.T, tag string) *httptest.Server {
 	})
 	mux.HandleFunc("/dl/pkg", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(archive) })
 	mux.HandleFunc("/dl/sums", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), assetName)
+		hexSum := hex.EncodeToString(sum[:])
+		if !goodSum {
+			hexSum = strings.Repeat("0", 64)
+		}
+		fmt.Fprintf(w, "%s  %s\n", hexSum, assetName)
 	})
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -261,18 +273,7 @@ func TestInstallWithoutRestart(t *testing.T) {
 
 // 校验和对不上时中止，程序文件保持原样。
 func TestChecksumMismatchKeepsBinary(t *testing.T) {
-	srv := fakeGitHub(t, newTag)
-	// 把校验和清单改成对不上的内容
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/dl/sums") {
-			fmt.Fprintf(w, "%s  %s\n", strings.Repeat("0", 64),
-				updater.AssetName(newTag, runtime.GOOS, runtime.GOARCH))
-			return
-		}
-		http.Redirect(w, r, srv.URL+r.URL.Path, http.StatusTemporaryRedirect)
-	}))
-	t.Cleanup(bad.Close)
-
+	bad := fakeGitHubSums(t, newTag, false) // 清单里的哈希与包对不上
 	p, exe, _ := newPlugin(t, bad, nil)
 	if err := p.StartAction(context.Background(), actionUpdate); err != nil {
 		t.Fatal(err)
