@@ -19,12 +19,19 @@ const guidePrompt = `[日程]
   延期都要写原因，做完写一句经历。
 - 与对方的约定不能由你单方面改动，要改先跟对方商量，对方明确同意后才传 agreed_by_user。
 - 表里「和谁」只能是人物清单里的人；要约清单外的人，先用 upsert_person 登记他。
-- 注入的约定不全时用 list_commitments 查看。`
+- 答应下来但没有具体时刻的事（明天给他带两个菜、周末把书还回去），无论是你答应对方的
+  还是对方答应你的，当场用 add_promise 记下，写清打算哪天兑现。说过的话不会自己变成
+  待办：只在对话里说一句，过后就没有任何东西记得它。
+- 做到了、没做成、或者不作数了，用 settle_promise 了结。**[答应过的事] 里没有的就不是
+  待办**——上文里你说过要做什么，不代表它现在还没做；不要凭那句原话再提醒一遍。
+- 注入的约定不全时用 list_commitments 查看，要回头看某件答应过的事后来做没做用
+  list_promises。`
 
 // stateHeader / commitHeader 领起两块注入。
 const (
-	stateHeader  = "[今日安排]"
-	commitHeader = "[未来约定]"
+	stateHeader   = "[今日安排]"
+	commitHeader  = "[未来约定]"
+	promiseHeader = "[答应过的事]"
 )
 
 // planPrompt 是规划轮次的一次性输入。花括号由代码填：星期、日期、时刻、今天的约定。
@@ -122,12 +129,16 @@ func (p *Plugin) TurnPrompt(ctx context.Context, _ plugin.TurnEvent) (string, er
 	if err != nil {
 		return "", err
 	}
-	return renderPrompt(pl, cs, p.now(), s), nil
+	ps, err := st.LoadPromises()
+	if err != nil {
+		return "", err
+	}
+	return renderPrompt(pl, cs, ps, p.now(), s), nil
 }
 
 // renderPrompt 按预算渲染两块注入，分级降级：去掉已做项的经历 → 已做项压成条数 →
 // 约定只剩条数。进行中与下一项永远保留——它们是行为判据。
-func renderPrompt(pl Plan, cs []Commitment, now time.Time, s settings) string {
+func renderPrompt(pl Plan, cs []Commitment, ps []Promise, now time.Time, s settings) string {
 	day := s.today(now)
 	today := day.Format(dateLayout)
 	var todayCs, future []Commitment
@@ -142,6 +153,7 @@ func renderPrompt(pl Plan, cs []Commitment, now time.Time, s settings) string {
 	sortCommitments(todayCs)
 	sortCommitments(future)
 	planned := pl.Date == today
+	open := openPromises(ps, day)
 
 	for level := 0; level <= 3; level++ {
 		var b strings.Builder
@@ -170,6 +182,10 @@ func renderPrompt(pl Plan, cs []Commitment, now time.Time, s settings) string {
 					fmt.Fprintf(&b, "另有 %d 条，可用 list_commitments 查看。", rest)
 				}
 			}
+		}
+		if len(open) > 0 {
+			b.WriteString("\n" + promiseHeader + "\n")
+			b.WriteString(renderPromises(open, day, now.Location(), level))
 		}
 		out := strings.TrimRight(b.String(), "\n")
 		if s.maxInjectBytes <= 0 || len(out) <= s.maxInjectBytes || level == 3 {
@@ -293,4 +309,52 @@ func joinCommitLines(cs []Commitment, withID bool) string {
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, "；")
+}
+
+// openPromises 挑出还该注入的条目：没了结、且到期日还没过完宽限期。
+//
+// 过了宽限仍然挂着的不在这里剔除——那由每日收束改成「没做成」并落一条注记，
+// 让人看得见。这里只管注入什么，不改状态：TurnPrompt 按契约是廉价、无副作用的。
+func openPromises(ps []Promise, day time.Time) []Promise {
+	cutoff := day.AddDate(0, 0, -promiseGraceDays).Format(dateLayout)
+	out := make([]Promise, 0, len(ps))
+	for _, pr := range ps {
+		if pr.settled() || pr.Date < cutoff {
+			continue
+		}
+		out = append(out, pr)
+	}
+	sortPromises(out)
+	return out
+}
+
+// renderPromises 写「答应过的事」：一行一条，过了日子的标出来。
+// level 是降级档位，与表、约定共用同一套：0 全写，1 去掉备注，2 只留标题，3 只报条数。
+func renderPromises(ps []Promise, day time.Time, loc *time.Location, level int) string {
+	today := day.Format(dateLayout)
+	if level >= 3 {
+		return fmt.Sprintf("共 %d 条，可用 list_promises 查看。", len(ps))
+	}
+	shown := ps
+	if len(shown) > maxPromiseShown {
+		shown = shown[:maxPromiseShown]
+	}
+	var b strings.Builder
+	for _, pr := range shown {
+		fmt.Fprintf(&b, "[%s] %s %s%s", pr.ID, fmtDateShort(pr.Date, loc), promiseByCN(pr.By), pr.Title)
+		if pr.Note != "" && level == 0 {
+			b.WriteString("（" + pr.Note + "）")
+		}
+		switch {
+		case pr.Date < today:
+			b.WriteString(" —— 到日子了还没了结")
+		case pr.Date == today:
+			b.WriteString(" —— 就是今天")
+		}
+		b.WriteString("\n")
+	}
+	if rest := len(ps) - len(shown); rest > 0 {
+		fmt.Fprintf(&b, "另有 %d 条，可用 list_promises 查看。\n", rest)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -572,25 +573,25 @@ func TestRenderBudgetDegrades(t *testing.T) {
 		cs = append(cs, Commitment{ID: "c", Date: "2026-08-2" + string(rune('2'+i%8)), Start: "10:00", Title: strings.Repeat("约", 25), Flex: flexTry})
 	}
 	s := settings{dayStartHour: 5, maxCommitInject: 8, maxInjectBytes: 0}
-	full := renderPrompt(pl, cs, now, s)
+	full := renderPrompt(pl, cs, nil, now, s)
 	if !strings.Contains(full, long) {
 		t.Fatal("不设预算时应全列")
 	}
 	// 第一级：去掉经历
 	s.maxInjectBytes = len(full) - 1
-	l1 := renderPrompt(pl, cs, now, s)
+	l1 := renderPrompt(pl, cs, nil, now, s)
 	if strings.Contains(l1, long) || !strings.Contains(l1, "今天已做：晨跑；查资料。") {
 		t.Fatalf("第一级应去掉经历只留标题：\n%s", l1)
 	}
 	// 第二级：已做压成条数
 	s.maxInjectBytes = len(l1) - 1
-	l2 := renderPrompt(pl, cs, now, s)
+	l2 := renderPrompt(pl, cs, nil, now, s)
 	if !strings.Contains(l2, "今天已做 2 项。") || !strings.Contains(l2, "08-2") {
 		t.Fatalf("第二级应把已做项压成条数、约定仍列出：\n%s", l2)
 	}
 	// 第三级：约定只剩条数
 	s.maxInjectBytes = len(l2) - 1
-	l3 := renderPrompt(pl, cs, now, s)
+	l3 := renderPrompt(pl, cs, nil, now, s)
 	if !strings.Contains(l3, "共 8 条，可用 list_commitments 查看。") || strings.Contains(l3, "08-2") {
 		t.Fatalf("第三级约定只剩条数：\n%s", l3)
 	}
@@ -1071,5 +1072,178 @@ func TestNoBackCueWhenSessionBusy(t *testing.T) {
 	<-h.notices // 放弃时留的那条注记
 	if cue.Pending(h.clk.now()) {
 		t.Fatal("会话繁忙放弃时不该投「刚回来」")
+	}
+}
+
+// ---------- 答应过的事 ----------
+
+func (h *harness) promises(t *testing.T) []Promise {
+	t.Helper()
+	ps, err := h.p.storeFor("").LoadPromises()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ps
+}
+
+func (h *harness) turnPrompt(t *testing.T) string {
+	t.Helper()
+	out, err := h.p.TurnPrompt(context.Background(), plugin.TurnEvent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func dateOf(d time.Time) string { return d.Format(dateLayout) }
+
+// 这是整件事的起点：随口答应的一句话此前无处可去，只能以对话文本活着，
+// 于是每晚被重说一遍、措辞永远是「明天」。记下来之后它有了日期与状态。
+func TestPromiseRecordedAndInjected(t *testing.T) {
+	h := newHarness(t, false, nil)
+	tomorrow := dateOf(at(0, 0).AddDate(0, 0, 1))
+	out := h.call(t, "add_promise",
+		`{"title":"给对方带两个菜","date":"`+tomorrow+`","by":"self","note":"红烧肉和汤"}`)
+	if !strings.Contains(out, "p1") {
+		t.Fatalf("回执应带编号: %s", out)
+	}
+	ps := h.promises(t)
+	if len(ps) != 1 || ps[0].Status != promisePending || ps[0].By != promiseBySelf || ps[0].Date != tomorrow {
+		t.Fatalf("落盘不符: %+v", ps)
+	}
+	inj := h.turnPrompt(t)
+	if !strings.Contains(inj, promiseHeader) || !strings.Contains(inj, "你答应：给对方带两个菜") {
+		t.Fatalf("注入里应有这条: %s", inj)
+	}
+	if !strings.Contains(inj, "红烧肉和汤") {
+		t.Fatalf("0 档应带备注: %s", inj)
+	}
+}
+
+// 了结之后就不该再出现——这正是「已经带过的菜第二天又被提起」要防的。
+func TestSettledPromiseLeavesInjection(t *testing.T) {
+	h := newHarness(t, false, nil)
+	today := dateOf(at(0, 0))
+	h.call(t, "add_promise", `{"title":"给对方带两个菜","date":"`+today+`","by":"self"}`)
+	if inj := h.turnPrompt(t); !strings.Contains(inj, "带两个菜") {
+		t.Fatalf("了结前应在注入里: %s", inj)
+	}
+	out := h.call(t, "settle_promise", `{"id":"p1","result":"done","outcome":"早上带走了"}`)
+	if !strings.Contains(out, "做到了") {
+		t.Fatalf("回执不符: %s", out)
+	}
+	if inj := h.turnPrompt(t); strings.Contains(inj, "带两个菜") || strings.Contains(inj, promiseHeader) {
+		t.Fatalf("了结后不该再注入: %s", inj)
+	}
+	// 但账还在，回头能查到
+	if listed := h.call(t, "list_promises", `{"include_settled":true}`); !strings.Contains(listed, "早上带走了") {
+		t.Fatalf("已了结的应能查到: %s", listed)
+	}
+	if listed := h.call(t, "list_promises", `{}`); !strings.Contains(listed, "没有答应过的事") {
+		t.Fatalf("默认只列没了结的: %s", listed)
+	}
+}
+
+// 重复了结不报错但也不覆盖：与「做成了的事不重复做」同一条约定。
+func TestSettleTwiceIsNoop(t *testing.T) {
+	h := newHarness(t, false, nil)
+	today := dateOf(at(0, 0))
+	h.call(t, "add_promise", `{"title":"还书","date":"`+today+`","by":"user"}`)
+	h.call(t, "settle_promise", `{"id":"p1","result":"done","outcome":"还了"}`)
+	out := h.call(t, "settle_promise", `{"id":"p1","result":"missed","outcome":"改口"}`)
+	if !strings.Contains(out, "早就了结过了") {
+		t.Fatalf("重复了结应当明说: %s", out)
+	}
+	if ps := h.promises(t); ps[0].Status != promiseDone || ps[0].Outcome != "还了" {
+		t.Fatalf("重复了结不该覆盖: %+v", ps[0])
+	}
+}
+
+// 两个方向必须在字面上分得开，否则模型会去催对方做它自己答应的事。
+func TestPromiseDirectionIsExplicit(t *testing.T) {
+	h := newHarness(t, false, nil)
+	today := dateOf(at(0, 0))
+	h.call(t, "add_promise", `{"title":"带菜","date":"`+today+`","by":"self"}`)
+	h.call(t, "add_promise", `{"title":"还书","date":"`+today+`","by":"user"}`)
+	inj := h.turnPrompt(t)
+	if !strings.Contains(inj, "你答应：带菜") || !strings.Contains(inj, "对方答应：还书") {
+		t.Fatalf("方向应当写明: %s", inj)
+	}
+	if err := h.fail(t, "add_promise", `{"title":"x","date":"`+today+`","by":"他"}`); !strings.Contains(err.Error(), "by 只能是") {
+		t.Fatalf("方向必须给准: %v", err)
+	}
+}
+
+// 过期不兑现的会自动收束成「没做成」并停止注入：一条永远挂着的待办，
+// 就是换了个载体的同一种病。
+func TestOverduePromiseSweptToMissed(t *testing.T) {
+	h := newHarness(t, false, nil)
+	today := at(0, 0)
+	h.call(t, "add_promise", `{"title":"带菜","date":"`+dateOf(today)+`","by":"self"}`)
+
+	// 到期当天与次日都还在（宽限一天：对方可能晚上才兑现）
+	h.tick()
+	if ps := h.promises(t); ps[0].Status != promisePending {
+		t.Fatalf("到期当天不该收束: %+v", ps[0])
+	}
+	h.clk.set(today.AddDate(0, 0, 1).Add(10 * time.Hour))
+	h.tick()
+	if ps := h.promises(t); ps[0].Status != promisePending {
+		t.Fatalf("宽限期内不该收束: %+v", ps[0])
+	}
+	if inj := h.turnPrompt(t); !strings.Contains(inj, "到日子了还没了结") {
+		t.Fatalf("过了日子应当标出来: %s", inj)
+	}
+
+	// 再过一天：收束成没做成，留注记，且不再注入
+	h.clk.set(today.AddDate(0, 0, 2).Add(10 * time.Hour))
+	h.tick()
+	ps := h.promises(t)
+	if ps[0].Status != promiseMissed || ps[0].Settled.IsZero() {
+		t.Fatalf("过了宽限应收束成没做成: %+v", ps[0])
+	}
+	select {
+	case n := <-h.notices:
+		if !strings.Contains(n, "没做成") || !strings.Contains(n, "带菜") {
+			t.Errorf("注记内容不符: %s", n)
+		}
+	default:
+		t.Error("收束时应留一条注记")
+	}
+	if inj := h.turnPrompt(t); strings.Contains(inj, "带菜") {
+		t.Fatalf("收束后不该再注入: %s", inj)
+	}
+	// 幂等：再扫一次不再产生注记
+	h.tick()
+	select {
+	case n := <-h.notices:
+		t.Errorf("收束应当幂等，不该再留注记: %s", n)
+	default:
+	}
+}
+
+// 注入体量必须有硬上限，且超出时保住「还有几条」这个存在性信息。
+func TestPromiseInjectionIsBounded(t *testing.T) {
+	h := newHarness(t, false, nil)
+	today := dateOf(at(0, 0))
+	for i := 0; i < maxPromiseShown+3; i++ {
+		h.call(t, "add_promise",
+			fmt.Sprintf(`{"title":"第 %d 件","date":"%s","by":"self"}`, i, today))
+	}
+	inj := h.turnPrompt(t)
+	if n := strings.Count(inj, "你答应："); n != maxPromiseShown {
+		t.Errorf("注入条数应封顶在 %d，实际 %d", maxPromiseShown, n)
+	}
+	if !strings.Contains(inj, "另有 3 条") {
+		t.Errorf("超出的条数要报出来: %s", inj)
+	}
+}
+
+// 只能记今天或以后要兑现的事：过去的日子记进来立刻就是过期状态，没有意义。
+func TestPromiseRejectsPastDate(t *testing.T) {
+	h := newHarness(t, false, nil)
+	past := dateOf(at(0, 0).AddDate(0, 0, -1))
+	if err := h.fail(t, "add_promise", `{"title":"x","date":"`+past+`","by":"self"}`); !strings.Contains(err.Error(), "已经过去") {
+		t.Fatalf("过去的日期应当拒绝: %v", err)
 	}
 }

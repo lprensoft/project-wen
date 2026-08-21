@@ -948,3 +948,234 @@ func (t *listCommitmentsTool) Execute(ctx context.Context, args json.RawMessage)
 	}
 	return fmt.Sprintf("共 %d 条：\n%s", matched, strings.TrimRight(b.String(), "\n")), nil
 }
+
+// ---------- add_promise ----------
+
+type addPromiseTool struct{ p *Plugin }
+
+func (t *addPromiseTool) Name() string { return "add_promise" }
+
+func (t *addPromiseTool) Description() string {
+	return "记下一件答应下来的事：你答应对方的，或者对方答应你的。" +
+		"用于没有具体时刻、只落在某一天的事（明天给他带两个菜、周末把书还回去）；" +
+		"定在某天某时的事用 add_commitment，要对方到点被提醒的事用定时任务。" +
+		"在对话里说出口就记，别只在话里说过就算——说过的话不会自己变成待办。"
+}
+
+func (t *addPromiseTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"title": {"type": "string", "description": "答应了什么，短句（30 字内）"},
+			"date": {"type": "string", "description": "打算在哪天兑现 YYYY-MM-DD，不能是今天以前；说「明天」就填明天的日期"},
+			"by": {"type": "string", "enum": ["self", "user"], "description": "谁答应的：self 你自己，user 对方"},
+			"note": {"type": "string", "description": "补一句细节（60 字内，可省）"}
+		},
+		"required": ["title", "date", "by"]
+	}`)
+}
+
+func (t *addPromiseTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Title string `json:"title"`
+		Date  string `json:"date"`
+		By    string `json:"by"`
+		Note  string `json:"note"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("参数格式错误: %w", err)
+	}
+	p := t.p
+	s := p.snapshot()
+	st := p.writeStore(ctx)
+	if st == nil {
+		return "", errNotReady
+	}
+	now := p.now()
+	today := s.today(now).Format(dateLayout)
+
+	pr := Promise{Title: squash(a.Title), Note: squash(a.Note),
+		By: strings.TrimSpace(a.By), Status: promisePending, Created: now}
+	if pr.Title == "" {
+		return "", fmt.Errorf("title 不能为空")
+	}
+	if err := checkRunes(pr.Title, "title", maxTitleRunes); err != nil {
+		return "", err
+	}
+	if err := checkRunes(pr.Note, "note", maxNoteRunes); err != nil {
+		return "", err
+	}
+	if pr.By != promiseBySelf && pr.By != promiseByUser {
+		return "", fmt.Errorf("by 只能是 self（你答应的）或 user（对方答应的）")
+	}
+	d, err := parseDate(a.Date, now.Location())
+	if err != nil {
+		return "", err
+	}
+	pr.Date = d.Format(dateLayout)
+	if pr.Date < today {
+		return "", fmt.Errorf("%s 已经过去了，只能记今天或之后要兑现的事", fmtDateCN(pr.Date, now.Location()))
+	}
+
+	var full bool
+	_, err = st.UpdatePromises(func(ps *[]Promise, next func() string) (bool, error) {
+		if countPending(*ps) >= maxPromises {
+			full = true
+			return false, nil
+		}
+		pr.ID = next()
+		*ps = append(*ps, pr)
+		return true, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if full {
+		return "", fmt.Errorf("还没了结的事已有 %d 条，先用 settle_promise 了结几条再记", maxPromises)
+	}
+	return fmt.Sprintf("记下了 %s：%s %s（%s）。兑现或没做成时用 settle_promise 了结它。",
+		pr.ID, promiseByCN(pr.By), pr.Title, fmtDateCN(pr.Date, now.Location())), nil
+}
+
+// ---------- settle_promise ----------
+
+type settlePromiseTool struct{ p *Plugin }
+
+func (t *settlePromiseTool) Name() string { return "settle_promise" }
+
+func (t *settlePromiseTool) Description() string {
+	return "了结一件答应过的事：做到了（done）、没做成（missed）、或者不作数了（dropped）。" +
+		"了结之后它不再出现在 [答应过的事] 里，也就不会被再提一遍。"
+}
+
+func (t *settlePromiseTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"id": {"type": "string", "description": "[答应过的事] 里那条的编号，如 p1"},
+			"result": {"type": "string", "enum": ["done", "missed", "dropped"], "description": "做到了 / 没做成 / 不作数了"},
+			"outcome": {"type": "string", "description": "一句话说清结果或原因（80 字内）"}
+		},
+		"required": ["id", "result"]
+	}`)
+}
+
+func (t *settlePromiseTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		ID      string `json:"id"`
+		Result  string `json:"result"`
+		Outcome string `json:"outcome"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("参数格式错误: %w", err)
+	}
+	p := t.p
+	st := p.writeStore(ctx)
+	if st == nil {
+		return "", errNotReady
+	}
+	now := p.now()
+	id := strings.TrimSpace(a.ID)
+	outcome := squash(a.Outcome)
+	if err := checkRunes(outcome, "outcome", maxOutcomeRunes); err != nil {
+		return "", err
+	}
+	switch a.Result {
+	case promiseDone, promiseMissed, promiseDropped:
+	default:
+		return "", fmt.Errorf("result 只能是 done / missed / dropped")
+	}
+
+	var found, already bool
+	var title string
+	if _, err := st.UpdatePromises(func(ps *[]Promise, _ func() string) (bool, error) {
+		for i := range *ps {
+			pr := &(*ps)[i]
+			if pr.ID != id {
+				continue
+			}
+			found = true
+			title = pr.Title
+			if pr.settled() {
+				already = true
+				return false, nil
+			}
+			pr.Status, pr.Outcome, pr.Settled = a.Result, outcome, now
+			return true, nil
+		}
+		return false, nil
+	}); err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("没有编号为 %s 的事", id)
+	}
+	if already {
+		return fmt.Sprintf("%s（%s）早就了结过了，不必重复提交。", id, title), nil
+	}
+	return fmt.Sprintf("%s（%s）已了结：%s。", id, title, promiseResultCN(a.Result)), nil
+}
+
+// ---------- list_promises ----------
+
+type listPromisesTool struct{ p *Plugin }
+
+func (t *listPromisesTool) Name() string { return "list_promises" }
+
+func (t *listPromisesTool) Description() string {
+	return "查看答应过的事，含已经了结的。[答应过的事] 只注入还没了结的那几条，" +
+		"要回头看某件事后来做没做用它。"
+}
+
+func (t *listPromisesTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"include_settled": {"type": "boolean", "description": "是否连已了结的一并列出，默认只列还没了结的"}
+		}
+	}`)
+}
+
+func (t *listPromisesTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		IncludeSettled bool `json:"include_settled"`
+	}
+	if len(args) > 0 {
+		_ = json.Unmarshal(args, &a)
+	}
+	p := t.p
+	now := p.now()
+	var all []Promise
+	// 按可读域汇总：藏起来的域不该经条数或标题漏出存在性
+	for _, tag := range p.readDomains(ctx) {
+		ps, err := p.storeFor(tag).LoadPromises()
+		if err != nil {
+			return "", err
+		}
+		all = append(all, ps...)
+	}
+	sortPromises(all)
+	var b strings.Builder
+	n := 0
+	for _, pr := range all {
+		if pr.settled() && !a.IncludeSettled {
+			continue
+		}
+		n++
+		fmt.Fprintf(&b, "[%s] %s %s %s", pr.ID, fmtDateCN(pr.Date, now.Location()), promiseByCN(pr.By), pr.Title)
+		if pr.Note != "" {
+			b.WriteString("（" + pr.Note + "）")
+		}
+		if pr.settled() {
+			b.WriteString(" —— " + promiseResultCN(pr.Status))
+			if pr.Outcome != "" {
+				b.WriteString("：" + pr.Outcome)
+			}
+		}
+		b.WriteString("\n")
+	}
+	if n == 0 {
+		return "没有答应过的事。", nil
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
