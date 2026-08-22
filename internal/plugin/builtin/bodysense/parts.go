@@ -27,7 +27,10 @@ const (
 	// 超出报错而不是截断——被截掉的部位模型看不见，用户却以为配上了。
 	maxParts      = 60
 	maxPartsBytes = 4 * 1024
-	maxPartRunes  = 12
+	// maxPartRunes 按字数算，得容得下拉丁文字：中文的「后颈」两个字，英文的
+	// "back of the neck" 是十六个。限制真正防的是体量，那由 maxParts 与
+	// maxPartsBytes 兜着，这一条只挡「把一句话填成部位名」。
+	maxPartRunes = 24
 )
 
 // 内置默认部位表。分档按「在什么关系阶段才会自然发生」划，不按解剖学。

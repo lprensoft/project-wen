@@ -41,6 +41,19 @@ func ActionDescKey(plugin, action string) string {
 	return "plugin." + plugin + ".action." + action + ".desc"
 }
 
+// DefaultKey 是文本类配置项**默认值**的键——这是语言包里唯一会被发给模型的
+// 内容，所以边界要画清楚：翻的是设置页上那个文本框的**预填内容**，
+// 而不是插件注入的提示词。判据不是「会不会发给模型」（默认值当然会），
+// 是「用户能不能在设置页把它整段改掉」——能改的那些，本来就该以他读得懂的
+// 语言呈现，否则英文用户开箱看到一框中文、点「恢复默认」又变回中文。
+// 注入的提示词（SystemPrompt / TurnPrompt 片段、工具描述）一律不进语言包。
+//
+// 译文里引用别的插件的注入块名（如 [今日安排]）时要**原样保留中文**：
+// 那些块名没有翻译，改掉就指向了一段上下文里不存在的内容。
+func DefaultKey(plugin, field string) string {
+	return "plugin." + plugin + ".field." + field + ".default"
+}
+
 func CategoryTextKey(catKey string) string { return "plugin.category." + catKey }
 
 // Localize 按 lang 复制出一份译好的插件状态。
@@ -70,6 +83,10 @@ func Localize(lang string, sts []Status) []Status {
 			for j, f := range st.ConfigFields {
 				f.Label = i18n.T(lang, FieldLabelKey(st.Name, f.Key), f.Label)
 				f.Description = i18n.T(lang, FieldDescKey(st.Name, f.Key), f.Description)
+				if def, ok := f.Default.(string); ok && def != "" &&
+					(f.Type == FieldString || f.Type == FieldText) {
+					f.Default = i18n.T(lang, DefaultKey(st.Name, f.Key), def)
+				}
 				if len(f.Options) > 0 {
 					opts := make([]ConfigOption, len(f.Options))
 					for k, o := range f.Options {

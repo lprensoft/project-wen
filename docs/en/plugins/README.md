@@ -4,6 +4,8 @@
 
 The core (agent / session / server / llm) contains no concrete tools; every capability comes from a plugin. Plugin toggles and settings are maintained on the web UI's settings page (or with `wen config plugins` on a remote machine), take effect immediately, and are never written to config.yaml.
 
+The editable prompts among those settings (the heartbeat prompt, the fallback line and so on) **come with defaults in the interface language**: under an English interface the textarea is pre-filled with the English version, and "restore defaults" returns to it. The fixed prompts a plugin injects into the model are still written in Chinese.
+
 | Group | Plugin | In one line | Default |
 |---|---|---|---|
 | [Basic tools](tools.md) | `read_file` | Reads a local text file | on |
