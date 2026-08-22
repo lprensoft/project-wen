@@ -9,6 +9,42 @@ updates are not recorded here; they live in the commit history. Each release is
 written in Chinese first and English second; earlier releases are Chinese only and
 are not being backfilled.
 
+## [v0.7.0] - 2026-08-22
+
+### 新增
+
+- Web UI 支持中英双语，可在设置页切换（跟随浏览器 / 中文 / English）
+- 插件的名称、说明、配置项与候选值提供英文，随界面语言切换
+- `wen config` 新增语言选择，菜单与插件文案一并切换
+- 文档新增英文版 `README.en.md` 与 `docs/en/`，每篇附语言切换链接
+
+### 变更
+
+- 设置页中可编辑的提示词默认值随界面语言给出，「恢复默认」按当前语言填充
+- README 精简为概览，配置项与设计细节移入 `docs/`
+- 侧栏顶部改为 Logo 与新建按钮上下两行
+- 身体感知的部位名长度上限由 12 字放宽至 24 字
+- CHANGELOG 与 Release 说明改为中英双语
+- 开发版预发布标题改为 Development build (rolling)
+
+---
+
+### Added
+
+- The web UI is available in Chinese and English, switchable on the settings page (follow browser / 中文 / English)
+- Plugin names, descriptions, settings and option labels are available in English and follow the interface language
+- `wen config` has a language selector; the menus and the plugin text switch together
+- English documentation: `README.en.md` and `docs/en/`, each page with a language switch link
+
+### Changed
+
+- Editable prompt defaults on the settings page follow the interface language, "restore defaults" included
+- README is now an overview; settings tables and design notes have moved into `docs/`
+- The sidebar header puts the logo and the new-chat button on two rows
+- The body-part name limit in body sense is raised from 12 to 24 characters
+- The changelog and the release notes are written in both Chinese and English
+- The development prerelease is titled "Development build (rolling)"
+
 ## [v0.6.3] - 2026-08-21
 
 ### 新增
