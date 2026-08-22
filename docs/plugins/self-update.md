@@ -1,6 +1,6 @@
 # 程序更新
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/self-update.md)
 
 ## 程序更新（self_update 插件）
 

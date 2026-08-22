@@ -1,6 +1,6 @@
 # 部署与访问控制
 
-[← 返回 README](../README.md)
+[← 返回 README](../README.md)　·　中文　·　[English](en/deployment.md)
 
 ## 远程访问与访问控制
 

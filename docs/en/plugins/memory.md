@@ -1,0 +1,71 @@
+# Memory and search
+
+[← Plugin overview](README.md)　·　[← Back to README](../../../README.en.md)　·　[中文](../../plugins/memory.md)　·　English
+
+## Long-term memory (memory plugin)
+
+Session history is not reliable memory: over the context budget, the oldest turns are trimmed away, and once measured usage reaches 90% the whole history is **physically replaced** by a single summary. The `memory` plugin maintains a durable layer of facts outside the session files.
+
+- **Storage**: one file per memory, YAML frontmatter (title / summary / category / time) plus a Markdown body, editable directly in any editor; ordinary Markdown you drop in by hand gets indexed too. Where it lives depends on `scope`: `global` (the default) uses `<config dir>/plugins/memory/memories/`, `project` uses `<workdir>/.wen/memories/`. With visibility isolation on (see [dual persona](roleplay.md)), a tagged store sits in a sibling directory `memories-<tag>/`.
+- **Index**: injected once per user message, in the form `- 2026-05-10 约定/API naming — REST paths use lowercase hyphens`. The index is **not** stored anywhere; it is generated live from the file headers, so it can never drift out of sync with the bodies.
+- **What it happens to remember** (on by default): an index is only a table of contents, and in practice the model rarely goes and looks — without an explicit textual cue it does not call the tool. A person remembers something because the subject came up, not by consulting a catalogue first. So every turn your message is matched **literally** against the readable memories (Chinese by adjacent character pairs, English by word, function words dropped; a hit in the title or summary scores 3, a hit in the body scores 1, and long entries are damped logarithmically), and the **bodies** of the two most relevant are placed in `[想起来的事]` ("what came to mind"), ahead of the index, with their titles and last-updated dates. Zero model calls, zero dependencies. Messages that are too short ("mm", "ok") do not trigger it; machine-injected prompts such as the heartbeat do not either; memories in an unreadable scope are never recalled; and a recalled entry still appears in the index as usual. Being recalled counts as being used, so with forgetting enabled it refreshes the last-used time.
+- **Tools**: `save_memory` (categories are limited to `偏好` preferences, `约定` agreements, `事实` facts, `踩坑` pitfalls, `经历` experiences and `边界` boundaries — the first four are about the other person, while `经历` covers what the character **itself** did and ran into: where it went and with whom, what happened in its own life, what it did alone. That is how the days it lives through in heartbeat turns settle into memories of its own. `边界` is explained below. Overwriting an entry of the same name is refused unless you pass `mode: replace`, and a `.bak` is kept), `recall_memory`, `list_memories` (filterable by keyword or category) and `delete_memory`.
+- **Boundaries do not get forgotten**: a character can say "I would rather not", but staying consistent about it requires remembering — compaction sands "she clearly refused last time" away, and a new session knows nothing at all. `边界` is the category for that: an unwillingness or a line either side has stated explicitly, with the body saying who, about what, and why. Two dividing lines are written into the criteria: "only what was actually said counts, not steering away from a subject" keeps it from being over-used, and "a boundary you expressed yourself belongs here, not in `经历`" keeps it from being forgotten as a slice of life — the automatic-distillation path **forces** this category never to decay (the tool path does not, since deliberately storing a decaying boundary is a legitimate act, and hard-blocking it would turn the tool into an unreadable black box). When a stance softens, it goes the ordinary contradiction-revision route: rewritten under the same title, with the body recording the old stance and what changed it, so that "a change needs a reason" has a home in storage instead of being only a note about performance. Three layers hold it up: the character saves one on the spot, periodic distillation fills the gaps, and pre-compaction distillation catches the rest.
+- **Automatic distillation**: two paths. One runs **during a conversation**, every so many turns of real dialogue (10 by default), spending one separate model call to distil that stretch — most conversations end before ever reaching a compaction, so relying on that single moment throws a lot of conclusions away. The other runs **just before the history is replaced by a summary**, where it has the complete history including tool calls, and which also covers the window lost to a process restart. It is a real extraction rather than a note asking the model to save something later, because automatic compaction happens unattended and the history is deleted right after — "later" may never come. Either path can be turned off on its own; preserving the raw history is `session_search`'s job.
+- **A daily timeline** (on by default): long-term memory is organized by topic, which cannot answer "what have we been through lately" — speaking up after a few days, the model can only get lucky with a search. The timeline adds that axis: each day's conversation accumulates in a buffer for that day (no extra model calls), and the first turn of a new day triggers a fold that distils yesterday into one line of "date | key events", with the most recent few injected alongside the conversation. A day with nothing in it does not get a line forced onto it, or the timeline would fill up with "chatted a bit" in no time. It is stored per visibility scope: whichever storyline a conversation belongs to, its timeline belongs there too.
+- **Revision on contradiction**: distillation receives the titles **and summaries** of existing memories, so a new conclusion that overturns an old memory revises that entry in place (with a `.bak` kept), and the body is required to record the overturned claim and roughly when it held. Given titles alone, "dietary restrictions" and "likes coriander" are not recognizable as the same subject, and two contradictory memories end up living side by side — which is worse than missing one.
+- **Gradual forgetting** (off by default): when saving, each memory can be marked as something that will lose its meaning over time, and only marked ones ever decay. Left unmentioned for long enough, the body first collapses into its summary line (details gone, the gist still there — which is also closer to how forgetting really works); longer still, and it leaves the store, moved into a `forgotten/` subdirectory rather than deleted, because automatic forgetting is the one irreversible action here and a mistake would be impossible to notice. Both clocks run from **the last time it was used** (read, revised, or mentioned in conversation), so a frequently mentioned memory never reaches decay at all. Collapsing does not call the model.
+- **Visible in the UI**: distillation during a conversation runs after the turn has wound down, when that turn's event stream is already closed, so its result could otherwise only reach the log. It therefore leaves a line in the session — "🧠 Memory distilled: added 事实/build command, revised 偏好/dietary restrictions" — appearing live and readable afterwards, and **never visible to the model**. Revisions especially need saying out loud: they overwrite an existing memory, and although a `.bak` is kept, nobody would think to go looking for it.
+
+**The cost of the index**: it is sent in full on **every** iteration of a tool loop (the system message is never trimmed by the context budget), so it has a hard cap. Measured, one entry is about 31 tokens and 100 entries about 3100. Past the byte limit, summaries are dropped and only titles remain; past it still, entries are truncated by last-updated with the remaining count noted — titles are preserved first, because that is what tells the model a memory exists and can be read by name.
+
+| Setting | Default | Description |
+|---|---|---|
+| `scope` | `global` | The store's scope: one global store, or one per working directory. Switching does not migrate existing memories; with `project`, adding `.wen/` to that project's `.gitignore` is a good idea |
+| `max_index_entries` | 200 | The most entries the index lists |
+| `max_index_bytes` | 16384 | The index's byte limit (about 170 entries with summaries) |
+| `max_entry_bytes` | 8192 | The cap on what reading a single memory returns |
+| `recall_max` | 2 | The most entries recalled per turn; 0 turns it off |
+| `recall_entry_runes` | 400 | Characters of body per recalled entry; past that it is truncated and can still be read in full by title |
+| `recall_max_bytes` | 2048 | The combined byte limit for one turn's recall; entries that do not fit give way. This block is resent every turn and never hits the cache, so do not set it high |
+| `recall_min_score` | 4 | The relevance floor: a word matching the title or summary scores 3, a word matching the body scores 1, so with nothing matching the title or summary the body needs four words. Lower recalls more, and misrecalls more |
+| `auto_extract` | on | Distil before compaction (one extra model call per compaction) |
+| `turn_extract` | on | Distil periodically during a conversation (one extra model call per window) |
+| `turn_extract_every` | 10 | Turns of real conversation between distillations, minimum 5; turns the machine starts on its own (heartbeats, scheduled tasks) do not count. If more than half an hour has passed since the last exchange, whatever has piled up is distilled first |
+| `max_extract` | 5 | The most entries one distillation may produce |
+| `timeline` | on | The daily timeline (one extra model call per calendar day with conversation) |
+| `timeline_days` | 7 | How many recent timeline entries are injected alongside the conversation |
+| `decay` | off | Gradual forgetting (only ever applied to memories that were marked) |
+| `decay_blur_days` | 30 | Days unmentioned before the body collapses into its summary |
+| `decay_forget_days` | 90 | Days unmentioned before it leaves the store; must be larger than the previous setting |
+
+## History search (session_search plugin)
+
+`memory` stores distilled conclusions; this plugin is for going back to what was actually said. The two complement each other: memory has a high signal-to-noise ratio and lives permanently in the prompt, while the raw conversation is faithful but noisy and searched on demand.
+
+- **Tools**: `search_sessions` (keyword plus date range, covering existing sessions and compaction archives in one pass), `read_session` (read a session, optionally narrowed by keyword or date) and `read_archive` (read one archive in full; with no filename, list them all).
+- **Compaction archives**: **before** a history is replaced by a summary, the complete transcript (reasoning and tool calls included) is written verbatim to `<config dir>/plugins/session_search/archives/`, and the summary ends with a line saying where. It only writes files; no model call is involved. **A compacted session has nothing left in its own file but a summary, and the archive is the only place its transcript survives** — so search has to cover it, or the part most worth going back to is exactly the blind spot.
+- **A trap with date filtering**: the session id and `Meta.CreatedAt` are the **creation** time, but a session goes on being used across days, so the filename cannot be used to decide the date — each message's own `ts` is what is filtered on. Pruning in two directions is safe: a file whose modification time is earlier than the start date can be skipped (appending a message updates it), and a session created after the end date can be skipped (no message predates its session).
+
+| Setting | Default | Description |
+|---|---|---|
+| `max_scan_sessions` | 300 | The most sessions read in one search, newest first; anything beyond is noted in the result |
+| `max_snippets` | 3 | The most excerpts returned per session |
+| `max_bytes` | 8192 | The cap on one result |
+| `max_archives` | 20 | How many compaction archives are kept, 0 meaning no archiving; kept per visibility scope |
+
+## Skill manuals (skills plugin)
+
+"Skills" in the wider sense — a set of SKILL.md files you install yourself, which the model reads on demand — is an ordinary plugin here; the core gains nothing for it. Off by default (the directory is empty, so all it adds is two tools with nothing to do). With the roleplay group turned off, this is the way to give it real work to do.
+
+- **Directory layout**: one subdirectory per skill under the skills directory, each holding a `SKILL.md` whose YAML frontmatter gives `name` (optional, defaulting to the directory name) and `description` (required — without a statement of purpose, the model has no way to judge when to read it, so a skill missing one is not loaded). Directory names may contain only lowercase letters, digits, hyphens and underscores.
+- **Only the list is permanent**: the system prompt carries one line per skill, name plus purpose, and not a single word of any body. Skills beyond the list limit do not disappear; the model can see the complete list with `list_skills`.
+- **Bodies come back as tool results**, deliberately: loading on demand means the content appears at turn N, and putting it into the system prompt or the per-turn state block would invalidate the whole prefix and lose every prompt cache. A tool result is appended to the history, so the prefix stops changing from then on.
+- **Tools**: `read_skill` (read one skill's body, truncated past the limit) and `list_skills`.
+- **Rescan after editing the directory**: the gear on the settings page has "rescan the skills directory", which reports how many were parsed, which failed to load and why, and states the full directory path currently in effect — otherwise "why isn't my skill showing up" is pure guesswork.
+
+| Setting | Default | Description |
+|---|---|---|
+| `dir` | empty | The skills directory; empty means `<config dir>/plugins/skills/` |
+| `max_list` | 30 | The most entries the permanent list names |
+| `max_bytes` | 32768 | The cap on reading one skill's body |

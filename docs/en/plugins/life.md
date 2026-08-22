@@ -1,0 +1,195 @@
+# The character's life
+
+[← Plugin overview](README.md)　·　[← Back to README](../../../README.en.md)　·　[中文](../../plugins/life.md)　·　English
+
+## Scenes (scene plugin)
+
+A character needs a continuous situation to be in; personality alone is not enough. Where it was last time, what that room looks like — the model cannot see any of it in the conversation history, and one compaction wipes it out entirely. This plugin separates the **stage** (the fixed environment you configure) from **scene memories** (places that have come up in conversation): the first is injected in full every turn, the second is read from the store by visibility scope. Off by default, hard-depends on `roleplay` — without a character, nobody is standing on the stage.
+
+- **Two injected blocks**: `[场景与环境设定]` is the stage you wrote, read-only; `[场景感知]` holds the criteria for recording, asking that cities, neighbourhoods, buildings, rooms, shops and recurring haunts that come up in conversation be written down, and stating plainly that "only the place itself is recorded — its location, how it relates to other places, its layout, its furnishings, its atmosphere — never one-off actions or dialogue".
+- **Look before writing**: the criteria require checking `[场景记忆]` for the same place first. If it is already there and consistent, nothing is recorded; if there is something to add or something has changed, `replace` updates the existing entry instead of creating a second one. Otherwise one room accumulates several mutually contradictory descriptions.
+- **Tools**: `save_scene`, `list_scenes`, `delete_scene`. The store lives in `<config dir>/plugins/scene/scenes/`, and with visibility isolation on, a tagged store sits in a sibling `scenes-<tag>/`.
+- **Injection has a ceiling**: scene memories are resent every turn, so past the byte limit descriptions are dropped and only names remain, and only past that are entries truncated — the same degradation strategy as the memory index, preserving "this place exists" first.
+
+| Setting | Default | Description |
+|---|---|---|
+| `stage` | empty | The scene and environment (multi-line). Empty keeps the recording ability and injects no fixed stage |
+| `max_scenes` | 30 | The most scenes injected; past that the most recently updated are kept |
+| `max_inject_bytes` | 8192 | The byte limit on injected scene memories |
+
+## Weather (weather plugin)
+
+Whether it is raining outside or has just cleared up is a background that keeps working — it is not a topic, but it shapes what the surroundings look like, how a person feels, and what they think to ask about. This plugin fetches the real weather for the configured cities on a timer (from [Open-Meteo](https://open-meteo.com/), free and no key required) and injects the current conditions every turn. Off by default, hard-depends on `roleplay`.
+
+It injects **ambient state** rather than offering a callable tool, which is also why it belongs under roleplay rather than basic tools: a line of weather every turn in a general-purpose conversation is just noise, and if you actually want to ask about the weather, the model can fetch it with `fetch_url`.
+
+- **The weather has to be the character's own first.** Given only "the weather where you are", it is a fact about a third party — the character neither feels it nor has anything to do about it, so it barely registers in the conversation. Hence two locations, the character's and yours, merged into one when you are in the same city, which is where it feels most present.
+- **Two kinds of weather, used two ways**, with separate guidance for each. **The weather on its own side becomes environment and state** — light, sound, warmth, whether the window is open, whether going out is a nuisance — written into the description of the scene and the action, felt rather than discussed (there is no need to say "it is raining today"; the sound of rain and the damp are enough), and shading the tone and the energy level naturally. **The weather on your side is something it knows**, used to shape what it thinks to ask about, never as an opener.
+- **Yesterday, today and tomorrow come along**: the same request brings back a three-day summary at no extra cost, injected after the current conditions. It is an injection rather than a tool because people do not "look up" the weather — you glance at today's forecast in the morning and decide about the umbrella from that, and yesterday you simply remember. Both are present all day. **Tomorrow's summary appears only when it should**: from six in the evening by default (`tomorrow_from_hour`, 0 for all day), because during the day people think about today and only look ahead near bedtime or when planning; before that hour it glances at tomorrow only when you bring it up. The moment tomorrow's forecast first appears in front of the character is recorded, and three hours later it is marked "(already knew this earlier)" — the forecast is in front of it every turn, and without that mark the model treats a "rain tomorrow" it saw hours ago as news and reminds you about the umbrella over and over; the guidance also states that a forecast is background knowledge and one mention is enough. Dates are checked rather than field names trusted: past midnight, the "tomorrow" in the cache is really today, and a day that does not line up is not injected.
+- **The weather is a reason to speak**: each refresh is compared against the previous observation, and rain starting or stopping in the current conditions, or rain appearing in tomorrow's forecast, posts a reason to speak (see [heartbeat](background.md)) which the heartbeat carries into a turn where the character opens by itself — "it has just started raining", "there is rain tomorrow, take an umbrella" beats any manufactured small talk. Only transitions are reported, never state; state is injected every turn anyway. If the previous observation is too stale (an outage spanning it), nothing is reported, since "it has just started" would then be false. The rain-tomorrow reason is likewise posted only during the hours when tomorrow is in view, and only once a day (a refresh does not repost it), and it is withdrawn if the rain disappears from the forecast before it was ever said.
+- **One lookup for one city**: with "same city as me" on, only the character's city is queried. Two identical place names are merged automatically as well — otherwise two identical lines of weather would be injected.
+- **With no city configured, nothing is injected at all**, including the guidance about how to use weather. That is exactly the right state for a fictional or historical setting: leave it empty, or turn the plugin off.
+- **The stage wins**: when the stage set in `[场景与环境]` is not the place given here, the stage is authoritative and the weather takes no part in describing the scene.
+- **Refreshing happens in the background; injection reads the cache**: `TurnPrompt` sits on the synchronous path of every turn, and issuing a network request there means every turn pays for a possible timeout.
+- **Stale means not injected**: when nothing fresh can be had, it is better for the character not to know the weather than to treat three hours ago as now. The staleness limit therefore must not be smaller than the refresh interval, or something just fetched would count as stale immediately and nothing would ever be injected. When one location succeeds and the other fails, the one that succeeded is injected. An unrecognized weather code falls back to "weather unknown" — better vague than wrong.
+- **A test button**: the gear on the settings page has "test these cities", which reads the input you have **not saved yet** and lists which place each one resolved to and what the weather there was; if one fails, the conclusion for the other is still shown.
+- **The status line** distinguishes "no city configured", "cannot fetch" and "stale", and marks staleness against the specific location — with two locations, one going stale does not mean the other is not in use.
+
+| Setting | Default | Description |
+|---|---|---|
+| `persona_location` | empty | The city the character is in. This is the main one; only the weather on its own side enters its environment and its state |
+| `same_city` | on | Same city as me. With this on, only the city above is queried and the next setting has no effect |
+| `user_location` | empty | The city I am in, as something the character knows. Only in effect when the previous setting is off |
+| `refresh_minutes` | 30 | The background refresh interval in minutes, 10 at the fastest |
+| `stale_minutes` | 60 | Stop injecting this long after the last successful fetch; must not be smaller than the refresh interval |
+| `tomorrow_from_hour` | 18 | The hour from which tomorrow's weather is in view; before it, only a mention of "tomorrow" makes it glance ahead. 0 keeps it visible all day |
+
+## Belongings (belongings plugin)
+
+What is in the fridge, how many coats are in the wardrobe — the model can only scrape fragments out of the conversation history, and one compaction takes all of it, so the vegetables bought last week are still there this week and the eggs finished yesterday can be fried again today. This plugin records belongings as lists grouped by container (fridge, wardrobe, bookshelf… one container per kind), injects them every turn, and keeps the acting consistent with them: cooking uses only what is in the fridge, dressing picks only from the wardrobe, and something the plot needs but the list does not have is acquired before it is used. Off by default, hard-depends on `roleplay`.
+
+- **Only "what is here now" is recorded**: putting something on or taking it off, picking it up or setting it down, does not change the list. Where an object came from and what it means (who gave it, why it was bought) is saved as a memory when it is worth remembering. Countable things carry a quantity (eggs ×6), consumption reports the amount used, and reaching 0 removes the entry automatically.
+- **Things get old**: every item carries the time it went in, and anything that has been there a while is marked "put in N days ago", leaving whether the food should be thrown out to the model to handle naturally in the acting and to update on the list.
+- **Tools**: `update_items` (add / remove or consume, with changes to the same container merged into one call and a missing container created automatically) and `list_items` (filterable by container or keyword). Stored per visibility scope.
+- **There are limits**: both the number of containers and the number of items per container are capped, and going over is refused with a nudge to clear something out — a list should not grow into a warehouse ledger. Injection has a byte limit too: past it, items are dropped in favour of a count, and past that, only the number of containers is noted.
+
+| Setting | Default | Description |
+|---|---|---|
+| `max_containers` | 10 | The cap on containers |
+| `max_items` | 50 | The cap on items per container |
+| `max_inject_bytes` | 4096 | The byte limit on the injected list |
+
+## People (people plugin)
+
+What the character's closest friend is called, where its mother lives, whether it knows the owner of the coffee shop downstairs — the model has nowhere to keep any of it, so it invents someone on the spot every time and the names change every three days. This plugin gives the character an address book: each person has a name, a relationship, a few lines of description, a closeness (nodding acquaintance / acquaintance / close / intimate) and the time and a one-line summary of the last contact. A one-line-per-person list is injected every turn, acquaintances mentioned in the acting come only from here, and someone newly met has to be registered before they exist. It is there to constrain rather than to record: with a roster on disk, the social circle stops drifting with the conversation, and the agenda plugin later accepts only names from here when it schedules "with whom". Off by default, hard-depends on `roleplay`.
+
+- **Only "who this person is and how close they are" is recorded**: specific things that happened with someone are saved as memories when they are worth keeping, and the last contact leaves only one line of summary. You yourself are not in the address book — that is the job of roleplay's "about me" and of memory.
+- **Tools**: `upsert_person` (register or update, passing only the fields to change; pass `met_now` after an exchange to record the time and a line of summary), `list_people` (everyone, filterable by keyword) and `remove_person` (moved away, lost touch — a reason is required). Stored per visibility scope, with an existing person written back into the scope they are in.
+- **There is a limit**: the number of people is capped, and going over is refused with a nudge to remove someone no longer in touch. Injection has a byte limit too: past it, only names and closeness remain, and past that, only the number of people is noted — with the names present, the model at least knows the person exists.
+
+| Setting | Default | Description |
+|---|---|---|
+| `max_people` | 30 | The cap on people |
+| `max_inject_bytes` | 2048 | The byte limit on the injected list |
+
+## Agenda (agenda plugin)
+
+A character should have a day of its own outside your conversations, but the model has nowhere to keep "what am I doing at what time today", so it improvises an itinerary whenever asked — at the library one turn, at the seaside the next. This plugin has the character plan two to four things for itself when it wakes up (leaving large gaps; a day does not have to be filled), runs a turn when each one is due so it can decide whether to go, and another when it comes back to write down a line of experience. It changes plans, moves things and talks them over with you when something comes up. Anything fixed to a day and time is registered separately as a commitment and enters the plan on that day. The "with whom" on the plan accepts only names from the address book. Something promised without a specific time (bringing you two dishes tomorrow, returning the book at the weekend) goes into a separate ledger, and must be settled whether it was kept or not. Off by default, hard-depends on `roleplay` and `people`.
+
+- **When planning happens**: after the first turn of a new day (which starts at 5 a.m. by default, with earlier hours belonging to the previous day) or the first heartbeat, a "plan today" turn runs on that same session. On a day when nobody talks and the heartbeat is off, nothing is planned — a plan nobody can see is not worth making. Two failed attempts leave a session notice and it waits for tomorrow.
+- **Starting and finishing**: at the time on the plan, a starting turn runs on the most recently active session (noting how late it is if it is late, or only recording a line if the whole item has passed), and a finishing turn runs afterwards to write the experience down and update the presence, the people and the mood in passing. If there is no session at all, one is not created. Dispatch records are stored with the plan, so nothing is re-sent after a restart, and nothing is dispatched within the first two minutes of start-up.
+- **A commitment to you cannot be moved**: an item marked "together with the other person" can never be moved, cancelled or postponed; the tool layer refuses outright and tells the character to talk it over first, and only your explicit agreement in conversation lets it change. An hour before a commitment starts, a reason to speak is posted for the heartbeat, and another when the activity ends — whether it is said is up to the model on that heartbeat turn.
+- **Busy or not goes on the board**: while an activity is under way, "what it is busy with, until when, and whether it can reply" is written to `internal/availability` for the heartbeat and the chat channels to read (this release only writes; nothing reads it yet). An activity with you is not written — while it is with you, "not replying to you" does not arise.
+- **Things it promised**: an offhand promise used to have nowhere to go — it is not a memory (a one-off arrangement fixed to a day is a commitment on the agenda), not a commitment (it has no time), and not an item on today's plan, so it lived only as conversation text, and conversation text has neither a time anchor nor a completion state. Now it goes into a ledger with a due date and a settled state, in both directions (what the character promised you and what you promised it), separated in the injected text. Once settled it stops being injected immediately, which is exactly what prevents "the dishes already delivered getting brought up again the next day". After the due date there is a day of grace (you might come through in the evening), and still unsettled after that it is automatically recorded as "not kept" with a session notice left behind, and stops being injected as well — a to-do that hangs there forever is the same disease in a different container.
+- **Tools**: `set_day_plan` (used only on a planning turn, replacing the whole plan, refused if any of today's commitments is missing), `update_day_plan` (start, finish, move, postpone, skip, cancel), `add_commitment` (register a commitment; passing today's date adds it straight to today's plan), `cancel_commitment`, `list_commitments`, `add_promise` (record a promise, with the day it is due and who made it), `settle_promise` (kept / not kept / no longer applies) and `list_promises` (look back, settled ones included). Stored per visibility scope with no merging across scopes — two storylines each have their own day.
+- **Injection**: `[今日安排]` is computed in code down to the conclusions (what it is doing right now, how long it has been at it, how long until the next item, what it has already done today); `[未来约定]` is ordered by nearest date; `[答应过的事]` lists only what is unsettled, at most six per turn (with "and N more" past that). There is a byte limit: past it the experience text of finished items is dropped first, then everything is compressed to counts, and finally commitments are reduced to a count alone; the item in progress and the next one are always kept. Before a plan has been made, "not planned yet" is injected, so the character does not announce an itinerary out of nowhere.
+
+| Setting | Default | Description |
+|---|---|---|
+| `auto_plan` | on | Plan each day automatically; off keeps only commitments and hand-edited plans |
+| `run_activities` | on | Run the starting and finishing turns at the appointed time; off only injects the plan |
+| `day_start_hour` | 5 | The hour at which a new day begins |
+| `max_items` | 4 | The most items in one day (hard cap 6) |
+| `start_grace_minutes` | 15 | How long after the appointed time still counts as on time |
+| `remind_before_minutes` | 60 | How far ahead of a commitment with you a reason to speak is posted; 0 turns it off |
+| `max_commitments_inject` | 8 | The number of commitments injected per turn |
+| `max_inject_bytes` | 2048 | The combined byte limit on both injected blocks |
+
+## Relationship (relationship plugin)
+
+Half of a stable personality is a stable attitude toward one particular person. Until now the character re-derived its attitude toward you from contact records and the memory index on every turn, which is why it ran hot and cold — clingy one turn, politely distant the next. This plugin records "the two of you" as a small snapshot: what stage you are at ("just met", "somewhere in between", "together", "not speaking" — a free-form phrase, not an enumeration), what you call each other, the most recent change in the relationship (making up, a fight, a confession, being neglected, injected with "N days ago"), the understandings and off-limits subjects you have arrived at ("she hates being rushed", "always say goodnight", at most five), and one line on how you are doing lately. It is injected as a `[关系]` block every turn, and the attitude and the sense of proportion follow it. No settings. Off by default, hard-depends on `roleplay`.
+
+- **Updated only when the relationship really changed**: a confession, a fight, making up, a change in what you call each other, a new understanding or a new off-limits subject. An ordinary turn does not change it. `update_relationship` takes only the fields that changed, an empty string clears a field, and `bonds` is replaced wholesale (an empty array clears it). Every field has a length limit, and going over is an error asking the model to condense and retry rather than a truncation — an off-limits subject cut in half can mean the exact opposite.
+- **A stale "recent" is not recent**: a most-recent change untouched for more than 30 days stops being injected, while the other fields carry on.
+- **Only "between us" is recorded**: who you are, what you like, what you have been through are still facts for roleplay's "about me" and for memory, and "lately" keeps only one current line, used for judging tone. Off-limits subjects hold only the few that have hardened into things never to be touched again — there are only five slots, and an unwillingness stated once belongs in long-term memory's `边界` category. This records what is not touched now; that records why the line was drawn then. Stored once per visibility scope with no merging: the relationship belongs to the persona, so the outer persona being an old friend and the inner one being a lover both hold at once.
+- **Reset in one click**: the gear on the settings page has "reset the relationship state", covering the separate copies each persona keeps. It cannot be undone.
+
+## Unspoken thoughts (unspoken plugin)
+
+People have things they never said out loud: they say it is fine, they remember it anyway, and they can hold onto it for three days. The model has nowhere to put that, so by the next turn it really is fine. This plugin gives the character a bounded list — what it actually thinks of you, what it is holding back, what it is waiting for, what it has decided not to bring up for now — one line each with "N days ago", injected every turn as a `[心里话]` block. The criteria require that these **never be read out and never be written into `【】`**, while shaping the attitude, the tone and the subtext. Off by default, hard-depends on `roleplay`.
+
+- **Only things that will sit there for days**: `keep_unspoken` records one, not one per turn. The cause behind a mood is worth recording here as well — a mood decays and its cause is lost, and this is where "why it is unhappy" survives. Once said, once let go of, once it no longer matters, `let_go` releases it by index or by a fragment of the text (a fragment matching several entries is an error listing the candidates).
+- **There is a limit**: when the list is full, the oldest is let go automatically and the receipt says so. Injection has a byte limit too: past it, only the most recent few are kept with a note of how many more there are — the model knows something is still weighing on it and will not play it as though nothing had happened.
+- **Only "what is in my head"** — facts about the other person are not recorded here; those belong to roleplay's "about me" and to memory. Stored once per visibility scope, so what the inner persona is holding back never becomes the outer persona's subtext.
+- **Clear in one click**: the gear on the settings page has "clear the unspoken thoughts", covering the separate copies each persona keeps. It cannot be undone.
+
+| Setting | Default | Description |
+|---|---|---|
+| `max_entries` | 8 | The cap on entries (1-20); when full, the oldest is let go automatically |
+| `max_inject_bytes` | 1024 | The byte limit on the injected list |
+
+## Body sense (body_sense plugin)
+
+The same touch should not draw the same reaction the first time and the twentieth, but the model has no count that survives a session, so it plays every one from zero. This plugin keeps a cumulative count per body part, divides it into stages of familiarity, and injects the state together with guidance on what each stage should incline toward. **The plugin supplies the mechanism and the state; it does not write the lines** — how any of it is played is decided by the character sheet. Off by default, hard-depends on `roleplay`: without a character, a body has no owner.
+
+- **Two orthogonal dimensions**: familiarity (cumulative count → first / unfamiliar / getting used to it / familiar / second nature) and privacy (four tiers: everyday / close / intimate / private). Privacy takes no part in the familiarity calculation and is injected alongside the state — it decides how strong the starting point is and how far the response fades, while familiarity decides how much it has faded. Folding them into a single threshold would use one dimension to say two things, and say neither well.
+- **The part lists are editable**: one multi-line box per tier, one part per line. The built-in default lists are divided by "at what stage of a relationship would this happen naturally" rather than by anatomy: "hand" is separate from "fingers / back of the hand / wrist" (holding hands, brushing fingertips and taking someone by the wrist are three different intensities), "waist" sits in the intimate tier (a hand at the waist is unambiguously intimate in a Chinese context), and left and right are not distinguished (distinguishing them halves each count while narration never tells them apart). The private tier holds only three entries, because the more entries a tier has the more the model reports into it, and a false positive there costs the most.
+- **Immediate bodily state**: arousal and fatigue, each 0-100, filling the layer missing between the contact counts (long-term familiarity) and the mood — "what state the body is in right now". The model reports the delta as the acting requires (`adjust_body_state`, at most once per turn, both values reportable together), and each drifts back toward 0 at its own rate; the drifting itself is the afterglow and the recovery, so no separate state is needed for it. It is stored outside the session, so it carries across sessions naturally. Stored once per visibility scope, and read by taking the maximum of each field across the readable scopes — deliberately unlike the mood's "completely independent per scope": a mood belongs to a persona, but the body is one body.
+- **Tools**: `record_touch` (records a touch and echoes back the cumulative count and the stage; the criteria require "record first, get the echo, then write the reaction"), `list_body_state` and `adjust_body_state`.
+- **Reset in one click**: the gear on the settings page has "clear the contact records" and "reset the bodily state", both covering the separate copies each persona keeps. Neither can be undone.
+
+| Setting | Default | Description |
+|---|---|---|
+| `parts_daily` / `parts_close` / `parts_intimate` / `parts_private` | built-in lists | The four tiers of body parts (multi-line, one per line). The part names are sent every turn with the tool declaration, so going over the limit is an error rather than a truncation — a part that was cut off is invisible to the model while you believe you configured it |
+| `familiarity_pace` | Medium | How fast the stages advance: slow (counts halve) / medium / fast (counts double). At the middle setting, 1 time is the first, 2-3 unfamiliar, 4-9 getting used to it, 10-19 familiar, 20 and up second nature |
+| `arousal_decay_per_hour` | 30 | Points of arousal drifting toward 0 per hour; 0 means no decay |
+| `fatigue_decay_per_hour` | 10 | Points of fatigue drifting toward 0 per hour; 0 means no decay |
+| `state_max_delta_per_call` | 30 | The cap on one adjustment to arousal or fatigue; anything beyond is clamped and the model is told |
+| `max_inject_bytes` | 2048 | The byte limit on injected contact records; past it, counts are dropped in favour of stages, and then parts are merged by stage |
+
+## Mood (mood plugin)
+
+The character's state should be changed by interaction and should also settle on its own. The mood runs from -100 to +100, with 0 as calm; the model reports a delta when something happens (a compliment, being ignored, a joke that went too far, meeting again after a long time), and it drifts back toward calm over time. Off by default, hard-depends on `roleplay`.
+
+- **Adjust first, then act**: this rule cannot be left out. The mood is injected at the start of a turn, and the tool's echo does not arrive until the model has finished writing. Without calling the tool first, the turn in which something harsh was said still answers with the previous turn's good mood, and the feeling lands one beat late.
+- **Report a delta, not a target**: a little better is +10, quite upset is -35. At most one adjustment per turn, taking everything in that turn together.
+- **A mood changes the expression, not the character**: the injected guidance states that a mood affects how much it talks, how forthcoming it is and how loose its movements are, not who it is and not the facts or its positions; and it asks that the mood never be stated as a conclusion (no lines like "my mood is currently -30", and no numbers reported).
+- **Decay over time**: a number of points per hour toward 0, so no adjustment is needed just for "it should have got better by now". Set to 0 for no decay, and the mood stays wherever it was left.
+- **Tool**: `adjust_mood` (reports the delta, echoing back the adjusted mood).
+- **Reset in one click**: the gear on the settings page has "reset to calm", covering the separate copies each persona keeps.
+
+| Setting | Default | Description |
+|---|---|---|
+| `decay_per_hour` | 5 | Points drifting back toward calm per hour; 0 means no decay |
+| `max_delta_per_call` | 30 | The cap on the absolute value of one adjustment. Lower it to make feelings change gradually, so one sentence cannot go from happy to devastated |
+
+## Health (health plugin)
+
+People catch a chill now and then, get headaches, eat something bad; a character is healthy forever — not by design, but because there is nowhere to record it. This plugin gives the character a state of health: whether it falls ill, with what, how badly, roughly for how long and how it is handling it, all judged and recorded by the model on the turn it happens, as the story requires. From there the severity rises, peaks and falls along an illness curve on its own, with recovery speed set by the treatment (toughing it out is slow, medicine is moderate, seeing a doctor is fast), computed from the time it was stored when it is read. The principle is that **code handles time and the model handles judgement**: this is not an illness simulator, there are no random events and there is no HP bar — what is injected each turn is a situation ("day 2 of a cold, gone from miserable to a little under the weather (took medicine), probably another two or three days"), not a number. Off by default, hard-depends on `roleplay`.
+
+- **Onset can be delayed**: rain in the afternoon, a headache in the evening. The model records "starts in a few hours" on the spot, and when the time comes the code posts a reason to speak, so the heartbeat brings a beat forward and the character says "my head is starting to hurt" itself. Recovering early withdraws the line that had not been said yet.
+- **There are hard constraints**: no new condition may be registered for a while after recovery, there is a cap on how many are tracked at once, and the severity is capped at the tier you choose — all of it aimed at the model's appetite for drama. When something is refused, the rule is stated to the model, so it does not simply try again under another name.
+- **There is an aftermath**: during the cooldown, "still a bit weak" is injected; for an equally long stretch after the cooldown, "catching cold easily lately" is, with susceptibility based only on what the plugin itself knows (having just recovered). Triggers like weather and fatigue are for the model to judge from context.
+- **Only everyday ailments**: the criteria draw a red line — nothing requiring emergency care or hospitalization, and no using illness for drama. Its effects on mood and fatigue are not coupled in code; the criteria ask the model to express them with `adjust_mood` / `adjust_body_state` while registering. Guidance on being quiet and low on energy while ill is appended to the state block rather than made into a new mechanism.
+- **Tools**: `set_condition` (record the name, the worst tier it will reach, how many hours until onset, how many days it runs and how it is being handled) and `update_condition` (change the treatment, adjust the severity, mark recovery). Stored once per visibility scope.
+- **Status line and one-click clear**: while something is going on, `/status` gains a line "🤒 Body: …", and the gear on the settings page has "clear all conditions", which clears the recovery record along with it so the cooldown lifts, covering the separate copies each persona keeps. It cannot be undone.
+
+| Setting | Default | Description |
+|---|---|---|
+| `cooldown_days` | 7 | Days after recovery before a new condition may be registered (1-60) |
+| `max_conditions` | 2 | The most conditions tracked at once (1-3) |
+| `max_severity` | Miserable | The severity ceiling: a little under the weather / miserable / laid up. Anything the model reports above it is clamped and the model is told |
+
+## Presence (presence plugin)
+
+The scene and the posture used to be carried forward only by the model looking back at the most recent `【】` in the history, so one compaction or one new session cut the present off, and the clothes drifted further with every exchange while a character clearly in the kitchen was suddenly sitting on the edge of the bed. This plugin records the character's **presence** right now as a snapshot — where it is, what it is wearing, its posture and relative position, what it is doing, standing conditions ("only the bedside lamp is on; the window is open a crack") and its current sensory focus — injected as `[当下状态]` **last** in the per-turn state block, closest to where generation happens, so the acting continues from there. No settings. Off by default, hard-depends on `roleplay`.
+
+- **Pass only the fields that changed**: in `update_presence`, a non-empty value overwrites that field, an empty string clears it, and anything not mentioned stays as it was. Update it in passing when the presence changes (moved somewhere else, took a coat off, the light went out), at most once per turn.
+- **Fields that have sat a while are timestamped**: a field untouched for more than half an hour is marked "recorded N ago", giving the model a cue for judging whether it has lapsed on its own (after a night's sleep, last night's posture no longer holds) without hanging a timestamp on every line.
+- **Only observable facts about the present are recorded**, never feelings or inner life — those belong to `mood`. Stored once per visibility scope.
+- **Clear in one click**: the gear on the settings page has "clear the presence", covering the separate copies each persona keeps. It cannot be undone.
+
+## Style watch (style_watch plugin)
+
+Whether the character has drifted used to be a matter of feel — there was no way to know how often "as an AI" or "I hope this helps" had shown up, and no long-run curve for reply length or the share of `【】` narration, so every prompt adjustment was made blind. This plugin turns that into numbers: after each turn, a set of pure regex rules (`internal/stylecheck`, zero model calls) checks the assistant's final text and tallies hits, character counts and narration share by day. **It only measures and records — it never rewrites a reply, never retries, and never tells the model** — numbers first, then the question of whether to intervene. Off by default, hard-depends on `roleplay` (what it detects is assistant-speak inside roleplay; using lists and bold while writing code is correct).
+
+- **The rules mirror roleplay's [自然表达]**: calling itself an AI / a language model / an assistant, polite openers ("Sure, ", "Of course!") and fawning ones, polite sign-offs ("I hope this helps", "anything else you would like to talk about"), transitional filler, "first… second…" enumeration, "not X, but Y", over-hedging, vague appeals to authority, fake analysis, marketing tone, filler words, the three-part summary sandwich, markdown headings / lists / bold, and emoji. Each has a stable id (such as `closing_cliche`) and a Chinese label; narration inside `【】` is exempt only from the "go easy on the ornament" family of rules. Hits are heuristic — read the trend, not the verdict.
+- **Tallied by day, with humans and background separated**: heartbeat and scheduled-task turns are counted in their own column so they do not dilute the numbers for real conversation. The last 30 days are kept in `plugins/style_watch/stats.json` and survive a restart.
+- **Status line**: one line in `/status` — "✍️ Style: 42 turns today, 3 assistant-speak hits (2 polite sign-offs, 1 bold), 58 characters on average, 23% narration" — or "no data today" when there is none.
+- **Session notices**: on a hit, a line is left in the current session — "✍️ Style note: polite sign-off 'I hope this helps'" — with several hits in one turn merged into one. For your eyes only, never entering the model context; it can be turned off.
+- **Tool**: `style_report` (one line per day for the last 7 days). The gear on the settings page has "view the 30-day report" and "clear the statistics" (for after a change of character or of prompts).
+
+| Setting | Default | Description |
+|---|---|---|
+| `notify` | on | Write a session notice on a hit |
+| `ignore_rules` | empty | One rule id per line; ignored rules are neither counted nor reported. A misspelled id is refused on save, with the available ones listed |

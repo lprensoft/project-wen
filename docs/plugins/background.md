@@ -1,6 +1,6 @@
 # 后台任务
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/background.md)
 
 ## 心跳（heartbeat 插件）
 

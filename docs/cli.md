@@ -1,6 +1,6 @@
 # 命令行
 
-[← 返回 README](../README.md)
+[← 返回 README](../README.md)　·　中文　·　[English](en/cli.md)
 
 ## 子命令
 

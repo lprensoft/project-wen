@@ -1,6 +1,6 @@
 # 基础工具
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/tools.md)
 
 ## 基础工具（read_file / web_fetch 插件）
 
