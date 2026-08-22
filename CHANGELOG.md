@@ -1,7 +1,13 @@
-# 更新日志
+# 更新日志 / Changelog
 
 记录每个版本对使用者可见的变化，最新的排在最前面。
 内部重构、测试与依赖调整不记在这里，它们在提交历史中。
+每个版本中文在上、英文在下；早期的版本只有中文，不再回头补。
+
+Changes visible to users, newest first. Internal refactoring, tests and dependency
+updates are not recorded here; they live in the commit history. Each release is
+written in Chinese first and English second; earlier releases are Chinese only and
+are not being backfilled.
 
 ## [v0.6.3] - 2026-08-21
 
