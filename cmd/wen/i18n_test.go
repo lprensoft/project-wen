@@ -25,6 +25,18 @@ import (
 //
 // 后者只列还没翻的，输出可以直接拿去填。
 
+// hasCJK 判断一段文本里有没有中文。用它决定某个默认值是否需要译文：
+// api_base 这类默认值是网址与标识符，没有可译的东西；只有本来就写成中文的
+// 那些（提示词、台词、部位名）漏译才会让英文用户看到一框中文。
+func hasCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
 func metadataStrings(t *testing.T) map[string]string {
 	t.Helper()
 	cfg := &config.Config{BaseDir: t.TempDir()}
@@ -44,6 +56,12 @@ func metadataStrings(t *testing.T) map[string]string {
 		for _, f := range st.ConfigFields {
 			put(plugin.FieldLabelKey(st.Name, f.Key), f.Label)
 			put(plugin.FieldDescKey(st.Name, f.Key), f.Description)
+			// 文本类字段的默认值也要有译文：它是设置页上预填给用户的内容，
+			// 漏了的话英文用户开箱看到一框中文（见 plugin.DefaultKey 的说明）。
+			if def, ok := f.Default.(string); ok && hasCJK(def) &&
+				(f.Type == plugin.FieldString || f.Type == plugin.FieldText) {
+				put(plugin.DefaultKey(st.Name, f.Key), def)
+			}
 			for _, o := range f.Options {
 				put(plugin.OptionKey(st.Name, f.Key, o.Value), o.Label)
 			}
