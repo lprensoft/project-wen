@@ -193,9 +193,9 @@ jobs:
             echo "The change list below is the raw commit subjects, which are written in Chinese."
             echo ""
             if [ -n "$last_tag" ]; then
-              echo "### 自 $last_tag 以来的改动（提交原文）"
+              echo "### 自 $last_tag 以来的改动（提交原文） / Changes since $last_tag (raw commit subjects)"
             else
-              echo "### 包含的提交"
+              echo "### 包含的提交 / Commits included"
             fi
             echo ""
             git log --no-merges --pretty='- %s' ${last_tag:+$last_tag..}HEAD
@@ -227,7 +227,9 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: dev
-          name: 开发版（滚动更新）
+          # 标题用英文：Release 页面是项目对外的一面，而这一条又是滚动的、
+          # 位置还不在最上面（tag 挪位置不会让 GitHub 重排），标题得自己说清它是什么。
+          name: Development build (rolling)
           body_path: release-notes.md
           files: dist/*
           prerelease: true
