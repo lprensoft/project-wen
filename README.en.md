@@ -19,17 +19,17 @@ The goal is **someone you can keep company with**, not a window that only exists
 
 ## Features
 
-- **[Roleplay](docs/plugins/roleplay.md)** — the character sheet, sample lines and "about me" are injected as top-priority prompts; replies open with a 【】 block describing the scene, the action and the expression. A set of natural-expression rules suppresses the mechanical register Chinese LLM output tends to fall into, and time-consistency rules keep the season, the light outside and phrases like "last time" lined up with the real clock. The character may refuse in its own voice, and when a provider blocks a call the failure is translated into the character drifting off mid-sentence rather than a technical error dropped into the conversation
-- **[A character with state](docs/plugins/life.md)** — presence, scenes, belongings, people, agenda, relationship, unspoken thoughts, body, mood, health, weather: each kept by its own plugin, surviving compaction and new sessions. It cooks only with what is actually in the fridge, mentions only friends who exist in its people book, plans two to four things for itself each day and goes and does them, keeps promises in a ledger with a due date and a settled state — and when it rains where the character lives, it really is raining there
-- **[Two personas, outer and inner](docs/plugins/roleplay.md)** — switched by trigger phrases. The inner persona's conversations and memories are completely invisible to the outer one: not just the contents, but the counts and titles too. The two sides can each own a chat channel — say the phrase on QQ and the side that takes over answers you on WeChat
-- **[Memory that remembers, and forgets](docs/plugins/memory.md)** — a cross-session store of facts whose index is injected every turn, with relevant entries surfacing on their own when you touch on them; distilled periodically during a conversation and once more before the history is compacted; a new conclusion that contradicts an old memory revises it in place; each day's conversation is folded into a one-line timeline the next day; gradual forgetting is available. The raw conversations stay searchable by keyword and date through [history search](docs/plugins/memory.md), archives of pre-compaction transcripts included
-- **[It speaks first — and knows when not to](docs/plugins/background.md)** — a heartbeat wakes the model up on the most recently active session, and the character sets the timing of its next opening itself: closer when the conversation is lively, paused until morning when you say you are going to bed. Things like rain that has just started become a reason to speak. Scheduled tasks can be created mid-conversation and run in the background, writing their results back into the session
-- **[Remote channels](docs/plugins/im.md)** — QQ, WeChat, Feishu, Lark and Telegram, each mapping a remote user to an ordinary session, with `/new` `/status` `/compact` `/help` and remote confirmation of dangerous operations; replies produced by background turns are pushed to the remote side
-- **[Plugin architecture](docs/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; twenty-eight built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
-- **[Configurable models](docs/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; OpenAI-compatible and Anthropic Messages API are both supported
-- **[A human in the loop for commands](docs/plugins/tools.md)** — `exec_command` intercepts before execution and asks you; the most destructive commands are refused outright. No path sandbox that could be trivially bypassed
+- **[Roleplay](docs/en/plugins/roleplay.md)** — the character sheet, sample lines and "about me" are injected as top-priority prompts; replies open with a 【】 block describing the scene, the action and the expression. A set of natural-expression rules suppresses the mechanical register Chinese LLM output tends to fall into, and time-consistency rules keep the season, the light outside and phrases like "last time" lined up with the real clock. The character may refuse in its own voice, and when a provider blocks a call the failure is translated into the character drifting off mid-sentence rather than a technical error dropped into the conversation
+- **[A character with state](docs/en/plugins/life.md)** — presence, scenes, belongings, people, agenda, relationship, unspoken thoughts, body, mood, health, weather: each kept by its own plugin, surviving compaction and new sessions. It cooks only with what is actually in the fridge, mentions only friends who exist in its people book, plans two to four things for itself each day and goes and does them, keeps promises in a ledger with a due date and a settled state — and when it rains where the character lives, it really is raining there
+- **[Two personas, outer and inner](docs/en/plugins/roleplay.md)** — switched by trigger phrases. The inner persona's conversations and memories are completely invisible to the outer one: not just the contents, but the counts and titles too. The two sides can each own a chat channel — say the phrase on QQ and the side that takes over answers you on WeChat
+- **[Memory that remembers, and forgets](docs/en/plugins/memory.md)** — a cross-session store of facts whose index is injected every turn, with relevant entries surfacing on their own when you touch on them; distilled periodically during a conversation and once more before the history is compacted; a new conclusion that contradicts an old memory revises it in place; each day's conversation is folded into a one-line timeline the next day; gradual forgetting is available. The raw conversations stay searchable by keyword and date through [history search](docs/en/plugins/memory.md), archives of pre-compaction transcripts included
+- **[It speaks first — and knows when not to](docs/en/plugins/background.md)** — a heartbeat wakes the model up on the most recently active session, and the character sets the timing of its next opening itself: closer when the conversation is lively, paused until morning when you say you are going to bed. Things like rain that has just started become a reason to speak. Scheduled tasks can be created mid-conversation and run in the background, writing their results back into the session
+- **[Remote channels](docs/en/plugins/im.md)** — QQ, WeChat, Feishu, Lark and Telegram, each mapping a remote user to an ordinary session, with `/new` `/status` `/compact` `/help` and remote confirmation of dangerous operations; replies produced by background turns are pushed to the remote side
+- **[Plugin architecture](docs/en/architecture.md)** — a small core (agent loop / session / server / llm) plus plugins; twenty-eight built-in plugins grouped by function, toggled and configured from the settings page, effective immediately. The core knows only general mechanisms — it has never heard of "memory", "persona" or "mood"
+- **[Configurable models](docs/en/configuration.md)** — providers and models are added, edited and switched from the settings page and take effect on the next request; OpenAI-compatible and Anthropic Messages API are both supported
+- **[A human in the loop for commands](docs/en/plugins/tools.md)** — `exec_command` intercepts before execution and asks you; the most destructive commands are refused outright. No path sandbox that could be trivially bypassed
 - **Web UI** — a single-page chat interface embedded with `go:embed`, SSE streaming, visible thinking and tool calls; background activity shows up in the session in real time
-- **[It updates itself](docs/plugins/self-update.md)** — checks GitHub for a new release once a day; one click on the settings page downloads, verifies (SHA256), test-runs, replaces and restarts. No package manager needed on Windows, macOS or Linux. It only checks — installing is always your click
+- **[It updates itself](docs/en/plugins/self-update.md)** — checks GitHub for a new release once a day; one click on the settings page downloads, verifies (SHA256), test-runs, replaces and restarts. No package manager needed on Windows, macOS or Linux. It only checks — installing is always your click
 - **Session management** — one JSONL file per session (a meta line followed by one line per message); history survives restarts
 - **One config file** — everything including API keys lives in `config.yaml` (already in .gitignore), and values support `${VAR}` from the environment
 
@@ -55,7 +55,7 @@ Config lookup order: the path given to `-c` → `config.yaml` in the current dir
 wen -c /path/to/config.yaml -p 9000   # explicit config and port
 ```
 
-The main commands (see [CLI](docs/cli.md) for the full list):
+The main commands (see [CLI](docs/en/cli.md) for the full list):
 
 ```
 wen                        start the server (same as wen serve)
@@ -67,38 +67,36 @@ wen update [--check] [-y]  check for and install a new version
 
 ## Configuration
 
-`config.yaml` holds only start-up configuration — model, server, sessions. The essentials are in [Configuration and models](docs/configuration.md); the full example is [config.example.yaml](config.example.yaml).
+`config.yaml` holds only start-up configuration — model, server, sessions. The essentials are in [Configuration and models](docs/en/configuration.md); the full example is [config.example.yaml](config.example.yaml).
 
 **Plugin toggles and settings are not in config.yaml.** They are maintained from the settings page (or `wen config plugins` on a remote machine) and stored only in `<config dir>/plugins.state.json`; each plugin's own data lives in `<config dir>/plugins/<plugin>/`.
 
-Before deploying to a remote server, read [Deployment and access control](docs/deployment.md). The web UI listens on `127.0.0.1` only by default: `exec_command` runs commands and `read_file` reads any file, so unauthorized access means more than someone reading your chat logs.
+Before deploying to a remote server, read [Deployment and access control](docs/en/deployment.md). The web UI listens on `127.0.0.1` only by default: `exec_command` runs commands and `read_file` reads any file, so unauthorized access means more than someone reading your chat logs.
 
 ## Plugins
 
-Twenty-eight built-in plugins, grouped by function, all toggleable and configurable from the settings page. Per-plugin documentation and settings are in the [plugin overview](docs/plugins/README.md).
+Twenty-eight built-in plugins, grouped by function, all toggleable and configurable from the settings page. Per-plugin documentation and settings are in the [plugin overview](docs/en/plugins/README.md).
 
 | Group | Plugins |
 |---|---|
-| [Basic tools](docs/plugins/tools.md) | `read_file` `web_fetch` `exec_command` |
-| [Memory and search](docs/plugins/memory.md) | `memory` `session_search` `skills` |
-| [Roleplay](docs/plugins/roleplay.md) | `roleplay` `dual_persona` |
-| [The character's life](docs/plugins/life.md) | `scene` `weather` `belongings` `people` `agenda` `relationship` `unspoken` `body_sense` `mood` `health` `presence` `style_watch` |
-| [Background work](docs/plugins/background.md) | `heartbeat` `scheduler` |
-| [Chat channels](docs/plugins/im.md) | `qq_bot` `wechat_bot` `feishu_bot` `lark_bot` `telegram_bot` |
-| [Maintenance](docs/plugins/self-update.md) | `self_update` |
+| [Basic tools](docs/en/plugins/tools.md) | `read_file` `web_fetch` `exec_command` |
+| [Memory and search](docs/en/plugins/memory.md) | `memory` `session_search` `skills` |
+| [Roleplay](docs/en/plugins/roleplay.md) | `roleplay` `dual_persona` |
+| [The character's life](docs/en/plugins/life.md) | `scene` `weather` `belongings` `people` `agenda` `relationship` `unspoken` `body_sense` `mood` `health` `presence` `style_watch` |
+| [Background work](docs/en/plugins/background.md) | `heartbeat` `scheduler` |
+| [Chat channels](docs/en/plugins/im.md) | `qq_bot` `wechat_bot` `feishu_bot` `lark_bot` `telegram_bot` |
+| [Maintenance](docs/en/plugins/self-update.md) | `self_update` |
 
 ## Documentation
 
-> The detailed documents are currently written in Chinese only; translating them is in progress. The links below point to the Chinese versions.
-
-- [CLI](docs/cli.md) — the subcommands, and how to change plugin settings on a headless machine
-- [Configuration and models](docs/configuration.md) — every option in config.yaml, and provider/model management
-- [Plugin overview](docs/plugins/README.md) — what each of the twenty-eight plugins does, with its settings
-- [Deployment and access control](docs/deployment.md) — the authentication model, a start/stop script, and systemd
-- [Replay evaluation (wen eval)](docs/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
-- [How the context is organized](docs/context.md) — what one request is made of, and why the current time is not in the system message
-- [HTTP API](docs/http-api.md) — the endpoints shared by the web UI and any external program
-- [Project layout and writing plugins](docs/architecture.md) — a tour of the tree, the `Plugin` interface and its optional companions, and visibility scopes
+- [CLI](docs/en/cli.md) — the subcommands, and how to change plugin settings on a headless machine
+- [Configuration and models](docs/en/configuration.md) — every option in config.yaml, and provider/model management
+- [Plugin overview](docs/en/plugins/README.md) — what each of the twenty-eight plugins does, with its settings
+- [Deployment and access control](docs/en/deployment.md) — the authentication model, a start/stop script, and systemd
+- [Replay evaluation (wen eval)](docs/en/evaluation.md) — turning "does the character feel better after that prompt change?" into a repeatable script
+- [How the context is organized](docs/en/context.md) — what one request is made of, and why the current time is not in the system message
+- [HTTP API](docs/en/http-api.md) — the endpoints shared by the web UI and any external program
+- [Project layout and writing plugins](docs/en/architecture.md) — a tour of the tree, the `Plugin` interface and its optional companions, and visibility scopes
 
 ## Development
 

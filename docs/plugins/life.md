@@ -1,6 +1,6 @@
 # 角色的生活
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/life.md)
 
 ## 场景感知（scene 插件）
 

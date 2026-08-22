@@ -1,6 +1,6 @@
 # 插件总览
 
-[← 文档首页](../README.md)　·　[← 返回项目 README](../../README.md)
+[← 文档首页](../README.md)　·　[← 返回项目 README](../../README.md)　·　中文　·　[English](../en/plugins/README.md)
 
 核心（agent / session / server / llm）不含任何具体工具，能力一律由插件提供。插件的开关与配置在 Web UI 的设置页（或远程机器上的 `wen config plugins`）里维护，改动即时生效，不写进 config.yaml。
 

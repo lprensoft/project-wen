@@ -1,6 +1,6 @@
 # 配置与模型
 
-[← 返回 README](../README.md)
+[← 返回 README](../README.md)　·　中文　·　[English](en/configuration.md)
 
 ## 配置说明
 

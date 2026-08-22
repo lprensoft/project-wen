@@ -1,6 +1,6 @@
 # 回放评测（wen eval）
 
-[← 返回 README](../README.md)
+[← 返回 README](../README.md)　·　中文　·　[English](en/evaluation.md)
 
 
 调一次提示词之后，角色是变好了还是变坏了？`wen eval` 把这件事从「再聊几句感觉一下」变成可以重复跑的脚本：

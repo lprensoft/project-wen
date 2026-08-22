@@ -1,6 +1,6 @@
 # 记忆与检索
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/memory.md)
 
 ## 长期记忆（memory 插件）
 

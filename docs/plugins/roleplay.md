@@ -1,6 +1,6 @@
 # 角色演绎
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/roleplay.md)
 
 ## 角色扮演（roleplay 插件）
 

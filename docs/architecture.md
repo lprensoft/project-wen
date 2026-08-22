@@ -1,6 +1,6 @@
 # 项目结构与插件开发
 
-[← 返回 README](../README.md)
+[← 返回 README](../README.md)　·　中文　·　[English](en/architecture.md)
 
 ## 项目结构
 

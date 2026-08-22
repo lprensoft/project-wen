@@ -1,6 +1,6 @@
 # 消息通道
 
-[← 插件总览](README.md)　·　[← 返回 README](../../README.md)
+[← 插件总览](README.md)　·　[← 返回 README](../../README.md)　·　中文　·　[English](../en/plugins/im.md)
 
 ## 远程使用（qq_bot / wechat_bot / feishu_bot / lark_bot / telegram_bot 插件）
 
